@@ -168,4 +168,4 @@ tests/                   integration tests (binary + public API), incl. evasion 
 
 ## License
 
-No license file is currently included. Add one before distributing.
+Licensed under the [GNU General Public License v3.0](LICENSE).
