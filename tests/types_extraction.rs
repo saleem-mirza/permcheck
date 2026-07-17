@@ -1,6 +1,6 @@
 //! Payload extraction unit tests (§5).
 
-use crate::types::extract_payload;
+use permcheck::types::extract_payload;
 use serde_json::json;
 
 #[test]

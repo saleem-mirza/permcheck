@@ -134,7 +134,3 @@ pub fn extract_payload(tool: &str, input: &Value) -> String {
 
     extracted.unwrap_or("").to_string()
 }
-
-#[cfg(test)]
-#[path = "tests/types.rs"]
-mod tests;

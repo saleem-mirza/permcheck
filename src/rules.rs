@@ -165,7 +165,3 @@ pub(crate) fn parse_rule(s: &str) -> Result<(String, Matcher, u32), LoadError> {
         matcher::compile(family, spec).map_err(|_| LoadError::BadSpecifier(s.to_string()))?;
     Ok((tool.to_string(), m, specificity))
 }
-
-#[cfg(test)]
-#[path = "tests/rules.rs"]
-mod tests;

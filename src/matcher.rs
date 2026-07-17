@@ -298,13 +298,3 @@ fn path_match(pat: &[PToken], text: &[u8]) -> bool {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "tests/matcher/bash.rs"]
-mod tests_bash;
-#[cfg(test)]
-#[path = "tests/matcher/generic.rs"]
-mod tests_generic;
-#[cfg(test)]
-#[path = "tests/matcher/path.rs"]
-mod tests_path;

@@ -1,6 +1,6 @@
 //! Bash splitter unit tests (§8.1).
 
-use crate::bash::split;
+use permcheck::bash::split;
 
 #[test]
 fn splits_on_operators() {

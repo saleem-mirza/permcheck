@@ -437,26 +437,25 @@ shell over it.
 │   ├── rules.rs              # grammar, LoadError, CompiledRule, RuleSet, load
 │   ├── matcher.rs            # Matcher enum + Bash/Path/Generic matchers
 │   ├── bash.rs               # tokenizer, splitter, file-access cross-check
-│   ├── engine.rs             # winner selection + candidate forms
-│   └── tests/                # unit tests, attached as #[path] sidecars (§12.4)
-│       ├── types.rs
-│       ├── rules.rs
-│       ├── engine.rs
-│       ├── matcher/
-│       │   ├── bash.rs
-│       │   ├── generic.rs
-│       │   └── path.rs
-│       └── bash/
-│           ├── split.rs
-│           ├── tokenize.rs
-│           └── crosscheck.rs
-└── tests/                    # integration tests (run the binary + public API)
+│   └── engine.rs             # winner selection + candidate forms
+└── tests/                    # ALL tests: separate crates, never in the binary
+    ├── types_extraction.rs   # §5 payload extraction
+    ├── rules_grammar.rs      # §3–§4 grammar + loading (via the public loader)
+    ├── engine_selection.rs   # §6.3, §7 winner selection + candidate forms
+    ├── matcher_bash.rs       # §6.1, §6.5 Bash matcher + specificity
+    ├── matcher_generic.rs    # §6.5 Generic (URL/domain) matcher
+    ├── matcher_path.rs       # §6.5 Path glob matcher
+    ├── bash_split.rs         # §8.1 compound splitter
+    ├── bash_tokenize.rs      # §8.2–§8.3 tokenizer + env stripping
+    ├── bash_crosscheck.rs    # §8.3 file-access cross-check + wrapper peel
+    ├── cli.rs                # §2.2 CLI exit codes, --json, help, cwd
+    ├── hook_mode.rs          # §2.1, §9.1 hook JSON + fail-closed paths
     ├── worked_examples.rs    # §10 rows as CLI exit-code + hook-mode checks
     ├── known_issues.rs       # §11 items locked as regressions
     ├── load_errors.rs        # §3–§4 load-error handling
     ├── reference_loads.rs    # full reference set loads clean
     ├── redirects.rs          # §8 redirection cross-checks
-    ├── adversarial.rs        # §8–§9 evasion/traversal + worst-case termination
+    ├── adversarial.rs        # §8–§9 evasion/traversal (crafted rules)
     └── reference_evasion.rs  # §8 evasion resistance vs the shipping rule set
 ```
 
@@ -528,25 +527,28 @@ Seven source files. Each module's behavior is specified in the section reference
 
 ### 12.4 Test and benchmark layout
 
-Unit tests live under `src/tests/` but are **not** a standalone module tree. Each
-is attached to its source module as a `#[cfg(test)]` sidecar with an explicit
-`#[path]`, so no test code compiles into the release binary:
+**All tests live under `tests/`** — there is no test code in `src/`. Each
+`tests/*.rs` file is a separate integration-test crate that Cargo builds only
+under `cargo test` (never linked into the library or binary), so the release
+artifact is guaranteed free of test code. Tests exercise the crate through its
+public surface (`evaluate`, `RuleSet::load_str`, the per-module `pub` items such
+as `bash::split`, `matcher::compile`, `engine::decide_payload`) and the built
+binary (via `assert_cmd`). Coverage by file:
 
-| Source module | Sidecar module(s) |
+| File | Covers |
 |---|---|
-| `src/types.rs` | `#[path = "tests/types.rs"] mod tests;` |
-| `src/rules.rs` | `#[path = "tests/rules.rs"] mod tests;` |
-| `src/engine.rs` | `#[path = "tests/engine.rs"] mod tests;` |
-| `src/matcher.rs` | `tests/matcher/bash.rs`, `tests/matcher/generic.rs`, `tests/matcher/path.rs` |
-| `src/bash.rs` | `tests/bash/split.rs`, `tests/bash/tokenize.rs`, `tests/bash/crosscheck.rs` |
+| `types_extraction.rs` | payload extraction per tool (§5) |
+| `rules_grammar.rs` | grammar + load errors, via the public loader (§3–§4) |
+| `engine_selection.rs` | winner selection, candidate forms, `url_host` (§6.3, §7) |
+| `matcher_{bash,generic,path}.rs` | per-family matching + specificity (§6.1, §6.5) |
+| `bash_{split,tokenize,crosscheck}.rs` | splitter, tokenizer, cross-check + wrapper peel (§8) |
+| `cli.rs` / `hook_mode.rs` | binary interface: exit codes, `--json`, hook JSON, fail-closed (§2, §9.1) |
+| `worked_examples.rs` / `known_issues.rs` | §10 and §11, locked as regressions |
+| `load_errors.rs` / `reference_loads.rs` | load-error handling; clean load of the full reference set |
+| `redirects.rs` / `adversarial.rs` / `reference_evasion.rs` | §8 redirection, evasion/traversal, and evasion resistance vs the shipping rules |
 
-Integration tests in `tests/` drive the built binary (via `assert_cmd`) and the
-public library API; they are the executable form of §10 (`worked_examples.rs`)
-and §11 (`known_issues.rs`), plus load-error handling (`load_errors.rs`), a clean
-load of the full reference set (`reference_loads.rs`), redirection cross-checks
-(`redirects.rs`), a suite of evasion/traversal attempts plus worst-case matcher
-termination (`adversarial.rs`), and compound/wrapper/obfuscation evasion
-resistance against the shipping reference rule set (`reference_evasion.rs`).
+Benchmarks live in `benches/evaluate.rs` and, being a `[[bench]]` target with
+`harness = false`, also compile only under `cargo bench` — never into the binary.
 
 Build and run:
 

@@ -1,6 +1,6 @@
 //! Bash tokenizer + env-stripping unit tests (§8.2, §8.3).
 
-use crate::bash::{RedirectKind, Token, strip_env_assignments, tokenize};
+use permcheck::bash::{RedirectKind, Token, strip_env_assignments, tokenize};
 
 #[test]
 fn words_and_quotes() {

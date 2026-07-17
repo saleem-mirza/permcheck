@@ -91,8 +91,9 @@ pub(crate) fn generic_candidates(payload: &str) -> Vec<String> {
     v
 }
 
-/// Extract the host from a `scheme://[user@]host[:port]/…` URL (§7.1).
-pub(crate) fn url_host(s: &str) -> Option<String> {
+/// Extract the host from a `scheme://[user@]host[:port]/…` URL (§7.1). Public so
+/// it can be exercised directly by the integration tests.
+pub fn url_host(s: &str) -> Option<String> {
     let idx = s.find("://")?;
     let after = &s[idx + 3..];
     let end = after.find(['/', '?', '#']).unwrap_or(after.len());
@@ -132,7 +133,3 @@ fn push_unique(v: &mut Vec<String>, s: String) {
         v.push(s);
     }
 }
-
-#[cfg(test)]
-#[path = "tests/engine.rs"]
-mod tests;

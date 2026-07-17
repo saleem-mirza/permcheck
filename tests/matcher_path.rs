@@ -1,7 +1,7 @@
 //! Path matcher unit tests (§6.5).
 
-use crate::matcher::{Matcher, compile};
-use crate::types::Family;
+use permcheck::matcher::{Matcher, compile};
+use permcheck::types::Family;
 
 fn m(spec: &str) -> Matcher {
     compile(Family::Path, spec).expect("compiles").0

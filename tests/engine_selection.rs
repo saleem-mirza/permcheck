@@ -1,8 +1,8 @@
 //! Winner-selection + candidate-form unit tests (§6.3, §7).
 
-use crate::engine::{decide_payload, url_host};
-use crate::rules::RuleSet;
-use crate::types::Tier;
+use permcheck::engine::{decide_payload, url_host};
+use permcheck::rules::RuleSet;
+use permcheck::types::Tier;
 
 #[test]
 fn more_specific_allow_beats_broad_deny() {

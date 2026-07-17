@@ -1,7 +1,7 @@
 //! Bash matcher + specificity unit tests (§6.1, §6.5).
 
-use crate::matcher::{Matcher, compile};
-use crate::types::Family;
+use permcheck::matcher::{Matcher, compile};
+use permcheck::types::Family;
 
 fn m(spec: &str) -> (Matcher, u32) {
     compile(Family::Bash, spec).expect("compiles")

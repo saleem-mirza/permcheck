@@ -3,9 +3,9 @@
 //! The cross-check only ever raises a unit to `deny`; these assert it catches
 //! reads/writes to denied paths even when the base command is allowed.
 
-use crate::bash::decide_bash;
-use crate::rules::RuleSet;
-use crate::types::Tier;
+use permcheck::bash::decide_bash;
+use permcheck::rules::RuleSet;
+use permcheck::types::Tier;
 
 const RULES: &str = r#"{
   "allow": ["Bash(cat:*)", "Bash(ls:*)", "Bash(grep:*)", "Bash(tee:*)", "Bash(echo:*)"],

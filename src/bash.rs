@@ -632,13 +632,3 @@ fn read_word(s: &str, start: usize) -> (String, usize) {
     }
     (out, i)
 }
-
-#[cfg(test)]
-#[path = "tests/bash/crosscheck.rs"]
-mod tests_crosscheck;
-#[cfg(test)]
-#[path = "tests/bash/split.rs"]
-mod tests_split;
-#[cfg(test)]
-#[path = "tests/bash/tokenize.rs"]
-mod tests_tokenize;
