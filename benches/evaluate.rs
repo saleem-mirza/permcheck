@@ -8,97 +8,58 @@ use permcheck::{RuleSet, evaluate};
 use serde_json::json;
 use std::hint::black_box;
 
-const RULES_JSON: &str = include_str!("../rules/permissions.json");
+const RULES: &str = include_str!("../rules/permissions.json");
 
-fn make_ruleset() -> permcheck::rules::RuleSet {
-    RuleSet::load_str(RULES_JSON).expect("reference rules load")
-}
+fn bench_evaluate(c: &mut Criterion) {
+    let rules = RuleSet::load_str(RULES).expect("reference rules load");
+    let cwd = Some("/home/user/project");
 
-fn bench_load(c: &mut Criterion) {
-    c.bench_function("load_rules_set", |b| {
-        b.iter(|| make_ruleset())
-    });
-}
-
-fn bench_bash(c: &mut Criterion) {
-    let rules = make_ruleset();
-    let mut g = c.benchmark_group("bash");
-
-    let cases: &[(&str, &str)] = &[
-        ("allow_aws_describe", "aws ec2 describe-instance"),
-        ("deny_aws_terminate", "aws ec2 terminate-instances"),
-        ("allow_kubectl_get", "kubectl get pods"),
-        ("deny_kubectl_delete", "kubectl delete pod x"),
-        ("ask_git_push", "git push origin main"),
-        ("deny_git_push_force", "git push --force origin main"),
-        ("deny_cat_env", "cat .env"),
-        ("deny_unknown", "unknown command"),
-        ("compound_and", "cd /tmp && ls -la"),
-        ("compound_subshell", "echo $(ls -la)"),
-        ("compound_pipe", "cat file.txt | grep something"),
-    ];
-
-    for (name, cmd) in cases {
-        let input = json!({"command": cmd});
-
-        g.bench_function(*name, |b| {
-            b.iter(|| 
-
-                evaluate(
-                    &rules,
-                    "Bash",
-                    &input,
-                    None,
-                ));
-        });
-    }
-
-    g.finish();
-}
-
-fn bench_path(c: &mut Criterion) {
-    let rules = make_ruleset();
-    let mut g = c.benchmark_group("path");
- 
-    let cases = &[
+    let cases = [
         (
-            "read_allow_tmp",
-            "Read",
-            "/tmp/notes.txt",
+            "bash_allow",
+            "Bash",
+            json!({"command": "aws ec2 describe-instances"}),
         ),
         (
-            "read_deny_ssh",
-            "Read",
-            "/home/user/.ssh/id_rsa",
+            "bash_deny",
+            "Bash",
+            json!({"command": "aws ec2 terminate-instances"}),
         ),
-                (
-            "read_deny_env",
-            "Read",
-            "/home/user/.env",
+        (
+            "bash_compound",
+            "Bash",
+            json!({"command": "ls && cat .env | grep x"}),
         ),
-                (
-            "edit_allow",
+        ("path_allow", "Read", json!({"file_path": "/tmp/notes.txt"})),
+        (
+            "path_deny",
             "Read",
-            "/tmp/notes.txt",
+            json!({"file_path": "/home/user/.ssh/id_rsa"}),
+        ),
+        (
+            "generic_deny",
+            "WebFetch",
+            json!({"url": "https://example.com/x"}),
         ),
     ];
 
-    for (name, tool, path) in cases {
-        let input = json!({"file_path": path});
-        g.bench_function(*name, |b| {
+    for (name, tool, input) in &cases {
+        c.bench_function(name, |b| {
             b.iter(|| {
                 black_box(evaluate(
-                    &rules,
-                    tool,
-                    &input,
-                    None,
+                    black_box(&rules),
+                    black_box(tool),
+                    black_box(input),
+                    cwd,
                 ))
             })
         });
     }
 
-    g.finish();
+    c.bench_function("load_str", |b| {
+        b.iter(|| black_box(RuleSet::load_str(black_box(RULES))).unwrap())
+    });
 }
 
-criterion_group!(benches, bench_load, bench_bash, bench_path);
+criterion_group!(benches, bench_evaluate);
 criterion_main!(benches);
