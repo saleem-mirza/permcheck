@@ -131,9 +131,10 @@ jobs:
   # which are carried over as-is. The default branch is rebuilt as an orphan
   # each release so superseded binaries don't accumulate in history.
   #
-  # Requires a fine-grained PAT with contents:write on saleem-mirza/marketplace,
-  # stored as the DIST_REPO_TOKEN secret — the default GITHUB_TOKEN is scoped to
-  # this repo and cannot push cross-repo.
+  # Cross-repo push is authenticated with a write DEPLOY KEY on
+  # saleem-mirza/marketplace (repo-scoped, no expiry), whose private half is the
+  # DIST_DEPLOY_KEY secret — the default GITHUB_TOKEN is scoped to this repo and
+  # cannot push cross-repo.
   publish-marketplace:
     name: publish to marketplace repo
     needs: build
@@ -149,7 +150,7 @@ jobs:
 
       - name: Publish source-free bundle to marketplace repo
         env:
-          DIST_REPO_TOKEN: ${{ secrets.DIST_REPO_TOKEN }}
+          DIST_DEPLOY_KEY: ${{ secrets.DIST_DEPLOY_KEY }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "push" ]; then
@@ -158,7 +159,13 @@ jobs:
             tag="${{ github.event.inputs.tag }}"
           fi
 
-          git clone "https://x-access-token:${DIST_REPO_TOKEN}@github.com/saleem-mirza/marketplace.git" dist
+          # Load the deploy key for all git-over-SSH in this step.
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DIST_DEPLOY_KEY" > ~/.ssh/dist_key
+          chmod 600 ~/.ssh/dist_key
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/dist_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
+          git clone git@github.com:saleem-mirza/marketplace.git dist
 
           # New tree = the dist repo's own catalog + README (preserved), plus a
           # fresh plugin/ (source files from this repo + built binaries).

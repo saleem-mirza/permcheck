@@ -97,11 +97,23 @@ force-pushes an orphan commit (so old binaries don't pile up in history). Editin
 catalog itself (adding a plugin, changing keywords) is done directly in the marketplace
 repo — this repo no longer carries a `marketplace.json`.
 
-**One-time setup — the job needs a cross-repo token.** The default `GITHUB_TOKEN` is
-scoped to this repo and cannot push to another, so create a **fine-grained PAT** with
-`contents: read and write` on `saleem-mirza/marketplace` and store it as the repo secret
-`DIST_REPO_TOKEN` (Settings → Secrets and variables → Actions). Until that secret exists
-the job fails; sync manually meanwhile:
+**Auth — a write deploy key.** The default `GITHUB_TOKEN` is scoped to this repo and
+cannot push to another, so the job authenticates with a **deploy key** on
+`saleem-mirza/marketplace` (repo-scoped, no expiry, not tied to a personal account). It
+is already configured: the public half is a write deploy key on that repo, and the
+private half is the `DIST_DEPLOY_KEY` secret here. To rotate it, generate a new
+`ed25519` keypair, replace the repo's deploy key with the new public key, and update the
+secret:
+
+```sh
+ssh-keygen -t ed25519 -C permcheck-release -f dist_key -N ""
+gh api -X POST repos/saleem-mirza/marketplace/keys -f title="permcheck release automation" \
+  -f key="$(cat dist_key.pub)" -F read_only=false      # delete the old key in the repo's Settings → Deploy keys
+gh secret set DIST_DEPLOY_KEY --repo saleem-mirza/permcheck < dist_key
+rm dist_key dist_key.pub
+```
+
+To sync by hand without the workflow (e.g. from a local checkout):
 
 ```sh
 git clone https://github.com/saleem-mirza/marketplace.git dist
