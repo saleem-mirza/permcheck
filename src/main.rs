@@ -202,8 +202,8 @@ fn read_settings(path: &Path) -> Result<serde_json::Value, String> {
     if text.trim().is_empty() {
         return Ok(serde_json::json!({}));
     }
-    let value: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| format!("invalid JSON in {}: {e}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("invalid JSON in {}: {e}", path.display()))?;
     if !value.is_object() {
         return Err(format!("{} is not a JSON object", path.display()));
     }

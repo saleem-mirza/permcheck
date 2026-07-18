@@ -149,14 +149,22 @@ fn install_and_uninstall_preserve_unrelated_content() {
     let v = read_json(&settings);
     assert_eq!(v["model"], "opus");
     assert!(has_permcheck_hook(&v));
-    assert!(fs::read_to_string(&settings).unwrap().contains("my-own-linter"));
+    assert!(
+        fs::read_to_string(&settings)
+            .unwrap()
+            .contains("my-own-linter")
+    );
 
     // Uninstall drops only the permcheck hook; the linter and model survive.
     cmd(home, home).arg("--uninstall").assert().code(0);
     let v = read_json(&settings);
     assert!(!has_permcheck_hook(&v));
     assert_eq!(v["model"], "opus");
-    assert!(fs::read_to_string(&settings).unwrap().contains("my-own-linter"));
+    assert!(
+        fs::read_to_string(&settings)
+            .unwrap()
+            .contains("my-own-linter")
+    );
 }
 
 #[test]

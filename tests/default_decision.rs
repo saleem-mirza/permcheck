@@ -67,7 +67,8 @@ fn missing_and_other_values_default_to_deny() {
 
 #[test]
 fn ask_mode_does_not_loosen_explicit_deny_or_crosscheck() {
-    let rules = r#"{"permissions":{"defaultMode":"ask","deny":["Bash(sudo:*)","Read(/**/.env*)"]}}"#;
+    let rules =
+        r#"{"permissions":{"defaultMode":"ask","deny":["Bash(sudo:*)","Read(/**/.env*)"]}}"#;
     // Explicit deny still wins over the ask fall-back.
     assert_eq!(tier(rules, "Bash", "sudo rm -rf /"), Tier::Deny);
     // Bash file-access cross-check still raises to deny (a path IS denied).
