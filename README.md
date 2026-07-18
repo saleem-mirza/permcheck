@@ -224,28 +224,7 @@ cargo bench                # Criterion benchmarks (see benches/BENCHMARKS.md)
 
 The only runtime dependencies are `serde` / `serde_json` — no `regex`, no `clap`. The binary is a fresh short-lived process per tool call, so it is optimized for cold start (matchers and argument parsing are hand-written; a cold invocation is dominated by process spawn, not the engine's microseconds of work).
 
-Packaging the plugin and cutting a release are documented in [`CONTRIBUTING.md`](CONTRIBUTING.md).
-
-## Project layout
-
-```
-rules/permissions.json   canonical reference rule set
-specs/SPEC.md            behavioral source of truth
-CONTRIBUTING.md          packaging + release workflow
-benches/                 Criterion benchmark + results
-src/                     library (engine) + binary (thin I/O shell)
-tests/                   integration tests (binary + public API), incl. evasion suites
-```
-
-| Module | Responsibility |
-|---|---|
-| `src/lib.rs` | crate root; `evaluate()`, `load_rules*` |
-| `src/types.rs` | `Tier`, `Decision`, `Family`, payload extraction |
-| `src/rules.rs` | grammar, loading, compiled `RuleSet` |
-| `src/matcher.rs` | per-family matchers + specificity scoring |
-| `src/engine.rs` | winner selection + candidate forms |
-| `src/bash.rs` | tokenizer, splitter, file-access cross-check |
-| `src/main.rs` | argument parsing, hook/CLI dispatch |
+Packaging the plugin and cutting a release are documented in [`CONTRIBUTING.md`](CONTRIBUTING.md), and the code map is under [Code map](CONTRIBUTING.md#code-map).
 
 ## License
 

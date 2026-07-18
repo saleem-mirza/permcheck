@@ -1,8 +1,19 @@
 # Contributing
 
 Building from source, tests, and benchmarks are covered in the
-[README](README.md#build). This document covers **packaging the plugin and cutting
-a release** — the parts a maintainer needs.
+[README](README.md#build). This document covers the **code map** and **packaging /
+releasing** — the parts a maintainer needs.
+
+## Code map
+
+`permcheck` is one crate: all engine logic in the library, a thin I/O shell in the
+binary. The decision pipeline is `rules` (load + compile) → `matcher` (per-family
+match + specificity) → `engine` (winner selection). `bash` handles compound-command
+splitting and the file-access cross-check; `types` holds `Tier` / `Decision` /
+`Family` and payload extraction; `settings` does the `--install` / `--uninstall`
+JSON transforms. `lib.rs` exposes `evaluate()` and the loaders; `main.rs` is the
+hook / CLI / install dispatch. All tests live in `tests/` (separate crates, never
+linked into the binary).
 
 ## Building the plugin binaries
 
