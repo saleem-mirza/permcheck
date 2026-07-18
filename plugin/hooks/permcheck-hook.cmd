@@ -13,10 +13,10 @@ set "BIN=%ROOT%\bin\permcheck-windows-%ARCH%.exe"
 
 if defined PERMCHECK_RULES (
   set "RULES=%PERMCHECK_RULES%"
-) else if exist "%CLAUDE_PROJECT_DIR%\.permcheck\permissions.json" (
-  set "RULES=%CLAUDE_PROJECT_DIR%\.permcheck\permissions.json"
+) else if exist "%CLAUDE_PROJECT_DIR%\.permcheck\rules.json" (
+  set "RULES=%CLAUDE_PROJECT_DIR%\.permcheck\rules.json"
 ) else (
-  set "RULES=%ROOT%\rules\permissions.json"
+  set "RULES=%ROOT%\rules\permcheck.json"
 )
 
 if not exist "%BIN%" exit /b 0

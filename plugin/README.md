@@ -50,9 +50,9 @@ nothing to hand-wire:
 The hook decides against a JSON rule file, resolved first-hit-wins:
 
 1. `$PERMCHECK_RULES` — an absolute path you set.
-2. `<project>/.permcheck/permissions.json` — per-project rules (via
+2. `<project>/.permcheck/rules.json` — per-project rules (via
    `$CLAUDE_PROJECT_DIR`).
-3. The bundled default `rules/permissions.json` (the canonical reference set).
+3. The bundled default `rules/permcheck.json` (the canonical reference set).
 
 For the rule grammar and matching semantics, see the
 [main README](https://github.com/saleem-mirza/permcheck#rules) and

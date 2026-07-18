@@ -153,13 +153,13 @@ impl RuleSet {
 /// source of truth for the `deny` list that [`starter_rules`] seeds a fresh file
 /// with. It is **not** a decision-time default: the hook and CLI always require
 /// an explicit `--rules` path.
-const DEFAULT_RULES: &str = include_str!("../rules/permissions.json");
+const DEFAULT_RULES: &str = include_str!("../rules/permcheck.json");
 
 /// A starter rules value for `permcheck --init-rules`: the canonical `deny` list,
 /// `defaultMode: "ask"`, and empty `allow`/`ask` for the user to grow.
 pub fn starter_rules() -> Value {
     let canonical: Value =
-        serde_json::from_str(DEFAULT_RULES).expect("embedded rules/permissions.json is valid JSON");
+        serde_json::from_str(DEFAULT_RULES).expect("embedded rules/permcheck.json is valid JSON");
     let deny = canonical
         .get("permissions")
         .and_then(|p| p.get("deny"))

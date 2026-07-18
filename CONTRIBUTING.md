@@ -22,23 +22,23 @@ binary. Decision pipeline: `rules` → `matcher` → `engine`.
 
 Tests live in `tests/` (separate crates, never linked into the binary).
 
-`src/rules.rs` embeds the canonical `rules/permissions.json` via `include_str!` — it is
+`src/rules.rs` embeds the canonical `rules/permcheck.json` via `include_str!` — it is
 the source of the deny list `starter_rules()` writes for `permcheck --init-rules`, and is
 **not** a decision-time default (the hook always requires an explicit `--rules`).
 
 ## Building the plugin binaries
 
 The plugin's `bin/` binaries come from the Rust source in the repo root, and its
-`rules/permissions.json` is a generated copy of the **canonical** top-level
-`rules/permissions.json` (single source of truth — edit only the top-level file):
+`rules/permcheck.json` is a generated copy of the **canonical** top-level
+`rules/permcheck.json` (single source of truth — edit only the top-level file):
 
 ```sh
 cargo build --release
 cp target/release/permcheck plugin/bin/permcheck-darwin-arm64   # this host
-cp rules/permissions.json plugin/rules/permissions.json         # bundled rules copy
+cp rules/permcheck.json plugin/rules/permcheck.json         # bundled rules copy
 ```
 
-Both `plugin/bin/permcheck-*` and `plugin/rules/permissions.json` are gitignored — they
+Both `plugin/bin/permcheck-*` and `plugin/rules/permcheck.json` are gitignored — they
 are generated, not committed. The release workflow produces them for every platform; for
 local `--plugin-dir` testing, run the two `cp`s above first so the plugin has a binary
 and its rules.

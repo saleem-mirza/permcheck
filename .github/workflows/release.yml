@@ -110,7 +110,7 @@ jobs:
           # content, gitignored) with every built binary and the canonical rules,
           # then zip a ready-to-install plugin.
           mkdir -p plugin/bin plugin/rules
-          cp rules/permissions.json plugin/rules/permissions.json
+          cp rules/permcheck.json plugin/rules/permcheck.json
           find artifacts -type f -name 'permcheck-*' -exec cp {} plugin/bin/ \;
           chmod +x plugin/bin/permcheck-darwin-* plugin/bin/permcheck-linux-* 2>/dev/null || true
           ( cd plugin && zip -rq "../permcheck-plugin-${tag}.zip" . )
@@ -175,7 +175,7 @@ jobs:
           cp -R dist/.claude-plugin staging/.claude-plugin
           cp dist/README.md staging/README.md 2>/dev/null || true
           mkdir -p plugin/rules
-          cp rules/permissions.json plugin/rules/permissions.json   # generate the bundled rules copy
+          cp rules/permcheck.json plugin/rules/permcheck.json   # generate the bundled rules copy
           cp -R plugin staging/plugin
           find artifacts -type f -name 'permcheck-*' -exec cp {} staging/plugin/bin/ \;
           chmod +x staging/plugin/bin/permcheck-darwin-* staging/plugin/bin/permcheck-linux-* 2>/dev/null || true

@@ -11,7 +11,7 @@
 //! ```json
 //! { "hooks": { "PreToolUse": [
 //!   { "matcher": "*", "hooks": [
-//!     { "type": "command", "command": "permcheck --hook --rules \"/abs/permissions.json\"" }
+//!     { "type": "command", "command": "permcheck --hook --rules \"/abs/permcheck.json\"" }
 //!   ] } ] } }
 //! ```
 
@@ -171,7 +171,7 @@ mod tests {
     use super::*;
 
     fn cmd() -> String {
-        hook_command("/abs/permissions.json")
+        hook_command("/abs/permcheck.json")
     }
 
     #[test]
@@ -261,8 +261,8 @@ mod tests {
 
     #[test]
     fn command_quotes_rules_path() {
-        let c = hook_command("/path with space/permissions.json");
-        assert!(c.contains("--rules \"/path with space/permissions.json\""));
+        let c = hook_command("/path with space/permcheck.json");
+        assert!(c.contains("--rules \"/path with space/permcheck.json\""));
         // and it round-trips through JSON intact
         let v = json!({ "command": c });
         let s = v.to_string();
@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn windows_style_path_round_trips() {
-        let c = hook_command(r"C:\Users\Jane Doe\.claude\permissions.json");
+        let c = hook_command(r"C:\Users\Jane Doe\.claude\permcheck.json");
         let v = install(&json!({}), &c);
         let s = serde_json::to_string_pretty(&v).unwrap();
         let back: Value = serde_json::from_str(&s).unwrap();

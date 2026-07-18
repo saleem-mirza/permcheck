@@ -251,7 +251,7 @@ impl PathMatcher {
 /// Anchored, full-string glob match with `/`-aware wildcards (§6.5).
 ///
 /// Plain recursive backtracking. Path specifiers come from the operator-authored
-/// rule set (`permissions.json` is the source of truth), so they are trusted and
+/// rule set (`permcheck.json` is the source of truth), so they are trusted and
 /// short — at most a few spanning wildcards — and paths are bounded, making this
 /// fast in practice. It is deliberately **not** hardened against adversarial
 /// patterns with many interacting wildcards; that is a documented non-goal

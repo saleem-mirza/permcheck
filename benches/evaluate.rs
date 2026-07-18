@@ -2,7 +2,7 @@
 //!
 //! The production cost model is a fresh short-lived process per tool call, so
 //! these measure steady-state `evaluate` latency against the reference rule set
-//! (`rules/permissions.json`), grouped by matcher family, plus the one-time cost
+//! (`rules/permcheck.json`), grouped by matcher family, plus the one-time cost
 //! of loading and compiling the whole rule set. Every case pins its inputs and
 //! result with `black_box` so the optimizer can't fold the work away.
 
@@ -11,7 +11,7 @@ use permcheck::{RuleSet, evaluate};
 use serde_json::{Value, json};
 use std::hint::black_box;
 
-const RULES_JSON: &str = include_str!("../rules/permissions.json");
+const RULES_JSON: &str = include_str!("../rules/permcheck.json");
 
 fn ruleset() -> RuleSet {
     RuleSet::load_str(RULES_JSON).expect("reference rules load")

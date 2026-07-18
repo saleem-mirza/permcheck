@@ -11,7 +11,7 @@ the OS sandbox and enterprise `managed-settings.json` remain the security
 boundary. It exists to express the least-privilege rules the native permission
 model cannot: a narrow `allow` overriding a broad `deny`, and vice versa.
 
-This spec is written against `rules/permissions.json`, the **canonical
+This spec is written against `rules/permcheck.json`, the **canonical
 reference rule set**. The worked examples (§10) and the known issues (§11) refer
 to that file.
 
@@ -109,7 +109,7 @@ unrelated settings or other hooks.
 
 The rules file is passed explicitly via `--rules <path>`. There is no hardcoded
 default location; the caller (hook config or CLI user) always names the file.
-The canonical reference rule set ships at `rules/permissions.json`.
+The canonical reference rule set ships at `rules/permcheck.json`.
 
 ### 3.1 Accepted shapes
 
@@ -369,7 +369,7 @@ When the analyzer cannot understand a construct, it errs toward `deny`.
 
 ## 10. Worked examples
 
-Drawn from the reference rule set `rules/permissions.json` (deny `Bash(aws:*)`,
+Drawn from the reference rule set `rules/permcheck.json` (deny `Bash(aws:*)`,
 `Bash(kubectl:*)`, `Bash(git push --force:*)`, bare `WebFetch`, bare `WebSearch`;
 allow `Bash(cat:*)`, `Bash(python3 *)`, bare `Read`; ask `Bash(git push:*)`;
 `defaultMode: "ask"`, so a call matching no rule falls back to `ask`, §6.4). The
@@ -402,7 +402,7 @@ denies regardless of the fall-back, while a broad allow the rules do not narrow
 
 ## 11. Appendix: known issues in the reference rule set
 
-These are **authoring issues in `rules/permissions.json`**, not engine defects.
+These are **authoring issues in `rules/permcheck.json`**, not engine defects.
 The engine faithfully applies §5–§8; each item below is a case where the rules
 do not express what an operator likely intends — cautionary patterns and a
 correction backlog for the reference file.

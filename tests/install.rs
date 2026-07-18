@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 const RULES: &str = r#"{"allow":["Bash(ls:*)","Read"],"deny":["Bash(aws:*)"]}"#;
 
 fn rules_file(dir: &Path) -> PathBuf {
-    let p = dir.join("permissions.json");
+    let p = dir.join("permcheck.json");
     let mut f = fs::File::create(&p).unwrap();
     write!(f, "{RULES}").unwrap();
     p

@@ -410,7 +410,7 @@ fn print_help() {
             {cyan}WebSearch{reset}         → search query     {green}"rust async"{reset}
 
 {yellow}OPTIONS{reset}
-  {cyan}--rules{reset} <path>   Permissions JSON file {bold}(required){reset}. Reference: rules/permissions.json
+  {cyan}--rules{reset} <path>   Permissions JSON file {bold}(required){reset}. Reference: rules/permcheck.json
   {cyan}--json{reset}           {red}(CLI mode only){reset} Print the hook-format JSON decision instead of using the exit code.
   {cyan}--hook{reset}           Read a PreToolUse event on stdin, write decision JSON, always exit 0.
   {cyan}--init-rules{reset} <path>  Write a secure starter rules file — canonical deny list, empty allow/ask, defaultMode ask. Refuses to overwrite.
@@ -428,10 +428,10 @@ fn print_help() {
   Hook mode always exits 0 — the decision travels in the JSON output.
 
 {yellow}EXAMPLES{reset}
-  permcheck Bash {green}"aws ec2 describe-instances"{reset} --rules rules/permissions.json    # allow
-  permcheck Bash {green}"kubectl delete pod x"{reset}       --rules rules/permissions.json    # deny
-  permcheck Read {green}"/home/user/.ssh/id_rsa"{reset}     --rules rules/permissions.json    # deny
-  echo '{{…}}' | permcheck {cyan}--hook{reset}               --rules rules/permissions.json    # hook
+  permcheck Bash {green}"aws ec2 describe-instances"{reset} --rules rules/permcheck.json    # allow
+  permcheck Bash {green}"kubectl delete pod x"{reset}       --rules rules/permcheck.json    # deny
+  permcheck Read {green}"/home/user/.ssh/id_rsa"{reset}     --rules rules/permcheck.json    # deny
+  echo '{{…}}' | permcheck {cyan}--hook{reset}               --rules rules/permcheck.json    # hook
 
 {yellow}NOTE{reset}  A specifier like {red}"aws:*"{reset} is a rule pattern, not a payload — passing it checks the
       literal command "aws:*" (which default-denies). Pass a real command instead."#,

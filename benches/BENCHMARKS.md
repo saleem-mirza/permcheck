@@ -1,6 +1,6 @@
 # Benchmarks
 
-Measured with `cargo bench` (Criterion) against `rules/permissions.json`, the
+Measured with `cargo bench` (Criterion) against `rules/permcheck.json`, the
 canonical reference rule set, on a **MacBook Pro (Apple M3 Max)**, macOS 26,
 release profile (`opt-level=z`, LTO, `strip`). Numbers are indicative; re-run
 locally for your hardware.

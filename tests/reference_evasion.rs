@@ -1,5 +1,5 @@
 //! Evasion resistance against the **shipping** reference rule set
-//! (`rules/permissions.json`). Where `adversarial.rs` uses a crafted rule set to
+//! (`rules/permcheck.json`). Where `adversarial.rs` uses a crafted rule set to
 //! isolate mechanisms, this file asserts the real, canonical rules cannot be
 //! tricked by compound commands, substitutions, wrappers, or obfuscation.
 //!
@@ -12,7 +12,7 @@ use permcheck::{RuleSet, Tier, evaluate};
 use serde_json::json;
 
 fn reference() -> RuleSet {
-    RuleSet::load_str(include_str!("../rules/permissions.json")).unwrap()
+    RuleSet::load_str(include_str!("../rules/permcheck.json")).unwrap()
 }
 
 fn bash(cmd: &str) -> Tier {
