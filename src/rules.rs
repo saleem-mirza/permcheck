@@ -149,6 +149,32 @@ impl RuleSet {
     }
 }
 
+/// The canonical secure rule set, embedded at build time. It is the single
+/// source of truth for the `deny` list that [`starter_rules`] seeds a fresh file
+/// with. It is **not** a decision-time default: the hook and CLI always require
+/// an explicit `--rules` path.
+const DEFAULT_RULES: &str = include_str!("../rules/permcheck.json");
+
+/// A starter rules value for `permcheck --init-rules`: the canonical `deny` list,
+/// `defaultMode: "ask"`, and empty `allow`/`ask` for the user to grow.
+pub fn starter_rules() -> Value {
+    let canonical: Value =
+        serde_json::from_str(DEFAULT_RULES).expect("embedded rules/permcheck.json is valid JSON");
+    let deny = canonical
+        .get("permissions")
+        .and_then(|p| p.get("deny"))
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    serde_json::json!({
+        "permissions": {
+            "allow": [],
+            "ask": [],
+            "deny": deny,
+            "defaultMode": "ask",
+        }
+    })
+}
+
 /// Parse one rule string into `(tool, matcher, specificity)` (§4).
 pub(crate) fn parse_rule(s: &str) -> Result<(String, Matcher, u32), LoadError> {
     let bytes = s.as_bytes();
@@ -179,4 +205,29 @@ pub(crate) fn parse_rule(s: &str) -> Result<(String, Matcher, u32), LoadError> {
     let (m, specificity) =
         matcher::compile(family, spec).map_err(|_| LoadError::BadSpecifier(s.to_string()))?;
     Ok((tool.to_string(), m, specificity))
+}
+
+#[cfg(test)]
+mod starter_tests {
+    use super::*;
+
+    #[test]
+    fn starter_rules_is_secure_skeleton() {
+        let v = starter_rules();
+        let perms = &v["permissions"];
+        assert!(perms["allow"].as_array().unwrap().is_empty());
+        assert!(perms["ask"].as_array().unwrap().is_empty());
+        assert_eq!(perms["defaultMode"], "ask");
+
+        // deny is copied verbatim from the canonical set (non-empty, same length).
+        let canonical: Value = serde_json::from_str(DEFAULT_RULES).unwrap();
+        let canon_deny = canonical["permissions"]["deny"].as_array().unwrap().len();
+        assert!(canon_deny > 0, "canonical deny list must be non-empty");
+        assert_eq!(perms["deny"].as_array().unwrap().len(), canon_deny);
+
+        // The written form loads and falls back to ask.
+        let text = serde_json::to_string(&v).unwrap();
+        let rs = RuleSet::load_str(&text).unwrap();
+        assert_eq!(rs.default_tier, Tier::Ask);
+    }
 }

@@ -106,9 +106,11 @@ jobs:
       - name: Assemble plugin bundle
         run: |
           tag="${{ steps.meta.outputs.tag }}"
-          # Populate the checked-out plugin (bin/ is gitignored, so empty) with
-          # every built binary, then zip a ready-to-install plugin.
-          mkdir -p plugin/bin
+          # Populate the checked-out plugin (bin/ and rules/ hold only generated
+          # content, gitignored) with every built binary and the canonical rules,
+          # then zip a ready-to-install plugin.
+          mkdir -p plugin/bin plugin/rules
+          cp rules/permcheck.json plugin/rules/permcheck.json
           find artifacts -type f -name 'permcheck-*' -exec cp {} plugin/bin/ \;
           chmod +x plugin/bin/permcheck-darwin-* plugin/bin/permcheck-linux-* 2>/dev/null || true
           ( cd plugin && zip -rq "../permcheck-plugin-${tag}.zip" . )
@@ -124,32 +126,67 @@ jobs:
             artifacts/**/permcheck-*
             permcheck-plugin-*.zip
 
-  # Publish a self-contained plugin (source + binaries) to the `plugin-dist`
-  # branch, which the marketplace serves via a git-subdir source. Binaries are
-  # gitignored on the source branches, so they only ever live here.
-  publish-dist:
-    name: publish plugin-dist branch
+  # Push the source-free plugin bundle to the dedicated distribution repo
+  # (saleem-mirza/marketplace) — the one marketplace users install from. Only
+  # the plugin/ tree is refreshed; that repo owns its
+  # .claude-plugin/marketplace.json (a relative "./plugin" source) and README,
+  # which are carried over as-is. The default branch is rebuilt as an orphan
+  # each release so superseded binaries don't accumulate in history.
+  #
+  # Cross-repo push is authenticated with a write DEPLOY KEY on
+  # saleem-mirza/marketplace (repo-scoped, no expiry), whose private half is the
+  # DIST_DEPLOY_KEY secret — the default GITHUB_TOKEN is scoped to this repo and
+  # cannot push cross-repo.
+  publish-marketplace:
+    name: publish to marketplace repo
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out this repo (for the plugin/ tree)
+        uses: actions/checkout@v7
 
       - name: Download all binaries
         uses: actions/download-artifact@v8
         with:
           path: artifacts
 
-      - name: Assemble and push plugin-dist
+      - name: Publish source-free bundle to marketplace repo
+        env:
+          DIST_DEPLOY_KEY: ${{ secrets.DIST_DEPLOY_KEY }}
         run: |
-          mkdir -p plugin/bin
-          find artifacts -type f -name 'permcheck-*' -exec cp {} plugin/bin/ \;
-          chmod +x plugin/bin/permcheck-darwin-* plugin/bin/permcheck-linux-* 2>/dev/null || true
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="${{ github.event.inputs.tag }}"
+          fi
+
+          # Load the deploy key for all git-over-SSH in this step.
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DIST_DEPLOY_KEY" > ~/.ssh/dist_key
+          chmod 600 ~/.ssh/dist_key
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/dist_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
+          git clone git@github.com:saleem-mirza/marketplace.git dist
+
+          # New tree = the dist repo's own catalog + README (preserved), plus a
+          # fresh plugin/ (source files from this repo + built binaries).
+          rm -rf staging && mkdir -p staging
+          cp -R dist/.claude-plugin staging/.claude-plugin
+          cp dist/README.md staging/README.md 2>/dev/null || true
+          mkdir -p plugin/rules
+          cp rules/permcheck.json plugin/rules/permcheck.json   # generate the bundled rules copy
+          cp -R plugin staging/plugin
+          find artifacts -type f -name 'permcheck-*' -exec cp {} staging/plugin/bin/ \;
+          chmod +x staging/plugin/bin/permcheck-darwin-* staging/plugin/bin/permcheck-linux-* 2>/dev/null || true
+
+          cd dist
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -B plugin-dist
-          git add -f plugin/bin/permcheck-*
-          git commit -m "release ${{ github.ref_name }}: bundle plugin binaries" \
-            || { echo "no binary changes to commit"; exit 0; }
-          git push -f origin plugin-dist
+          git checkout --orphan release-tmp
+          git rm -rf --quiet . >/dev/null 2>&1 || true
+          cp -R ../staging/. .
+          git add -A
+          git commit -m "permcheck ${tag}: source-free plugin bundle"
+          git branch -M release-tmp main
+          git push -f origin main

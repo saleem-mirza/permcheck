@@ -1,7 +1,7 @@
 {
   "name": "permcheck",
   "description": "Specificity-aware PreToolUse permission engine — narrow allow/deny rules override broad ones. Defense-in-depth for Bash, Read/Write/Edit, WebFetch/WebSearch, and MCP tool calls.",
-  "version": "0.1.5",
+  "version": "0.1.10",
   "author": {
     "name": "Saleem Mirza",
     "url": "https://github.com/saleem-mirza"

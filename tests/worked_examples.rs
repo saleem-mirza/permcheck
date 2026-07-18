@@ -3,7 +3,7 @@
 
 use assert_cmd::Command;
 
-const RULES: &str = "rules/permissions.json";
+const RULES: &str = "rules/permcheck.json";
 
 const ALLOW: i32 = 0;
 const ASK: i32 = 1;

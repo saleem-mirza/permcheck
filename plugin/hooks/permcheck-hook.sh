@@ -36,10 +36,10 @@ bin="$root/bin/permcheck-${plat}-${arch}${ext}"
 # --- resolve the rules file: env override, then project-local, then bundled ---
 if [ -n "${PERMCHECK_RULES:-}" ]; then
   rules="$PERMCHECK_RULES"
-elif [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -f "$CLAUDE_PROJECT_DIR/.permcheck/permissions.json" ]; then
-  rules="$CLAUDE_PROJECT_DIR/.permcheck/permissions.json"
+elif [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -f "$CLAUDE_PROJECT_DIR/.permcheck/rules.json" ]; then
+  rules="$CLAUDE_PROJECT_DIR/.permcheck/rules.json"
 else
-  rules="$root/rules/permissions.json"
+  rules="$root/rules/permcheck.json"
 fi
 
 # --- fail open to native permissions if we can't run the engine ---

@@ -2,7 +2,7 @@
 
 use permcheck::RuleSet;
 
-const RULES: &str = include_str!("../rules/permissions.json");
+const RULES: &str = include_str!("../rules/permcheck.json");
 
 #[test]
 fn reference_rule_set_loads() {

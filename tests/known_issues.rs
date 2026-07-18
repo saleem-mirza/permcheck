@@ -8,7 +8,7 @@ use permcheck::{RuleSet, Tier, evaluate};
 use serde_json::json;
 
 fn reference() -> RuleSet {
-    RuleSet::load_str(include_str!("../rules/permissions.json")).unwrap()
+    RuleSet::load_str(include_str!("../rules/permcheck.json")).unwrap()
 }
 
 fn bash(cmd: &str) -> Tier {

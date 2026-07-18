@@ -1,6 +1,6 @@
 # Benchmarks
 
-Measured with `cargo bench` (Criterion) against `rules/permissions.json`, the
+Measured with `cargo bench` (Criterion) against `rules/permcheck.json`, the
 canonical reference rule set, on a **MacBook Pro (Apple M3 Max)**, macOS 26,
 release profile (`opt-level=z`, LTO, `strip`). Numbers are indicative; re-run
 locally for your hardware.
@@ -53,7 +53,7 @@ Benchmarks are grouped by matcher family, plus the one-time rule-set load. Run
 | `mcp_default_ask` | `mcp__db__query(SELECT 1)` | ask (`defaultMode` fall-back) | ~0.20 µs |
 
 **Reading the numbers.** Simple single-command Bash calls are ~1.7–2.1 µs — a few
-hundred prefix comparisons over the ~157 Bash rules. Cost rises with *work*, not
+hundred prefix comparisons over the ~139 Bash rules. Cost rises with *work*, not
 tier: `wrapper_env_aws` (~3.4 µs) decides the command twice (the wrapper and the
 wrapped command); `compound_pipe` (~7.1 µs) splits into two units and runs the
 file-access cross-check on each, matching operands against every `Read` deny glob
@@ -65,14 +65,14 @@ Path matching is a plain recursive glob matcher: rule specifiers are trusted
 operator config (the rule file is the source of truth) and use at most a few
 wildcards, so backtracking stays cheap. It is intentionally **not** hardened
 against adversarial many-wildcard patterns — a documented non-goal (SPEC §9.2).
-Every figure sits far below the ~3 ms process-spawn floor below, so it is
-immaterial end-to-end.
+Every figure sits far below the ~3 ms process-spawn floor, so it is immaterial
+end-to-end.
 
 ## Why this is fast (and why the manifest looks the way it does)
 
 The production cost model is **one fresh, short-lived process per tool call**, so
 **startup cost dominates** — there is no steady state to amortize against. Two
-manifest choices follow directly (§12.2 of the spec):
+manifest choices in `Cargo.toml` follow directly:
 
 - **No `regex`, no `clap`.** Every matcher (§6.5) and the argument parser (§2)
   are hand-written. Hand-written globs cost microseconds cold; compiling a regex
@@ -87,4 +87,4 @@ manifest choices follow directly (§12.2 of the spec):
 
 End-to-end, a cold CLI invocation (process spawn + load + evaluate + exit)
 measures ~2.9 ms, almost entirely OS process-creation overhead; the engine's own
-work is the microsecond figures above. The stripped release binary is ~361 KB.
+work is the microsecond figures above.

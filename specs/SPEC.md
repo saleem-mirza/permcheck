@@ -1,10 +1,9 @@
 # Specification: specificity-aware permission engine for Claude Code
 
-Clean-slate specification of the permcheck decision engine. This document is the
-**source of truth for behavior**: the implementation conforms to this spec, not
-the reverse. Where code and spec disagree, the spec wins. §12 records the project
-layout — module map, Cargo manifest, and test wiring — so the project can be
-reconstructed to match the file structure.
+Specification of the permcheck decision engine, and the **source of truth for
+behavior**: where code and spec disagree, the spec wins. It defines *what* the
+engine decides, not *how* it is built — the code and the README carry the
+implementation and file layout.
 
 Running as a Claude Code **PreToolUse hook**, permcheck decides whether a tool
 call is `allow`, `ask`, or `deny`. It is **defense-in-depth, not a sandbox**:
@@ -12,7 +11,7 @@ the OS sandbox and enterprise `managed-settings.json` remain the security
 boundary. It exists to express the least-privilege rules the native permission
 model cannot: a narrow `allow` overriding a broad `deny`, and vice versa.
 
-This spec is written against `rules/permissions.json`, the **canonical
+This spec is written against `rules/permcheck.json`, the **canonical
 reference rule set**. The worked examples (§10) and the known issues (§11) refer
 to that file.
 
@@ -54,10 +53,13 @@ Invoked as `permcheck --hook --rules <path>`. Wired into Claude Code
 - **Output** (stdout, JSON), **always exit 0**:
 
   ```json
-  {"hookSpecificOutput":{
-    "hookEventName":"PreToolUse",
-    "permissionDecision":"allow|ask|deny",
-    "permissionDecisionReason":"<reason>"}}
+  {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "allow|ask|deny",
+      "permissionDecisionReason": "<reason>"
+    }
+  }
   ```
 
   where `<reason>` is a uniform string `<label>: <payload>` — `<label>` matches
@@ -110,19 +112,28 @@ unrelated settings or other hooks.
 
 The rules file is passed explicitly via `--rules <path>`. There is no hardcoded
 default location; the caller (hook config or CLI user) always names the file.
-The canonical reference rule set ships at `rules/permissions.json`; invoke the
-engine against it as `permcheck --hook --rules rules/permissions.json`.
+The canonical reference rule set ships at `rules/permcheck.json`.
 
 ### 3.1 Accepted shapes
 
 Both of these parse identically:
 
 ```json
-{ "permissions": { "allow": [...], "ask": [...], "deny": [...] } }
+{
+  "permissions": {
+    "allow": [...],
+    "ask": [...],
+    "deny": [...]
+  }
+}
 ```
 
 ```json
-{ "allow": [...], "ask": [...], "deny": [...] }
+{
+  "allow": [...],
+  "ask": [...],
+  "deny": [...]
+}
 ```
 
 - Each of `allow`, `ask`, `deny` is an array of rule strings (§4). A missing
@@ -158,10 +169,9 @@ Rules:
 
 ## 5. Tool taxonomy and payload extraction
 
-**Every tool call is evaluated, not just `Bash`.** No tool bypasses the engine.
-Each tool is routed to one of three matcher families by its name; the
-**payload** (the string that gets matched) is extracted from `tool_input` as
-below.
+**Every tool call is evaluated, not just `Bash`** — no tool bypasses the engine.
+Each tool is routed to one of three matcher families by its name; the **payload**
+(the string that gets matched) is extracted from `tool_input` as below.
 
 | Family | Tools | Payload |
 |---|---|---|
@@ -372,7 +382,7 @@ When the analyzer cannot understand a construct, it errs toward `deny`.
 
 ## 10. Worked examples
 
-Drawn from the reference rule set `rules/permissions.json` (deny `Bash(aws:*)`,
+Drawn from the reference rule set `rules/permcheck.json` (deny `Bash(aws:*)`,
 `Bash(kubectl:*)`, `Bash(git push --force:*)`, bare `WebFetch`, bare `WebSearch`;
 allow `Bash(cat:*)`, `Bash(python3 *)`, bare `Read`; ask `Bash(git push:*)`;
 `defaultMode: "ask"`, so a call matching no rule falls back to `ask`, §6.4). The
@@ -399,16 +409,16 @@ commands are governed by the broad deny; git read commands (`git status`,
 | `Bash(some-tool foo)` | ask | no Bash rule matches → ask fall-back |
 | `Bash(python3 -c "import os")` | allow (see §11) | `python3 *` allows it; no `-c` deny exists |
 
-The cross-check row (`cat .env`) and the `python3 -c` row show the model working
-exactly as specified: an active protection still denies regardless of the
-fall-back, while a broad allow the rules do not narrow lets code through (§11).
+Two rows show both directions of the design: an active protection (`cat .env`)
+denies regardless of the fall-back, while a broad allow the rules do not narrow
+(`python3 -c`) lets code through (§11).
 
 ## 11. Appendix: known issues in the reference rule set
 
-These are **authoring issues in `rules/permissions.json`**, not engine defects.
+These are **authoring issues in `rules/permcheck.json`**, not engine defects.
 The engine faithfully applies §5–§8; each item below is a case where the rules
-do not express what an operator likely intends. Listed as cautionary patterns
-and as a correction backlog for the reference file.
+do not express what an operator likely intends — cautionary patterns and a
+correction backlog for the reference file.
 
 1. **Arbitrary-execution / secret bypasses.** `Bash(python3 *)` and
    `Bash(.venv/bin/python *)` allow `python3 -c "<code>"`, which sidesteps the
@@ -446,164 +456,3 @@ and as a correction backlog for the reference file.
    `.bash_history` / `.zsh_history` are denied twice; path root markers mix
    `//**/`, `/**/`, and `**/`, which changes absolute-vs-relative anchoring.
    Dedupe and standardize markers alongside matcher tests.
-
-## 12. Project layout and build
-
-This section records the on-disk structure so the project can be reconstructed
-exactly. permcheck is a single Cargo package (`permcheck`, edition 2024) exposing
-a library plus a binary of the same name, with `serde` / `serde_json` as its only
-runtime dependencies. The library holds all engine logic; the binary is a thin
-shell over it.
-
-### 12.1 Directory tree
-
-```
-.
-├── Cargo.toml                # package manifest (§12.2)
-├── Cargo.lock                # committed — this ships a binary, not a reusable lib
-├── .gitignore                # /target, .env*, .DS_Store, IDE and log files
-├── rules/
-│   └── permissions.json      # canonical reference rule set (§3, §10, §11)
-├── specs/
-│   └── SPEC.md               # this document — behavioral source of truth
-├── docs/
-│   ├── PROPOSAL.md           # problem statement and proposed solution
-│   └── DESIGN.md             # technical design companion to this spec
-├── benches/
-│   ├── evaluate.rs           # Criterion benchmark (harness = false)
-│   └── BENCHMARKS.md         # performance results and rationale
-├── src/
-│   ├── lib.rs                # crate root: evaluate(); re-exports (§12.3)
-│   ├── main.rs               # binary: arg parsing, hook/CLI dispatch, help
-│   ├── types.rs              # Tier, Decision, Family, extract_payload
-│   ├── rules.rs              # grammar, LoadError, CompiledRule, RuleSet, load
-│   ├── matcher.rs            # Matcher enum + Bash/Path/Generic matchers
-│   ├── bash.rs               # tokenizer, splitter, file-access cross-check
-│   ├── engine.rs             # winner selection + candidate forms
-│   └── settings.rs           # idempotent --install/--uninstall JSON transforms
-└── tests/                    # ALL tests: separate crates, never in the binary
-    ├── types_extraction.rs   # §5 payload extraction
-    ├── rules_grammar.rs      # §3–§4 grammar + loading (via the public loader)
-    ├── engine_selection.rs   # §6.3, §7 winner selection + candidate forms
-    ├── matcher_bash.rs       # §6.1, §6.5 Bash matcher + specificity
-    ├── matcher_generic.rs    # §6.5 Generic (URL/domain) matcher
-    ├── matcher_path.rs       # §6.5 Path glob matcher
-    ├── bash_split.rs         # §8.1 compound splitter
-    ├── bash_tokenize.rs      # §8.2–§8.3 tokenizer + env stripping
-    ├── bash_crosscheck.rs    # §8.3 file-access cross-check + wrapper peel
-    ├── cli.rs                # §2.2 CLI exit codes, --json, help, cwd
-    ├── hook_mode.rs          # §2.1, §9.1 hook JSON + fail-closed paths
-    ├── worked_examples.rs    # §10 rows as CLI exit-code + hook-mode checks
-    ├── known_issues.rs       # §11 items locked as regressions
-    ├── load_errors.rs        # §3–§4 load-error handling
-    ├── reference_loads.rs    # full reference set loads clean
-    ├── redirects.rs          # §8 redirection cross-checks
-    ├── adversarial.rs        # §8–§9 evasion/traversal (crafted rules)
-    ├── reference_evasion.rs  # §8 evasion resistance vs the shipping rule set
-    ├── default_decision.rs   # §6.4 defaultMode fall-back (ask/deny)
-    └── install.rs            # §2.3 --install/--uninstall settings.json wiring
-```
-
-### 12.2 Cargo manifest
-
-```toml
-[package]
-name = "permcheck"
-version = "0.1.0"
-edition = "2024"
-
-[lib]
-name = "permcheck"
-path = "src/lib.rs"
-
-[[bin]]
-name = "permcheck"
-path = "src/main.rs"
-
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-
-[dev-dependencies]
-assert_cmd = "2"
-predicates = "3"
-tempfile = "3"
-criterion = { version = "0.5", features = ["html_reports"] }
-
-[[bench]]
-name = "evaluate"
-harness = false
-
-[profile.release]
-opt-level = "z"        # optimize for size — cold-start binary, not steady-state
-lto = true
-codegen-units = 1
-strip = true
-panic = "unwind"       # load-bearing: hook mode relies on catch_unwind → deny (§9.1)
-
-[profile.dev.package."*"]
-debug = false
-```
-
-Two manifest choices are load-bearing, not stylistic:
-
-- **`panic = "unwind"`** in release — hook mode catches panics and turns them
-  into `deny` (§9.1); `panic = "abort"` would make that fail-closed guarantee
-  impossible.
-- **No `regex`, no `clap`.** Matchers (§6.5) and argument parsing (§2) are
-  hand-written. The binary is a fresh short-lived process per tool call, so
-  startup cost dominates: hand-written globs cost microseconds cold, versus
-  milliseconds to compile a regex set with no amortization (see
-  `benches/BENCHMARKS.md`).
-
-### 12.3 Source modules
-
-Seven source files. Each module's behavior is specified in the section referenced.
-
-| File | Responsibility | Key public items |
-|---|---|---|
-| `src/lib.rs` | crate root and top-level entry point | `evaluate(&RuleSet, tool, &tool_input, cwd) -> Decision`; re-exports `load_rules` (= `rules::load`), `load_rules_str` (= `rules::load_str`), `RuleLoadError` (= `rules::LoadError`); declares `pub mod types, rules, engine, matcher, bash, settings` |
-| `src/types.rs` | core data types + payload extraction (§5) | `Tier {Allow < Ask < Deny}` (derives `Ord`); `Decision {tier, reason}` with `deny`/`allow`/`ask`, `to_hook_json`, `to_hook_json_pretty`, `to_exit_code`; `Family {Bash, Path, Generic}` + `from_tool`; `extract_payload(tool, &input) -> String` |
-| `src/rules.rs` | rule grammar, loading, rule set (§3–§4, §6.4) | `LoadError` (8 variants); `parse_rule` (crate-internal); `CompiledRule {tool, matcher, specificity, tier, order_index}`; `RuleSet {rules, index, default_tier}` with `rules_for(tool)`, `load(&Path)`, `load_str(&str)` — builds a `HashMap<tool, Vec<idx>>` index; `default_tier` parsed from `defaultMode` (`"ask"` → Ask, else Deny) |
-| `src/matcher.rs` | per-family matchers and specificity (§6.1, §6.5) | `Matcher {Bare, Bash, Path, Generic}` + `matches`; `compile(family, specifier) -> (Matcher, u32)`; `BashMatcher` (trailing `cmd:*` vs general glob), `PathMatcher` (`*`/`?`/`**`, root markers, `~`), `GenericMatcher` (`domain:` strip, `*` only); backtracking `glob_star_match` (Bash/Generic) and `/`-aware `path_match` (Path); `EXACT_MATCH_BONUS = 1000` |
-| `src/engine.rs` | winner selection + candidate forms (§6.3, §7) | `best_match(&RuleSet, tool, &candidates) -> Option<&CompiledRule>` (max `(specificity, tier)`, tie → lowest `order_index`); `decide_payload` (Path/Generic; `None` → `rs.default_tier`); `path_candidates`, `generic_candidates`, `url_host`, `path_hits_deny`; `$HOME` cached in a `OnceLock` |
-| `src/bash.rs` | compound-Bash pipeline (§8) | `tokenize`, `Token`, `RedirectKind`; `split`, `Unit` (total splitter over `&& \|\| \| ; &` + newlines, extracting `$(…)` / backticks / `<()` / `>()`); `decide_bash(command, &RuleSet, cwd)`; `strip_env_assignments`; reader/writer/wrapper cross-check tables |
-| `src/main.rs` | binary: I/O, mode dispatch, help (§2) | `main` (silent panic hook; dispatches hook/CLI/install/uninstall); `run_hook` (stdin JSON → decision JSON, `catch_unwind`, always exit 0); `run_cli` (positional `<Tool> [payload]`, `--json`, exit 0/1/2/3); `run_install` / `run_uninstall` with `Scope`, `scope_from_args`, `home_dir`, `settings_path`, `read_settings`, `write_settings_atomic` (§2.3); `print_help`, `find_rules_arg`, `build_tool_input` |
-| `src/settings.rs` | idempotent settings.json transforms (§2.3) | pure `serde_json::Value` transforms: `install(&Value, cmd) -> Value`, `uninstall(&Value) -> Value`, `hook_command(abs_rules) -> String`, `is_permcheck_hook(cmd) -> bool` — no I/O, so `install` is a fixed point on its own output |
-
-### 12.4 Test and benchmark layout
-
-**All tests live under `tests/`** — there is no test code in `src/`. Each
-`tests/*.rs` file is a separate integration-test crate that Cargo builds only
-under `cargo test` (never linked into the library or binary), so the release
-artifact is guaranteed free of test code. Tests exercise the crate through its
-public surface (`evaluate`, `RuleSet::load_str`, the per-module `pub` items such
-as `bash::split`, `matcher::compile`, `engine::decide_payload`) and the built
-binary (via `assert_cmd`). Coverage by file:
-
-| File | Covers |
-|---|---|
-| `types_extraction.rs` | payload extraction per tool (§5) |
-| `rules_grammar.rs` | grammar + load errors, via the public loader (§3–§4) |
-| `engine_selection.rs` | winner selection, candidate forms, `url_host` (§6.3, §7) |
-| `matcher_{bash,generic,path}.rs` | per-family matching + specificity (§6.1, §6.5) |
-| `bash_{split,tokenize,crosscheck}.rs` | splitter, tokenizer, cross-check + wrapper peel (§8) |
-| `cli.rs` / `hook_mode.rs` | binary interface: exit codes, `--json`, hook JSON, fail-closed (§2, §9.1) |
-| `worked_examples.rs` / `known_issues.rs` | §10 and §11, locked as regressions |
-| `load_errors.rs` / `reference_loads.rs` | load-error handling; clean load of the full reference set |
-| `redirects.rs` / `adversarial.rs` / `reference_evasion.rs` | §8 redirection, evasion/traversal, and evasion resistance vs the shipping rules |
-| `default_decision.rs` | §6.4 `defaultMode` fall-back: ask/deny per family, cross-check/explicit-deny still win |
-| `install.rs` | §2.3 `--install`/`--uninstall`: settings.json wiring, idempotency, scopes, error posture |
-
-Benchmarks live in `benches/evaluate.rs` and, being a `[[bench]]` target with
-`harness = false`, also compile only under `cargo bench` — never into the binary.
-
-Build and run:
-
-```
-cargo build --release      # → target/release/permcheck
-cargo test                 # unit + integration suite
-cargo bench                # Criterion benchmark (benches/evaluate.rs)
-
-target/release/permcheck --hook --rules rules/permissions.json   # hook mode
-```

