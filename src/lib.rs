@@ -9,6 +9,7 @@ pub mod bash;
 pub mod engine;
 pub mod matcher;
 pub mod rules;
+pub mod settings;
 pub mod types;
 
 use serde_json::Value;

@@ -1,10 +1,10 @@
 use std::io::{IsTerminal, Read as IoRead};
 use std::panic;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
 use permcheck::types::{Decision, Tier};
-use permcheck::{evaluate, load_rules};
+use permcheck::{evaluate, load_rules, settings};
 
 fn main() {
     // Silence backtraces in hook mode
@@ -17,13 +17,197 @@ fn main() {
         process::exit(0);
     }
 
-    if args.iter().any(|a| a == "--hook") {
+    let install = args.iter().any(|a| a == "--install");
+    let uninstall = args.iter().any(|a| a == "--uninstall");
+    if install && uninstall {
+        eprintln!("error: --install and --uninstall are mutually exclusive");
+        process::exit(3);
+    }
+    if install {
+        run_install(&args);
+    } else if uninstall {
+        run_uninstall(&args);
+    } else if args.iter().any(|a| a == "--hook") {
         // --json is CLI-only; in hook mode it is silently ignored
         // (hook mode always emits JSON and always exits 0).
         run_hook(&args);
     } else {
         run_cli(&args);
     }
+}
+
+/// Where a settings file lives, selected by the scope flags.
+#[derive(Clone, Copy)]
+enum Scope {
+    User,
+    Project,
+    Local,
+}
+
+/// Resolve the scope from `--user` / `--project` / `--local` (default: user).
+/// Multiple scope flags are an error.
+fn scope_from_args(args: &[String]) -> Scope {
+    let user = args.iter().any(|a| a == "--user");
+    let project = args.iter().any(|a| a == "--project");
+    let local = args.iter().any(|a| a == "--local");
+    match (user, project, local) {
+        (_, false, false) => Scope::User, // default, or explicit --user
+        (false, true, false) => Scope::Project,
+        (false, false, true) => Scope::Local,
+        _ => {
+            eprintln!("error: choose at most one of --user, --project, --local");
+            process::exit(3);
+        }
+    }
+}
+
+/// The user's home directory, portable across Linux/macOS (`$HOME`, also Git-Bash
+/// on Windows) and native Windows (`%USERPROFILE%`, then `%HOMEDRIVE%%HOMEPATH%`).
+fn home_dir() -> Option<PathBuf> {
+    if let Some(h) = std::env::var("HOME").ok().filter(|s| !s.is_empty()) {
+        return Some(PathBuf::from(h));
+    }
+    if let Some(up) = std::env::var("USERPROFILE").ok().filter(|s| !s.is_empty()) {
+        return Some(PathBuf::from(up));
+    }
+    match (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
+        (Ok(d), Ok(p)) if !d.is_empty() && !p.is_empty() => Some(PathBuf::from(format!("{d}{p}"))),
+        _ => None,
+    }
+}
+
+/// The `settings.json` path for a scope. `.claude/` is joined with `PathBuf` so
+/// separators are correct on every OS.
+fn settings_path(scope: Scope) -> Option<PathBuf> {
+    let (base, file): (PathBuf, &str) = match scope {
+        Scope::User => (home_dir()?, "settings.json"),
+        Scope::Project => (PathBuf::from("."), "settings.json"),
+        Scope::Local => (PathBuf::from("."), "settings.local.json"),
+    };
+    Some(base.join(".claude").join(file))
+}
+
+/// Serialize `value` as pretty JSON and write it atomically: to a sibling
+/// temp file, then `rename` over the target (atomic-replace on Unix and Windows).
+fn write_settings_atomic(path: &Path, value: &serde_json::Value) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut text = serde_json::to_string_pretty(value).unwrap_or_default();
+    text.push('\n');
+
+    let tmp = path.with_extension("json.permcheck-tmp");
+    std::fs::write(&tmp, text.as_bytes())?;
+    std::fs::rename(&tmp, path)
+}
+
+fn run_install(args: &[String]) {
+    let scope = scope_from_args(args);
+    let Some(path) = settings_path(scope) else {
+        eprintln!("error: cannot resolve home directory (set HOME or USERPROFILE)");
+        process::exit(3);
+    };
+
+    let rules_path = match find_rules_arg(args) {
+        Some(p) => p,
+        None => {
+            eprintln!("error: --install requires --rules <path>");
+            process::exit(3);
+        }
+    };
+
+    // Absolutize without touching the filesystem, then validate it actually
+    // loads — a broken rules file would deny every tool call.
+    let abs_rules = match std::path::absolute(&rules_path) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: cannot resolve rules path: {e}");
+            process::exit(3);
+        }
+    };
+    if let Err(e) = load_rules(&abs_rules) {
+        eprintln!("error: {e}");
+        process::exit(3);
+    }
+    let Some(abs_rules_str) = abs_rules.to_str() else {
+        eprintln!("error: rules path is not valid UTF-8");
+        process::exit(3);
+    };
+
+    let existing = match read_settings(&path) {
+        Ok(v) => v,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            process::exit(3);
+        }
+    };
+
+    let command = settings::hook_command(abs_rules_str);
+    let out = settings::install(&existing, &command);
+
+    if out == existing && path.exists() {
+        println!("permcheck hook already up to date → {}", path.display());
+        process::exit(0);
+    }
+    if let Err(e) = write_settings_atomic(&path, &out) {
+        eprintln!("error: cannot write {}: {e}", path.display());
+        process::exit(3);
+    }
+    println!("Installed permcheck PreToolUse hook → {}", path.display());
+    process::exit(0);
+}
+
+fn run_uninstall(args: &[String]) {
+    let scope = scope_from_args(args);
+    let Some(path) = settings_path(scope) else {
+        eprintln!("error: cannot resolve home directory (set HOME or USERPROFILE)");
+        process::exit(3);
+    };
+
+    if !path.exists() {
+        println!("nothing to uninstall ({} does not exist)", path.display());
+        process::exit(0);
+    }
+
+    let existing = match read_settings(&path) {
+        Ok(v) => v,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            process::exit(3);
+        }
+    };
+
+    let out = settings::uninstall(&existing);
+    if out == existing {
+        println!("no permcheck hook found in {}", path.display());
+        process::exit(0);
+    }
+    if let Err(e) = write_settings_atomic(&path, &out) {
+        eprintln!("error: cannot write {}: {e}", path.display());
+        process::exit(3);
+    }
+    println!("Removed permcheck PreToolUse hook → {}", path.display());
+    process::exit(0);
+}
+
+/// Read and parse a settings file into a JSON object. A missing or empty file is
+/// an empty object; a present-but-non-object file is refused (so we never clobber
+/// an unexpected structure).
+fn read_settings(path: &Path) -> Result<serde_json::Value, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(serde_json::json!({})),
+        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+    };
+    if text.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("invalid JSON in {}: {e}", path.display()))?;
+    if !value.is_object() {
+        return Err(format!("{} is not a JSON object", path.display()));
+    }
+    Ok(value)
 }
 
 fn run_hook(args: &[String]) {
@@ -162,6 +346,8 @@ fn print_help() {
 {yellow}USAGE{reset}
   permcheck {green}<Tool>{reset} {green}<payload>{reset} --rules <path> [--json]   check one call (manual)
   permcheck {cyan}--hook{reset} --rules <path>                          hook mode: event JSON on stdin
+  permcheck {cyan}--install{reset} --rules <path> [scope]              wire the hook into settings.json
+  permcheck {cyan}--uninstall{reset} [scope]                           remove the hook from settings.json
 
 {yellow}ARGUMENTS{reset}
   {green}<Tool>{reset}      Exact Claude Code tool name: Bash, Read, Write, Edit, WebFetch, WebSearch, mcp__db__query, …
@@ -175,7 +361,14 @@ fn print_help() {
   {cyan}--rules{reset} <path>   Permissions JSON file {bold}(required){reset}. Reference: rules/permissions.json
   {cyan}--json{reset}           {red}(CLI mode only){reset} Print the hook-format JSON decision instead of using the exit code.
   {cyan}--hook{reset}           Read a PreToolUse event on stdin, write decision JSON, always exit 0.
+  {cyan}--install{reset}        Idempotently add the PreToolUse hook to settings.json (needs {cyan}--rules{reset}).
+  {cyan}--uninstall{reset}      Idempotently remove the permcheck PreToolUse hook from settings.json.
   {cyan}-h, --help{reset}       Show this help.
+
+{yellow}INSTALL SCOPE{reset}  (for --install / --uninstall; default {green}--user{reset})
+  {cyan}--user{reset}      ~/.claude/settings.json          machine-wide (default)
+  {cyan}--project{reset}   ./.claude/settings.json          committed, team-shared
+  {cyan}--local{reset}     ./.claude/settings.local.json    this checkout only
 
 {yellow}EXIT CODES{reset}  (CLI mode)  {green}0 allow{reset} · {yellow}1 ask{reset} · {red}2 deny{reset} · 3 config error
   Hook mode always exits 0 — the decision travels in the JSON output.
