@@ -12,7 +12,7 @@ The quickest way to use permcheck is the bundled plugin — it ships prebuilt bi
 
 ```sh
 /plugin marketplace add saleem-mirza/permcheck
-/plugin install permcheck@permcheck
+/plugin install permcheck@zethian
 ```
 
 **Installing makes permcheck your `PreToolUse` permission engine automatically** — functionally identical to a `PreToolUse` hook in `settings.json`, but with nothing to hand-wire:

@@ -15,7 +15,7 @@ From the marketplace (after a release has been published — see *Releases*):
 
 ```sh
 /plugin marketplace add saleem-mirza/permcheck
-/plugin install permcheck@permcheck
+/plugin install permcheck@zethian
 ```
 
 The plugin's prebuilt binaries are served from the `plugin-dist` branch (built by
