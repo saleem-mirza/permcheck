@@ -1,10 +1,9 @@
 # Specification: specificity-aware permission engine for Claude Code
 
-Clean-slate specification of the permcheck decision engine. This document is the
-**source of truth for behavior**: the implementation conforms to this spec, not
-the reverse. Where code and spec disagree, the spec wins. §12 records the project
+Specification of the permcheck decision engine, and the **source of truth for
+behavior**: where code and spec disagree, the spec wins. §12 records the project
 layout — module map, Cargo manifest, and test wiring — so the project can be
-reconstructed to match the file structure.
+reconstructed from this document.
 
 Running as a Claude Code **PreToolUse hook**, permcheck decides whether a tool
 call is `allow`, `ask`, or `deny`. It is **defense-in-depth, not a sandbox**:
@@ -110,8 +109,7 @@ unrelated settings or other hooks.
 
 The rules file is passed explicitly via `--rules <path>`. There is no hardcoded
 default location; the caller (hook config or CLI user) always names the file.
-The canonical reference rule set ships at `rules/permissions.json`; invoke the
-engine against it as `permcheck --hook --rules rules/permissions.json`.
+The canonical reference rule set ships at `rules/permissions.json`.
 
 ### 3.1 Accepted shapes
 
@@ -158,10 +156,9 @@ Rules:
 
 ## 5. Tool taxonomy and payload extraction
 
-**Every tool call is evaluated, not just `Bash`.** No tool bypasses the engine.
-Each tool is routed to one of three matcher families by its name; the
-**payload** (the string that gets matched) is extracted from `tool_input` as
-below.
+**Every tool call is evaluated, not just `Bash`** — no tool bypasses the engine.
+Each tool is routed to one of three matcher families by its name; the **payload**
+(the string that gets matched) is extracted from `tool_input` as below.
 
 | Family | Tools | Payload |
 |---|---|---|
@@ -399,16 +396,16 @@ commands are governed by the broad deny; git read commands (`git status`,
 | `Bash(some-tool foo)` | ask | no Bash rule matches → ask fall-back |
 | `Bash(python3 -c "import os")` | allow (see §11) | `python3 *` allows it; no `-c` deny exists |
 
-The cross-check row (`cat .env`) and the `python3 -c` row show the model working
-exactly as specified: an active protection still denies regardless of the
-fall-back, while a broad allow the rules do not narrow lets code through (§11).
+Two rows show both directions of the design: an active protection (`cat .env`)
+denies regardless of the fall-back, while a broad allow the rules do not narrow
+(`python3 -c`) lets code through (§11).
 
 ## 11. Appendix: known issues in the reference rule set
 
 These are **authoring issues in `rules/permissions.json`**, not engine defects.
 The engine faithfully applies §5–§8; each item below is a case where the rules
-do not express what an operator likely intends. Listed as cautionary patterns
-and as a correction backlog for the reference file.
+do not express what an operator likely intends — cautionary patterns and a
+correction backlog for the reference file.
 
 1. **Arbitrary-execution / secret bypasses.** `Bash(python3 *)` and
    `Bash(.venv/bin/python *)` allow `python3 -c "<code>"`, which sidesteps the
@@ -509,7 +506,7 @@ shell over it.
 ```toml
 [package]
 name = "permcheck"
-version = "0.1.0"
+version = "0.1.5"
 edition = "2024"
 
 [lib]
