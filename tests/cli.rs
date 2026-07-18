@@ -50,6 +50,19 @@ fn help_and_no_args_exit_zero() {
 }
 
 #[test]
+fn version_flag_prints_version_and_exits_zero() {
+    let expected = format!("permcheck {}\n", env!("CARGO_PKG_VERSION"));
+    for flag in ["--version", "-V"] {
+        Command::cargo_bin("permcheck")
+            .unwrap()
+            .arg(flag)
+            .assert()
+            .code(0)
+            .stdout(expected.clone());
+    }
+}
+
+#[test]
 fn missing_tool_arg_is_config_error() {
     let f = rules_file(RULES);
     Command::cargo_bin("permcheck")

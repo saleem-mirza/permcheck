@@ -12,6 +12,11 @@ fn main() {
 
     let args: Vec<String> = std::env::args().skip(1).collect();
 
+    if args.iter().any(|a| a == "-V" || a == "--version") {
+        println!("permcheck {}", env!("CARGO_PKG_VERSION"));
+        process::exit(0);
+    }
+
     if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
         print_help();
         process::exit(0);
@@ -364,6 +369,7 @@ fn print_help() {
   {cyan}--install{reset}        Idempotently add the PreToolUse hook to settings.json (needs {cyan}--rules{reset}).
   {cyan}--uninstall{reset}      Idempotently remove the permcheck PreToolUse hook from settings.json.
   {cyan}-h, --help{reset}       Show this help.
+  {cyan}-V, --version{reset}    Print the version and exit.
 
 {yellow}INSTALL SCOPE{reset}  (for --install / --uninstall; default {green}--user{reset})
   {cyan}--user{reset}      ~/.claude/settings.json          machine-wide (default)
