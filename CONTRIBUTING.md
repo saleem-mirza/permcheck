@@ -7,13 +7,20 @@ releasing** — the parts a maintainer needs.
 ## Code map
 
 `permcheck` is one crate: all engine logic in the library, a thin I/O shell in the
-binary. The decision pipeline is `rules` (load + compile) → `matcher` (per-family
-match + specificity) → `engine` (winner selection). `bash` handles compound-command
-splitting and the file-access cross-check; `types` holds `Tier` / `Decision` /
-`Family` and payload extraction; `settings` does the `--install` / `--uninstall`
-JSON transforms. `lib.rs` exposes `evaluate()` and the loaders; `main.rs` is the
-hook / CLI / install dispatch. All tests live in `tests/` (separate crates, never
-linked into the binary).
+binary. Decision pipeline: `rules` → `matcher` → `engine`.
+
+| File | Responsibility |
+|---|---|
+| `src/rules.rs` | grammar, loading, compiled `RuleSet` |
+| `src/matcher.rs` | per-family matchers + specificity scoring |
+| `src/engine.rs` | winner selection + candidate forms |
+| `src/bash.rs` | compound-command splitter, tokenizer, file-access cross-check |
+| `src/types.rs` | `Tier`, `Decision`, `Family`, payload extraction |
+| `src/settings.rs` | `--install` / `--uninstall` JSON transforms |
+| `src/lib.rs` | crate root: `evaluate()`, loaders, re-exports |
+| `src/main.rs` | arg parsing, hook / CLI / install dispatch |
+
+Tests live in `tests/` (separate crates, never linked into the binary).
 
 ## Building the plugin binaries
 
