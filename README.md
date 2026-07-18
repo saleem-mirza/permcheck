@@ -6,6 +6,31 @@ permcheck is **defense-in-depth, not a sandbox.** The OS sandbox and enterprise 
 
 The behavioral source of truth is [`specs/SPEC.md`](specs/SPEC.md); the implementation conforms to it.
 
+## Overview
+
+Claude Code's native permission model resolves conflicts with a fixed precedence — a `deny` always wins over an `allow`, no matter how broad. That makes some least-privilege policies impossible to express: you cannot deny a whole tool *and* carve out a narrow safe exception, because the broad deny swallows the exception. permcheck fills that gap.
+
+It runs as a **PreToolUse hook**: for each tool call it gathers *every* matching rule and lets the **most specific one win** — so a narrow rule overrides a broad one in *either* direction (a targeted `allow` can punch through a broad `deny`, and a targeted `deny` through a broad `allow`). The result is a single `allow` / `ask` / `deny` decision with a human-readable reason, returned before the call runs.
+
+**Highlights**
+
+- **Specificity-aware** — most specific rule wins, then most restrictive tier; not the native "deny always wins" model. See [How it decides](#how-it-decides-most-specific-rule-wins).
+- **Bash compound safety** — splits `&&`/`|`/`$(…)` chains, cross-checks file reads/writes against `Read`/`Write`/`Edit` deny rules, and re-decides through wrappers like `env`/`sudo`, so `cat .env` or `env aws …` can't launder past a broad allow.
+- **Fail-closed** — any error (bad input, unreadable rules, unknown tool, panic) resolves to `deny`; the hook never crashes a tool call open.
+- **Zero-config install** — the [plugin](#install-as-a-claude-code-plugin) ships prebuilt binaries for macOS/Linux/Windows and wires the hook without touching your `settings.json`.
+- **Fast & dependency-light** — a short-lived Rust process per call; only `serde`/`serde_json`, no `regex` or `clap`, optimized for cold start.
+
+**At a glance**
+
+| | |
+|---|---|
+| **What** | PreToolUse permission engine for [Claude Code](https://claude.com/claude-code) |
+| **Decision** | one of `allow` · `ask` · `deny`, with a reason |
+| **Install** | `/plugin install permcheck@zethian` (see [below](#install-as-a-claude-code-plugin)) |
+| **Language** | Rust (edition 2024) |
+| **Role** | defense-in-depth overlay — *not* a sandbox or security boundary |
+| **License** | [GPL-3.0](LICENSE) |
+
 ## Install as a Claude Code plugin
 
 The quickest way to use permcheck is the bundled plugin — it ships prebuilt binaries for macOS, Linux, and Windows and wires the hook for you:
