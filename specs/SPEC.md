@@ -32,8 +32,10 @@ network policy, and any statically-undecidable shell construct (§9).
 
 ## 2. Interfaces
 
-The engine is one binary with two modes. The **hook is the normative interface**;
-the CLI is a thin wrapper for testing and manual checks.
+The engine is one binary with two **decision** modes plus two **management**
+commands. The **hook is the normative interface**; the CLI is a thin wrapper for
+testing and manual checks; `--install` / `--uninstall` wire the hook into a
+Claude Code `settings.json` (§2.3).
 
 ### 2.1 PreToolUse hook (`--hook`)
 
@@ -79,6 +81,30 @@ Invoked as `permcheck <Tool> [payload] --rules <path> [--json]`.
   readability, instead of using the exit code.
 - Config errors surface as exit `3` in CLI mode; in hook mode the same
   conditions fail closed to `deny`.
+
+### 2.3 Install / uninstall
+
+Invoked as `permcheck --install --rules <path> [scope]` and
+`permcheck --uninstall [scope]`. These **idempotently** add or remove permcheck's
+own `PreToolUse` hook entry in a Claude Code `settings.json`, and never touch
+unrelated settings or other hooks.
+
+- **Scope** selects the target file (default `--user`): `--user`
+  (`~/.claude/settings.json`), `--project` (`./.claude/settings.json`), or
+  `--local` (`./.claude/settings.local.json`). At most one scope may be given.
+- **`--install`** requires `--rules <path>`; the path is absolutized and
+  validated (it must load) before writing, then baked into the injected command
+  `permcheck --hook --rules "<abs>"`. A permcheck hook already present is
+  rewritten in place (refreshing a changed rules path), never duplicated; a fresh
+  `{ "matcher": "*", … }` group is appended otherwise.
+- **`--uninstall`** removes every permcheck hook entry and prunes emptied
+  matcher groups / `PreToolUse` / `hooks` containers.
+- Detection is by command marker (contains `permcheck` and `--hook`), so a
+  user's other hooks are left untouched. Writes are atomic (temp file +
+  `rename`). A missing/empty file starts from `{}`; a present-but-non-object file
+  is refused rather than clobbered. Both exit `0` on success (or when already in
+  the desired state), `3` on a usage/IO error. These commands are portable across
+  Linux, macOS, and Windows (`$HOME` → `%USERPROFILE%` → `%HOMEDRIVE%%HOMEPATH%`).
 
 ## 3. Rule file
 
@@ -453,7 +479,8 @@ shell over it.
 │   ├── rules.rs              # grammar, LoadError, CompiledRule, RuleSet, load
 │   ├── matcher.rs            # Matcher enum + Bash/Path/Generic matchers
 │   ├── bash.rs               # tokenizer, splitter, file-access cross-check
-│   └── engine.rs             # winner selection + candidate forms
+│   ├── engine.rs             # winner selection + candidate forms
+│   └── settings.rs           # idempotent --install/--uninstall JSON transforms
 └── tests/                    # ALL tests: separate crates, never in the binary
     ├── types_extraction.rs   # §5 payload extraction
     ├── rules_grammar.rs      # §3–§4 grammar + loading (via the public loader)
@@ -472,7 +499,9 @@ shell over it.
     ├── reference_loads.rs    # full reference set loads clean
     ├── redirects.rs          # §8 redirection cross-checks
     ├── adversarial.rs        # §8–§9 evasion/traversal (crafted rules)
-    └── reference_evasion.rs  # §8 evasion resistance vs the shipping rule set
+    ├── reference_evasion.rs  # §8 evasion resistance vs the shipping rule set
+    ├── default_decision.rs   # §6.4 defaultMode fall-back (ask/deny)
+    └── install.rs            # §2.3 --install/--uninstall settings.json wiring
 ```
 
 ### 12.2 Cargo manifest
@@ -533,13 +562,14 @@ Seven source files. Each module's behavior is specified in the section reference
 
 | File | Responsibility | Key public items |
 |---|---|---|
-| `src/lib.rs` | crate root and top-level entry point | `evaluate(&RuleSet, tool, &tool_input, cwd) -> Decision`; re-exports `load_rules` (= `rules::load`), `load_rules_str` (= `rules::load_str`), `RuleLoadError` (= `rules::LoadError`); declares `pub mod types, rules, engine, matcher, bash` |
+| `src/lib.rs` | crate root and top-level entry point | `evaluate(&RuleSet, tool, &tool_input, cwd) -> Decision`; re-exports `load_rules` (= `rules::load`), `load_rules_str` (= `rules::load_str`), `RuleLoadError` (= `rules::LoadError`); declares `pub mod types, rules, engine, matcher, bash, settings` |
 | `src/types.rs` | core data types + payload extraction (§5) | `Tier {Allow < Ask < Deny}` (derives `Ord`); `Decision {tier, reason}` with `deny`/`allow`/`ask`, `to_hook_json`, `to_hook_json_pretty`, `to_exit_code`; `Family {Bash, Path, Generic}` + `from_tool`; `extract_payload(tool, &input) -> String` |
-| `src/rules.rs` | rule grammar, loading, rule set (§3–§4) | `LoadError` (8 variants); `parse_rule` (crate-internal); `CompiledRule {tool, matcher, specificity, tier, order_index}`; `RuleSet {rules, index}` with `rules_for(tool)`, `load(&Path)`, `load_str(&str)` — builds a `HashMap<tool, Vec<idx>>` index |
-| `src/matcher.rs` | per-family matchers and specificity (§6.1, §6.5) | `Matcher {Bare, Bash, Path, Generic}` + `matches`; `compile(family, specifier) -> (Matcher, u32)`; `BashMatcher` (trailing `cmd:*` vs general glob), `PathMatcher` (`*`/`?`/`**`, root markers, `~`), `GenericMatcher` (`domain:` strip, `*` only); shared backtracking `glob_match`; `EXACT_MATCH_BONUS = 1000` |
-| `src/engine.rs` | winner selection + candidate forms (§6.3, §7) | `decide_unit(&RuleSet, tool, &candidates) -> Decision` (max `(specificity, tier)`, tie → lowest `order_index`); `decide_payload` (Path/Generic); `path_candidates`, `generic_candidates`, `url_host`; `$HOME` cached in a `OnceLock` |
+| `src/rules.rs` | rule grammar, loading, rule set (§3–§4, §6.4) | `LoadError` (8 variants); `parse_rule` (crate-internal); `CompiledRule {tool, matcher, specificity, tier, order_index}`; `RuleSet {rules, index, default_tier}` with `rules_for(tool)`, `load(&Path)`, `load_str(&str)` — builds a `HashMap<tool, Vec<idx>>` index; `default_tier` parsed from `defaultMode` (`"ask"` → Ask, else Deny) |
+| `src/matcher.rs` | per-family matchers and specificity (§6.1, §6.5) | `Matcher {Bare, Bash, Path, Generic}` + `matches`; `compile(family, specifier) -> (Matcher, u32)`; `BashMatcher` (trailing `cmd:*` vs general glob), `PathMatcher` (`*`/`?`/`**`, root markers, `~`), `GenericMatcher` (`domain:` strip, `*` only); backtracking `glob_star_match` (Bash/Generic) and `/`-aware `path_match` (Path); `EXACT_MATCH_BONUS = 1000` |
+| `src/engine.rs` | winner selection + candidate forms (§6.3, §7) | `best_match(&RuleSet, tool, &candidates) -> Option<&CompiledRule>` (max `(specificity, tier)`, tie → lowest `order_index`); `decide_payload` (Path/Generic; `None` → `rs.default_tier`); `path_candidates`, `generic_candidates`, `url_host`, `path_hits_deny`; `$HOME` cached in a `OnceLock` |
 | `src/bash.rs` | compound-Bash pipeline (§8) | `tokenize`, `Token`, `RedirectKind`; `split`, `Unit` (total splitter over `&& \|\| \| ; &` + newlines, extracting `$(…)` / backticks / `<()` / `>()`); `decide_bash(command, &RuleSet, cwd)`; `strip_env_assignments`; reader/writer/wrapper cross-check tables |
-| `src/main.rs` | binary: I/O, mode dispatch, help (§2) | `main` (installs a silent panic hook); `run_hook` (stdin JSON → decision JSON, `catch_unwind`, always exit 0); `run_cli` (positional `<Tool> [payload]`, `--json`, exit 0/1/2/3); `display_reason`, `print_help`, `find_rules_arg`, `build_tool_input` |
+| `src/main.rs` | binary: I/O, mode dispatch, help (§2) | `main` (silent panic hook; dispatches hook/CLI/install/uninstall); `run_hook` (stdin JSON → decision JSON, `catch_unwind`, always exit 0); `run_cli` (positional `<Tool> [payload]`, `--json`, exit 0/1/2/3); `run_install` / `run_uninstall` with `Scope`, `scope_from_args`, `home_dir`, `settings_path`, `read_settings`, `write_settings_atomic` (§2.3); `print_help`, `find_rules_arg`, `build_tool_input` |
+| `src/settings.rs` | idempotent settings.json transforms (§2.3) | pure `serde_json::Value` transforms: `install(&Value, cmd) -> Value`, `uninstall(&Value) -> Value`, `hook_command(abs_rules) -> String`, `is_permcheck_hook(cmd) -> bool` — no I/O, so `install` is a fixed point on its own output |
 
 ### 12.4 Test and benchmark layout
 
@@ -562,6 +592,8 @@ binary (via `assert_cmd`). Coverage by file:
 | `worked_examples.rs` / `known_issues.rs` | §10 and §11, locked as regressions |
 | `load_errors.rs` / `reference_loads.rs` | load-error handling; clean load of the full reference set |
 | `redirects.rs` / `adversarial.rs` / `reference_evasion.rs` | §8 redirection, evasion/traversal, and evasion resistance vs the shipping rules |
+| `default_decision.rs` | §6.4 `defaultMode` fall-back: ask/deny per family, cross-check/explicit-deny still win |
+| `install.rs` | §2.3 `--install`/`--uninstall`: settings.json wiring, idempotency, scopes, error posture |
 
 Benchmarks live in `benches/evaluate.rs` and, being a `[[bench]]` target with
 `harness = false`, also compile only under `cargo bench` — never into the binary.

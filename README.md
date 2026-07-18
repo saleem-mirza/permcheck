@@ -138,6 +138,25 @@ permcheck Bash "kubectl delete pod x"   --rules rules/permissions.json   # exit 
 permcheck Read "/home/user/.ssh/id_rsa" --rules rules/permissions.json   # exit 2 (deny)
 ```
 
+### Wiring it in by hand (`--install` / `--uninstall`)
+
+Prefer not to use the [plugin](#install-as-a-claude-code-plugin) or hand-edit JSON? permcheck can wire its own `PreToolUse` hook into a Claude Code `settings.json`, **idempotently** (safe to re-run; never touches your other settings or hooks):
+
+```
+permcheck --install --rules <path> [--user|--project|--local]
+permcheck --uninstall [--user|--project|--local]
+```
+
+- **Scope** (default `--user`): `--user` → `~/.claude/settings.json`, `--project` → `./.claude/settings.json`, `--local` → `./.claude/settings.local.json`.
+- `--install` requires `--rules`; the path is absolutized, validated (it must load), and baked into the injected `permcheck --hook --rules "<abs>"` command. Re-running rewrites the existing entry in place rather than duplicating it.
+- `--uninstall` removes only permcheck's entry and prunes emptied hook containers. Works across Linux, macOS, and Windows.
+
+```sh
+permcheck --install --rules rules/permissions.json          # → ~/.claude/settings.json
+permcheck --install --project --rules .permcheck/rules.json # → ./.claude/settings.json
+permcheck --uninstall                                       # remove from ~/.claude/settings.json
+```
+
 ## Rules
 
 Rules are passed explicitly via `--rules <path>`; there is no hardcoded default. The canonical reference set ships at [`rules/permissions.json`](rules/permissions.json).

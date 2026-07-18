@@ -141,11 +141,12 @@ Per-family semantics (§6.5):
   (`.`, `?`, `&`, `:`) is literal, and matching is anchored so `example.com`
   never matches `example.com.evil.com`.
 
-All three share a backtracking `glob_match`.
+Bash and Generic share a backtracking `glob_star_match`; Path uses a `/`-aware
+`path_match`.
 
 ## 5. Winner selection and candidate forms (`src/engine.rs`)
 
-For a single payload, `decide_unit` gathers **every** matching rule (including a
+For a single payload, `best_match` gathers **every** matching rule (including a
 bare rule at specificity 0), each contributing `(specificity, tier)`, and picks
 the maximum compared lexicographically (§6.3):
 
@@ -215,7 +216,13 @@ adds a step.
 - **`run_cli`** — `permcheck <Tool> [payload] --rules <path> [--json]`. Builds a
   minimal `tool_input` for the payload, evaluates, and exits `0/1/2` by tier or
   `3` on a config/usage error. `--json` prints the same object as hook mode.
-- Helpers: `display_reason`, `print_help` (NO_COLOR-aware ANSI), `find_rules_arg`,
+- **`run_install` / `run_uninstall`** — `permcheck --install --rules <path>
+  [--user|--project|--local]` and `permcheck --uninstall [scope]`. Resolve the
+  scope to a `settings.json` path (`home_dir` → `settings_path`), read it
+  (`read_settings`), apply the pure `settings::install` / `settings::uninstall`
+  transform, and write back atomically (`write_settings_atomic`: temp file +
+  `rename`). Idempotent; exit `0` on success, `3` on usage/IO error.
+- Helpers: `print_help` (NO_COLOR-aware ANSI), `find_rules_arg`,
   `build_tool_input`.
 
 ## 9. Module map
@@ -228,6 +235,7 @@ adds a step.
 | `src/matcher.rs` | `Matcher` + Bash/Path/Generic matchers, specificity | §6.1, §6.5 |
 | `src/bash.rs` | tokenizer, splitter, file-access cross-check | §8 |
 | `src/engine.rs` | winner selection + candidate forms | §6.3, §7 |
-| `src/main.rs` | arg parsing, hook/CLI dispatch, help | §2 |
+| `src/settings.rs` | idempotent `--install`/`--uninstall` JSON transforms | §2.3 |
+| `src/main.rs` | arg parsing, hook/CLI/install dispatch, help | §2 |
 
 Testing and build layout are in `specs/SPEC.md` §12.4.
