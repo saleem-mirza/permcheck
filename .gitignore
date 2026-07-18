@@ -7,3 +7,5 @@
 
 # plugin: prebuilt binaries are produced by release CI, not committed from dev machines
 /plugin/bin/permcheck-*
+# plugin: bundled rules are a generated copy of the canonical top-level rules/permissions.json
+/plugin/rules/permissions.json
