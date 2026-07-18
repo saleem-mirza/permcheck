@@ -53,10 +53,13 @@ Invoked as `permcheck --hook --rules <path>`. Wired into Claude Code
 - **Output** (stdout, JSON), **always exit 0**:
 
   ```json
-  {"hookSpecificOutput":{
-    "hookEventName":"PreToolUse",
-    "permissionDecision":"allow|ask|deny",
-    "permissionDecisionReason":"<reason>"}}
+  {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "allow|ask|deny",
+      "permissionDecisionReason": "<reason>"
+    }
+  }
   ```
 
   where `<reason>` is a uniform string `<label>: <payload>` — `<label>` matches
@@ -116,11 +119,21 @@ The canonical reference rule set ships at `rules/permcheck.json`.
 Both of these parse identically:
 
 ```json
-{ "permissions": { "allow": [...], "ask": [...], "deny": [...] } }
+{
+  "permissions": {
+    "allow": [...],
+    "ask": [...],
+    "deny": [...]
+  }
+}
 ```
 
 ```json
-{ "allow": [...], "ask": [...], "deny": [...] }
+{
+  "allow": [...],
+  "ask": [...],
+  "deny": [...]
+}
 ```
 
 - Each of `allow`, `ask`, `deny` is an array of rule strings (§4). A missing

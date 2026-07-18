@@ -180,10 +180,13 @@ permcheck --hook --rules <path>
 It reads the Claude Code PreToolUse event as JSON on **stdin** and writes the decision object to **stdout**, always exiting `0`:
 
 ```json
-{"hookSpecificOutput":{
-  "hookEventName":"PreToolUse",
-  "permissionDecision":"allow|ask|deny",
-  "permissionDecisionReason":"<reason>"}}
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow|ask|deny",
+    "permissionDecisionReason": "<reason>"
+  }
+}
 ```
 
 **Fail-closed:** any error — unparseable stdin, an unreadable or invalid rules file, an unknown tool, or an internal panic — yields `deny` (still exit `0`). The hook never crashes a tool call open.
@@ -219,10 +222,20 @@ Rules are passed explicitly via `--rules <path>`; there is no decision-time defa
 Both of these shapes parse identically. `defaultMode` sets the fall-back for calls that match no rule (`"ask"` → ask, otherwise deny); any other keys are ignored — so the file can double as a Claude Code settings file:
 
 ```json
-{ "permissions": { "allow": [...], "ask": [...], "deny": [...] } }
+{
+  "permissions": {
+    "allow": [...],
+    "ask": [...],
+    "deny": [...]
+  }
+}
 ```
 ```json
-{ "allow": [...], "ask": [...], "deny": [...] }
+{
+  "allow": [...],
+  "ask": [...],
+  "deny": [...]
+}
 ```
 
 Each entry is a rule string in one of two forms:
