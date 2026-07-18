@@ -31,9 +31,9 @@ Claude Code's native model resolves rule conflicts with a fixed precedence — a
 
 ## Installation
 
-permcheck decides `allow` / `ask` / `deny` for each tool call against a rules file you provide. There are three ways to wire it into Claude Code — the plugin is easiest and needs no local build.
+permcheck decides `allow` / `ask` / `deny` for each tool call against a rules file you provide. There are three ways to wire it into Claude Code — **method 1 (the plugin) is easiest** and needs no local build; methods 2 and 3 are for a binary you build yourself.
 
-### As a Claude Code plugin (recommended)
+### 1. As a Claude Code plugin (recommended)
 
 The bundled plugin ships prebuilt binaries for macOS, Linux, and Windows and wires the hook for you:
 
@@ -51,7 +51,7 @@ The bundled plugin ships prebuilt binaries for macOS, Linux, and Windows and wir
 
 The plugin decides against its bundled [`rules/permissions.json`](rules/permissions.json); see [`plugin/README.md`](plugin/README.md) for per-project rule overrides, local development (`--plugin-dir`), and platform notes.
 
-### Self-wiring into `settings.json` (`--install` / `--uninstall`)
+### 2. Self-wiring into `settings.json` (`--install` / `--uninstall`)
 
 If you [build](#build) the binary yourself instead of using the plugin, permcheck can wire its own `PreToolUse` hook into a Claude Code `settings.json`, **idempotently** (safe to re-run; never touches your other settings or hooks):
 
@@ -70,7 +70,7 @@ permcheck --install --project --rules .permcheck/rules.json # → ./.claude/sett
 permcheck --uninstall                                       # remove from ~/.claude/settings.json
 ```
 
-### By hand in `settings.json`
+### 3. By hand in `settings.json`
 
 Or add the hook yourself under `hooks.PreToolUse`, pointing `--rules` at your rules file:
 
