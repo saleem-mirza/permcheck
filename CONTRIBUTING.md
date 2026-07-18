@@ -90,9 +90,23 @@ clone. Branch pinning at registration time was requested and closed as *not plan
 form is what keeps a normal source-carrying dev repo and a source-free install on the
 same repository.
 
-> Two caveats to check before relying on it: `/plugin marketplace update` must re-fetch
-> the URL for version bumps to propagate, and raw GitHub URLs sit behind a short CDN
-> cache (~5 min), so updates aren't instant.
+The same flow is scriptable via the non-interactive CLI, which is how a release can
+smoke-test it. Verified end-to-end against Claude Code 2.1.204 — the client accepts the
+raw URL, installs a source-free payload, and `marketplace update` re-fetches the URL so
+version bumps propagate:
+
+```sh
+claude plugin marketplace add \
+  https://raw.githubusercontent.com/saleem-mirza/permcheck/plugin-dist/.claude-plugin/marketplace.json
+claude plugin install permcheck@zethian      # installs source-free, enabled
+claude plugin marketplace update zethian      # re-fetches the raw URL
+```
+
+Point `CLAUDE_CONFIG_DIR` at a throwaway directory to test without touching your real
+`~/.claude` config.
+
+> One timing caveat: raw GitHub URLs sit behind a short CDN cache (~5 min), so a
+> freshly pushed release isn't visible to `add`/`update` instantly.
 >
-> Alternative if you'd rather use the `add <owner/repo>` shorthand: publish the orphan
-> tree as its own repo's default branch and register that instead.
+> Alternative if you'd rather users use the `add <owner/repo>` shorthand: publish the
+> orphan tree as its own repo's default branch and register that instead.

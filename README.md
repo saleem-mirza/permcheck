@@ -38,9 +38,11 @@ permcheck decides `allow` / `ask` / `deny` for each tool call against a rules fi
 The bundled plugin ships prebuilt binaries for macOS, Linux, and Windows and wires the hook for you:
 
 ```sh
-/plugin marketplace add saleem-mirza/permcheck
+/plugin marketplace add https://raw.githubusercontent.com/saleem-mirza/permcheck/plugin-dist/.claude-plugin/marketplace.json
 /plugin install permcheck@zethian
 ```
+
+Both the catalog and the plugin come from the source-free `plugin-dist` branch, so nothing pulls the Rust source onto your machine. The raw URL targets that branch directly; `add saleem-mirza/permcheck` would instead clone the default branch, source and all.
 
 **Installing makes permcheck your `PreToolUse` permission engine automatically** — nothing to hand-wire:
 
