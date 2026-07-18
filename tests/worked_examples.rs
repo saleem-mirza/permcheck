@@ -23,10 +23,12 @@ fn check(tool: &str, payload: &str, expected: i32) {
 
 #[test]
 fn worked_examples_table() {
-    check("Bash", "aws ec2 describe-instances", ALLOW);
-    check("Bash", "aws s3api list-buckets", ALLOW);
+    // The reference set denies `aws:*` / `kubectl:*` with no narrower allow, so
+    // read-only forms are denied by the broad rule (not the ask fall-back).
+    check("Bash", "aws ec2 describe-instances", DENY);
+    check("Bash", "aws s3api list-buckets", DENY);
     check("Bash", "aws ec2 terminate-instances", DENY);
-    check("Bash", "kubectl get pods", ALLOW);
+    check("Bash", "kubectl get pods", DENY);
     check("Bash", "kubectl delete pod x", DENY);
     check("Bash", "git push origin main", ASK);
     check("Bash", "git push --force origin", DENY);
@@ -34,9 +36,10 @@ fn worked_examples_table() {
     check("Read", "/tmp/notes.txt", ALLOW);
     check("WebFetch", "https://x.io", DENY);
     check("WebSearch", "anything", DENY);
-    check("mcp__db__query", "SELECT 1", DENY);
-    check("NotebookEdit", "/repo/nb.ipynb", DENY);
-    check("Bash", "some-tool foo", DENY);
+    // Unmatched calls take the `defaultMode: "ask"` fall-back (§6.4).
+    check("mcp__db__query", "SELECT 1", ASK);
+    check("NotebookEdit", "/repo/nb.ipynb", ASK);
+    check("Bash", "some-tool foo", ASK);
     check("Bash", r#"python3 -c "import os""#, ALLOW);
 }
 

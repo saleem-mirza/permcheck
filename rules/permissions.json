@@ -12,20 +12,6 @@
       "Bash(find:*)",
       "Bash(env:*)",
       "Bash(printenv:*)",
-      "Bash(git status:*)",
-      "Bash(git diff:*)",
-      "Bash(git log:*)",
-      "Bash(git show:*)",
-      "Bash(git ls-files:*)",
-      "Bash(git add:*)",
-      "Bash(git rm:*)",
-      "Bash(git restore:*)",
-      "Bash(git stash:*)",
-      "Bash(git commit:*)",
-      "Bash(git branch:*)",
-      "Bash(git checkout:*)",
-      "Bash(git switch:*)",
-      "Bash(git remote:*)",
       "Bash(go test:*)",
       "Bash(go mod:*)",
       "Bash(go vet:*)",
@@ -36,14 +22,6 @@
       "Bash(sbt compile:*)",
       "Bash(sbt test:*)",
       "Bash(pbcopy:*)",
-      "Bash([ ! -d * ] && gh repo clone *)",
-      "Bash(gh repo clone * 2>&1)",
-      "Bash(git -C * status)",
-      "Bash(git -C * diff)",
-      "Bash(git -C * log *)",
-      "Bash(git -C * checkout -b *)",
-      "Bash(git -C * add *)",
-      "Bash(git -C * commit *)",
       "Read",
       "Edit",
       "Write",
@@ -73,19 +51,7 @@
       "Bash(poetry add:*)",
       "Bash(uv:*)",
       "Bash(bundle install:*)",
-      "Bash(gem install:*)",
-      "Bash(aws s3 ls:*)",
-      "Bash(aws * describe-*)",
-      "Bash(aws * list-*)",
-      "Bash(aws * get-*)",
-      "Bash(aws sts get-caller-identity:*)",
-      "Bash(kubectl get:*)",
-      "Bash(kubectl describe:*)",
-      "Bash(kubectl logs:*)",
-      "Bash(kubectl top:*)",
-      "Bash(kubectl explain:*)",
-      "Bash(kubectl api-resources:*)",
-      "Bash(kubectl version:*)"
+      "Bash(gem install:*)"
     ],
     "ask": [
       "Bash(git merge:*)",
@@ -106,7 +72,7 @@
       "Bash(http:*)",
       "Bash(https:*)"
     ],
-    "defaultMode": "default",
+    "defaultMode": "ask",
     "deny": [
       "Bash(ln:*)",
       "Bash(link:*)",
@@ -250,8 +216,6 @@
       "Bash(security:*)",
       "Bash(python -m http.server:*)",
       "Bash(python3 -m http.server:*)"
-    ],
-    "disableAutoMode": "disable",
-    "disableBypassPermissionsMode": "disable"
+    ]
   }
 }

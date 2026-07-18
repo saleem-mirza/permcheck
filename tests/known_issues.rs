@@ -45,9 +45,10 @@ fn issue3_rm_flag_variants_slip_through() {
 #[test]
 fn issue4_gcp_deny_matches_nothing_real() {
     // `Bash(gcp:*)` denies a command named `gcp`, but the real CLI is `gcloud`,
-    // which no rule covers -> default-deny (not via the gcp rule).
+    // which no rule covers -> the `defaultMode: "ask"` fall-back (not the gcp
+    // deny). So the deny is real but never fires on the real CLI, which now asks.
     assert_eq!(bash("gcp compute instances list"), Tier::Deny);
-    assert_eq!(bash("gcloud compute instances list"), Tier::Deny);
+    assert_eq!(bash("gcloud compute instances list"), Tier::Ask);
 }
 
 #[test]

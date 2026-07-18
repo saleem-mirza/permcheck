@@ -7,7 +7,7 @@ or `deny`.
 
 It is **defense-in-depth, not a sandbox** — it expresses least-privilege rules
 the native permission model can't, most notably a *narrow allow/deny overriding a
-broad one* (e.g. `aws ec2 describe-*` stays allowed even though `aws *` is denied).
+broad one* (e.g. `python3 -m http.server` is denied even though `python3 *` is allowed).
 
 ## Install
 
@@ -27,8 +27,8 @@ For local development, point Claude Code straight at this directory:
 claude --plugin-dir /path/to/permcheck/plugin
 ```
 
-Then ask Claude to run `aws ec2 terminate-instances` (blocked) versus
-`aws ec2 describe-instances` (allowed); `/plugin` confirms it loaded.
+Then ask Claude to run `python3 -m http.server` (blocked) versus
+`python3 script.py` (allowed); `/plugin` confirms it loaded.
 
 ## How it activates (no `settings.json` edit)
 
@@ -50,7 +50,7 @@ Installing/enabling the plugin **automatically** turns permcheck into your
 
 A narrow rule overrides a broad one *in either direction*, so you can carve out exactly what the agent may do:
 
-- **Read-only cloud access.** Deny `Bash(aws:*)` / `Bash(kubectl:*)`, allow `Bash(aws * describe-*)`, `Bash(kubectl get:*)` — inspect infra, never `terminate-instances` or `delete pod`.
+- **Read-only cloud access (opt in).** The shipped set denies `Bash(aws:*)` / `Bash(kubectl:*)` outright; add `Bash(aws * describe-*)`, `Bash(kubectl get:*)` to let the agent inspect infra without `terminate-instances` or `delete pod`.
 - **Protect secrets.** Deny `Read(/**/.env*)`, `Read(//**/.ssh/**)`; the Bash cross-check also blocks `cat .env`, `grep secret .env`, and `env aws …` — obfuscation and wrappers don't slip through.
 - **Guard destructive git.** Allow `git add`/`commit`, `ask` on `git push`, deny `git push --force`, `git reset --hard`, `git clean`.
 - **Block dangerous commands (fail-closed).** Deny `sudo`, `rm -rf`, `ssh`, `nc`, `bash -c`; unknown Bash commands default to `deny`, and any denied sub-command denies the whole compound.

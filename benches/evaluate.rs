@@ -45,14 +45,17 @@ fn bench_bash(c: &mut Criterion) {
         "bash",
         Some("/repo"),
         &[
-            // Specificity: narrow allow/ask beats broad deny, and vice versa.
+            // Specificity + fall-back against the shipped reference set: broad
+            // `aws:*` / `kubectl:*` denies (no narrow allow), git reads with no
+            // rule (→ `defaultMode: "ask"` fall-back), and `git push --force`
+            // deny beating `git push` ask.
             (
-                "allow_aws_describe",
+                "deny_aws_describe",
                 "Bash",
                 cmd("aws ec2 describe-instances"),
             ),
-            ("allow_kubectl_get", "Bash", cmd("kubectl get pods")),
-            ("allow_git_status", "Bash", cmd("git status")),
+            ("deny_kubectl_get", "Bash", cmd("kubectl get pods")),
+            ("ask_git_status", "Bash", cmd("git status")),
             ("ask_git_push", "Bash", cmd("git push origin main")),
             (
                 "deny_aws_terminate",
@@ -65,7 +68,7 @@ fn bench_bash(c: &mut Criterion) {
                 "Bash",
                 cmd("git push --force origin main"),
             ),
-            ("deny_unknown", "Bash", cmd("some-tool --flag")),
+            ("ask_unknown", "Bash", cmd("some-tool --flag")),
             // File-access cross-check and wrapper re-decision (§8).
             ("crosscheck_cat_env", "Bash", cmd("cat .env")),
             (
@@ -132,7 +135,8 @@ fn bench_path(c: &mut Criterion) {
     );
 }
 
-/// Generic family: URL/host extraction and default-deny for unnamed MCP tools.
+/// Generic family: URL/host extraction and the `defaultMode` fall-back for
+/// unnamed MCP tools.
 fn bench_generic(c: &mut Criterion) {
     bench_cases(
         c,
@@ -150,7 +154,7 @@ fn bench_generic(c: &mut Criterion) {
                 json!({ "query": "rust async" }),
             ),
             (
-                "mcp_default_deny",
+                "mcp_default_ask",
                 "mcp__db__query",
                 json!({ "query": "SELECT 1" }),
             ),

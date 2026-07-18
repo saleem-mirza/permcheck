@@ -13,8 +13,8 @@ use crate::types::{Decision, Tier};
 pub fn decide_bash(command: &str, rs: &RuleSet, cwd: Option<&str>) -> Decision {
     let units = split(command);
     if units.is_empty() {
-        // Empty / whitespace-only command matches no Bash rule -> default-deny.
-        return Decision::for_call(Tier::Deny, "Bash", command);
+        // Empty / whitespace-only command matches no Bash rule -> fall-back tier.
+        return Decision::for_call(rs.default_tier, "Bash", command);
     }
 
     let mut worst = Tier::Allow;
@@ -44,11 +44,12 @@ pub fn decide_bash(command: &str, rs: &RuleSet, cwd: Option<&str>) -> Decision {
 }
 
 /// The tier of a single (already env-stripped) command string against the Bash
-/// matchers, defaulting to `deny` when nothing matches (§6.3, §6.4).
+/// matchers, taking the rule set's `defaultMode` fall-back when nothing matches
+/// (§6.3, §6.4).
 fn unit_tier(rs: &RuleSet, cmd: &str) -> Tier {
     match engine::best_match(rs, "Bash", &[cmd]) {
         Some(rule) => rule.tier,
-        None => Tier::Deny,
+        None => rs.default_tier,
     }
 }
 

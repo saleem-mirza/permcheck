@@ -54,7 +54,7 @@ flowchart TD
 
     PC --> WS
     GC --> WS
-    WS[[Winner selection · §6.3<br/>max specificity, then tier<br/>no match → deny]]
+    WS[[Winner selection · §6.3<br/>max specificity, then tier<br/>no match → defaultMode fall-back]]
 
     AG --> DEC
     WS --> DEC
@@ -107,8 +107,9 @@ or a **specifier rule** (`Tool(specifier)`) (§4). Tool names match
   …). **Bad rules fail at load, never at decision time** (§4, §9.1) — there is no
   evaluation-path code that can panic on runtime input.
 - Both accepted file shapes — `{ "permissions": {…} }` and a bare
-  `{ "allow": […], … }` — parse identically; unknown keys (`defaultMode`, etc.)
-  are ignored so the file can double as a Claude Code settings file (§3.1).
+  `{ "allow": […], … }` — parse identically. `defaultMode` sets the no-match
+  fall-back tier (`ask`/`deny`); other unknown keys are ignored so the file can
+  double as a Claude Code settings file (§3.1).
 - `CompiledRule { tool, matcher, specificity, tier, order_index }` is the
   compiled form. `RuleSet` holds all rules plus a `HashMap<tool, Vec<idx>>` index
   so `rules_for(tool)` is a hash lookup, not a scan. `order_index` preserves file
@@ -152,7 +153,9 @@ the maximum compared lexicographically (§6.3):
 2. on a tie, higher **tier** wins (`deny > ask > allow` — most-restrictive);
 3. on a full tie, the lowest `order_index` (first in file) wins — deterministic.
 
-If nothing matches, the decision is **deny** (default-deny, §6.4).
+If nothing matches, the decision is the rule set's **`defaultMode` fall-back** —
+`ask` when `defaultMode: "ask"`, otherwise `deny` (§6.4). The cross-check and
+error paths still deny regardless.
 
 To match regardless of how the payload was written, the engine builds
 **candidate forms** and a hit on any counts (§7.1): Path uses the raw payload,

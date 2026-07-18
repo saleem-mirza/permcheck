@@ -12,20 +12,20 @@ Benchmarks are grouped by matcher family, plus the one-time rule-set load. Run
 
 | Case | What | Time |
 |---|---|---|
-| `load/reference_set` | parse + compile the whole reference set (85 allow · 17 ask · 142 deny) | ~57 µs |
+| `load/reference_set` | parse + compile the whole reference set (51 allow · 17 ask · 142 deny) | ~57 µs |
 
 ### `bash` — winner selection, cross-check, wrapper re-decision, compound split (§6.3, §8)
 
 | Case | Command | Decision | Time |
 |---|---|---|---|
-| `allow_aws_describe` | `aws ec2 describe-instances` | allow (narrow allow > broad deny) | ~2.1 µs |
-| `allow_kubectl_get` | `kubectl get pods` | allow | ~2.0 µs |
-| `allow_git_status` | `git status` | allow | ~1.8 µs |
+| `deny_aws_describe` | `aws ec2 describe-instances` | deny (broad `aws:*`, no narrow allow) | ~2.1 µs |
+| `deny_kubectl_get` | `kubectl get pods` | deny (broad `kubectl:*`) | ~2.0 µs |
+| `ask_git_status` | `git status` | ask (no rule → `defaultMode` fall-back) | ~1.8 µs |
 | `ask_git_push` | `git push origin main` | ask | ~2.1 µs |
 | `deny_aws_terminate` | `aws ec2 terminate-instances` | deny | ~1.8 µs |
 | `deny_kubectl_delete` | `kubectl delete pod x` | deny | ~1.7 µs |
 | `deny_git_push_force` | `git push --force origin main` | deny (narrow deny > broad ask) | ~1.8 µs |
-| `deny_unknown` | `some-tool --flag` | deny (default) | ~1.7 µs |
+| `ask_unknown` | `some-tool --flag` | ask (`defaultMode` fall-back) | ~1.7 µs |
 | `crosscheck_cat_env` | `cat .env` | deny (file-access cross-check) | ~2.0 µs |
 | `crosscheck_redirect` | `echo hi > …/.ssh/authorized_keys` | deny (redirect cross-check) | ~1.8 µs |
 | `wrapper_env_aws` | `env aws ec2 terminate-instances` | deny (wrapper re-decision) | ~3.4 µs |
@@ -44,13 +44,13 @@ Benchmarks are grouped by matcher family, plus the one-time rule-set load. Run
 | `write_deny_bashrc` | `Write(/home/user/.bashrc)` | deny | ~2.2 µs |
 | `glob_allow_skills` | `Glob(~/.claude/skills/x)` (`~` expansion) | allow | ~0.47 µs |
 
-### `generic` — URL/host extraction and default-deny (§6.5)
+### `generic` — URL/host extraction and the `defaultMode` fall-back (§6.5)
 
 | Case | Call | Decision | Time |
 |---|---|---|---|
 | `webfetch_deny` | `WebFetch(https://example.com/x)` | deny | ~0.45 µs |
 | `websearch_deny` | `WebSearch(rust async)` | deny | ~0.21 µs |
-| `mcp_default_deny` | `mcp__db__query(SELECT 1)` | deny (default) | ~0.20 µs |
+| `mcp_default_ask` | `mcp__db__query(SELECT 1)` | ask (`defaultMode` fall-back) | ~0.20 µs |
 
 **Reading the numbers.** Simple single-command Bash calls are ~1.7–2.1 µs — a few
 hundred prefix comparisons over the ~157 Bash rules. Cost rises with *work*, not

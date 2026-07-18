@@ -12,7 +12,8 @@ use crate::types::{Decision, Family, Tier};
 ///
 /// The winner maximizes `(specificity, tier)` lexicographically; a full tie is
 /// broken by the lowest `order_index` (first in file order) for determinism
-/// (§6.3). Returns `None` when nothing matches (caller applies default-deny).
+/// (§6.3). Returns `None` when nothing matches (caller applies the `defaultMode`
+/// fall-back, §6.4).
 pub(crate) fn best_match<'a>(
     rs: &'a RuleSet,
     tool: &str,
@@ -51,7 +52,7 @@ pub fn decide_payload(rs: &RuleSet, tool: &str, payload: &str, cwd: Option<&str>
     let refs: Vec<&str> = candidates.iter().map(String::as_str).collect();
     let tier = match best_match(rs, tool, &refs) {
         Some(rule) => rule.tier,
-        None => Tier::Deny, // default-deny (§6.4)
+        None => rs.default_tier, // configurable fall-back (§6.4)
     };
     Decision::for_call(tier, tool, payload)
 }

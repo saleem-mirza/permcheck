@@ -101,10 +101,14 @@ Both of these parse identically:
 
 - Each of `allow`, `ask`, `deny` is an array of rule strings (§4). A missing
   array is treated as empty.
+- `defaultMode` is **honored** as the fall-back decision for calls that match no
+  rule (§6.4): `"ask"` → `ask`; `"deny"`, a missing key, or any other value →
+  `deny` (fail-closed). (The native Claude Code value `"default"` therefore maps
+  to `deny`.)
 - Any other keys in the object (including Claude Code settings such as
-  `defaultMode`, `disableAutoMode`, `disableBypassPermissionsMode`) are
-  **ignored**. The engine reads only the three tier arrays. (The file may double
-  as a Claude Code settings file; permcheck simply ignores what it does not own.)
+  `disableAutoMode`, `disableBypassPermissionsMode`) are **ignored**. The engine
+  reads only the three tier arrays and `defaultMode`. (The file may double as a
+  Claude Code settings file; permcheck simply ignores what it does not own.)
 - A file that is unreadable, not valid JSON, or does not contain a permissions
   object → **load error → deny** (hook) / exit `3` (CLI).
 
@@ -150,8 +154,8 @@ Routing rules:
   `NotebookEdit` is not covered by a bare `Edit` rule (different tool name).
 - **Tools with no string payload** (e.g. `TodoWrite`, `ExitPlanMode`) extract the
   empty string, so only a **bare** rule (`TodoWrite`) matches them; absent one
-  they hit **default-deny** (§6.4). Give always-on benign tools an explicit bare
-  `allow` so they are not blocked.
+  they take the **`defaultMode` fall-back** (§6.4). Give always-on benign tools an
+  explicit bare `allow` so they are neither blocked nor prompted.
 
 ## 6. Specificity, matching, and precedence
 
@@ -195,7 +199,13 @@ this selection per unit.
 
 ### 6.4 Default decision
 
-If no rule matches, the decision is **deny**.
+If no rule matches, the decision is the rule set's **fall-back tier**, configured
+by `defaultMode`: `"ask"` makes an unlisted call **ask**; otherwise (`"deny"`,
+missing, or any other value) it is **deny** (fail-closed default). This fall-back
+governs only the *no rule matched* case. It does **not** loosen the Bash
+file-access cross-check (§8), which still raises to `deny` on a hit, nor the
+error posture (§9.1) — bad rules, unparseable input, an unknown tool, or a panic
+are always `deny`, independent of `defaultMode`.
 
 ### 6.5 Matching semantics per family
 
@@ -233,7 +243,8 @@ If no rule matches, the decision is **deny**.
 
 The three tiers interact by specificity first, then tier:
 
-- A pattern that appears in **no** list is **denied** (default-deny, §6.4).
+- A pattern that appears in **no** list falls back to the `defaultMode` tier —
+  `deny` by default, or `ask` when configured (§6.4).
 - The **same** specifier in several tiers → the **most restrictive** tier wins.
   `Bash(aws:*)` in `allow`, `ask`, and `deny` (all specificity 3) → `deny`.
 - A **more specific** rule beats a broader one across tiers, in either
@@ -337,29 +348,34 @@ When the analyzer cannot understand a construct, it errs toward `deny`.
 
 Drawn from the reference rule set `rules/permissions.json` (deny `Bash(aws:*)`,
 `Bash(kubectl:*)`, `Bash(git push --force:*)`, bare `WebFetch`, bare `WebSearch`;
-allow `Bash(aws * describe-*)`, `Bash(aws * list-*)`, `Bash(kubectl get:*)`,
-`Bash(cat:*)`, `Bash(python3 *)`, bare `Read`; ask `Bash(git push:*)`):
+allow `Bash(cat:*)`, `Bash(python3 *)`, bare `Read`; ask `Bash(git push:*)`;
+`defaultMode: "ask"`, so a call matching no rule falls back to `ask`, §6.4). The
+reference set carries **no** narrow `aws`/`kubectl` read-only allows, so those
+commands are governed by the broad deny; git read commands (`git status`,
+`git diff`, …) have no explicit rule and take the ask fall-back.
 
 | Tool call | Decision | Why |
 |---|---|---|
-| `Bash(aws ec2 describe-instances)` | allow | `aws * describe-*` (14) beats broad `aws:*` deny (3) |
-| `Bash(aws s3api list-buckets)` | allow | `aws * list-*` beats `aws:*` deny |
+| `Bash(aws ec2 describe-instances)` | deny | only `aws:*` deny matches; no narrower allow |
+| `Bash(aws s3api list-buckets)` | deny | only `aws:*` deny matches |
 | `Bash(aws ec2 terminate-instances)` | deny | only `aws:*` deny matches |
-| `Bash(kubectl get pods)` | allow | `kubectl get:*` beats `kubectl:*` deny |
+| `Bash(kubectl get pods)` | deny | only `kubectl:*` deny matches |
 | `Bash(kubectl delete pod x)` | deny | only `kubectl:*` deny matches |
 | `Bash(git push origin main)` | ask | `git push:*` is in `ask` |
 | `Bash(git push --force origin)` | deny | `git push --force:*` (16) beats `git push:*` ask (8) |
+| `Bash(git status)` | ask | no rule matches → `defaultMode: "ask"` fall-back (§6.4) |
 | `Bash(cat .env)` | deny | file-access cross-check hits a `Read` `.env` deny even though `cat:*` is allowed (§8) |
 | `Read(/tmp/notes.txt)` | allow | bare `Read` (allow, specificity 0); no secret-path deny matches |
 | `WebFetch(https://x.io)` | deny | bare `WebFetch` deny matches; nothing more specific allows |
 | `WebSearch(anything)` | deny | bare `WebSearch` deny matches (non-Bash tools are evaluated too) |
-| `mcp__db__query(SELECT …)` | deny | Generic family; no rule names this MCP tool → default-deny |
-| `NotebookEdit(/repo/nb.ipynb)` | deny | Path family, but no `NotebookEdit` rule and bare `Edit` does not cover it → default-deny |
-| `Bash(some-tool foo)` | deny | no Bash rule matches → default-deny |
+| `mcp__db__query(SELECT …)` | ask | Generic family; no rule names this MCP tool → ask fall-back |
+| `NotebookEdit(/repo/nb.ipynb)` | ask | Path family, but no `NotebookEdit` rule and bare `Edit` does not cover it → ask fall-back |
+| `Bash(some-tool foo)` | ask | no Bash rule matches → ask fall-back |
 | `Bash(python3 -c "import os")` | allow (see §11) | `python3 *` allows it; no `-c` deny exists |
 
-The last row is the model working exactly as specified against a rule set that
-does not express the operator's intent (see §11).
+The cross-check row (`cat .env`) and the `python3 -c` row show the model working
+exactly as specified: an active protection still denies regardless of the
+fall-back, while a broad allow the rules do not narrow lets code through (§11).
 
 ## 11. Appendix: known issues in the reference rule set
 
@@ -376,29 +392,29 @@ and as a correction backlog for the reference file.
    interpreter/tool allow with denies for its exec/secret subforms
    (`Bash(python3 -c:*)`, `Bash(gh auth:*)`), or move it to `ask`.
 
-2. **Dead / redundant under command-splitting.**
-   `Bash([ ! -d * ] && gh repo clone *)` contains `&&`; §8 splits on `&&`
+2. **Dead / redundant under command-splitting.** *Pattern:* one rule per simple
+   command; never put shell operators in a specifier — a specifier like
+   `Bash([ ! -d * ] && gh repo clone *)` contains `&&`, and §8 splits on `&&`
    before matching, so no unit ever contains it and the rule can never fire.
-   `Bash(gh repo clone * 2>&1)` merely duplicates `Bash(gh:*)`. *Pattern:* one
-   rule per simple command; never put shell operators in a specifier.
+   (The reference set previously shipped such rules; they have since been removed.)
 
 3. **Coverage gaps / asymmetries.** `Bash(cp -R:*)` is allowed but plain
-   `cp a b` falls to default-deny. `Bash(rm -rf:*)` / `Bash(rm -f:*)` miss
-   `rm -fr`, `rm -Rf`, `rm --force` (which then hit the `rm:*` **ask**).
-   `Bash(git checkout:*)`, `Bash(git restore:*)`, `Bash(git stash:*)` allow their
-   destructive forms (`checkout .`, `restore .`, `stash drop`) with no narrower
-   deny. *Pattern:* match the base command, then add explicit denies for every
-   destructive flag spelling/variant.
+   `cp a b` matches no rule and takes the `defaultMode: "ask"` fall-back.
+   `Bash(rm -rf:*)` / `Bash(rm -f:*)` miss `rm -fr`, `rm -Rf`, `rm --force`
+   (which then hit the `rm:*` **ask**). *Pattern:* match the base command, then
+   add explicit denies for every destructive flag spelling/variant.
 
 4. **`gcp` vs `gcloud`.** `Bash(gcp:*)` denies a command named `gcp`, but the
-   real GCP CLI is `gcloud` (also `gsutil`, `bq`), so the deny matches nothing.
-   *Pattern:* `Bash(gcloud:*)` deny plus read-only allows
+   real GCP CLI is `gcloud` (also `gsutil`, `bq`), so the deny matches nothing —
+   `gcloud …` matches no rule and takes the `ask` fall-back rather than being
+   denied. *Pattern:* `Bash(gcloud:*)` deny plus read-only allows
    (`Bash(gcloud * list:*)`, `Bash(gcloud * describe:*)`), mirroring aws/kubectl.
 
 5. **Bare path-tool allows shift the default.** Bare `Read` / `Edit` / `Write`
    (specificity 0) are in `allow`, so those tools default to **allow** (minus
-   the specific secret-path denies), unlike Bash which truly defaults to deny.
-   Intended, but worth stating explicitly.
+   the specific secret-path denies). Unmatched Bash and Generic calls instead
+   take the `defaultMode` fall-back — `ask` in this reference set (§6.4). Both
+   are intended, but worth stating explicitly.
 
 6. **Hygiene (harmless, noisy).** `Read(/**/.env*)` subsumes `Read(/**/.env.*)`;
    `.bash_history` / `.zsh_history` are denied twice; path root markers mix

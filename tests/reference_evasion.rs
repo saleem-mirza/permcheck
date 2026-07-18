@@ -79,15 +79,19 @@ fn wrapper_commands_cannot_launder_denied_commands() {
 }
 
 #[test]
-fn obfuscated_command_names_fall_to_default_deny() {
-    // Quote- and escape-splitting the command name means it no longer matches any
-    // allow rule, so it defaults to deny (fail-closed) rather than sneaking past.
-    assert_all_deny(&[
+fn obfuscated_command_names_fall_to_default_fallback() {
+    // Quote- and escape-splitting the command name means it no longer matches the
+    // `aws:*` deny — so under `defaultMode: "ask"` it lands on the ask fall-back.
+    // Note this is a *weaker* posture than a hard deny: obfuscating a denied name
+    // downgrades deny -> ask. It still cannot reach `allow`.
+    for &cmd in &[
         r#"a"w"s ec2 terminate-instances"#,
         r"\aws ec2 terminate-instances",
         r#"aws"" ec2 terminate-instances"#,
         "'aws' ec2 terminate-instances",
-    ]);
+    ] {
+        assert_eq!(bash(cmd), Tier::Ask, "expected ASK for: {cmd:?}");
+    }
 }
 
 #[test]
@@ -115,13 +119,16 @@ fn redirection_to_denied_files_is_denied() {
 
 #[test]
 fn legitimate_compounds_are_not_over_denied() {
-    // Hardening must not break normal multi-step workflows.
+    // Hardening must not break normal multi-step workflows: commands with an
+    // explicit allow stay allowed, even compounded.
     assert_eq!(bash("ls && cat notes.txt"), Tier::Allow);
-    assert_eq!(bash("git status && git diff"), Tier::Allow);
-    assert_eq!(bash("git add . && git commit -m msg"), Tier::Allow);
     assert_eq!(bash("cat a.txt | grep needle"), Tier::Allow);
     assert_eq!(bash("find . -name '*.rs'"), Tier::Allow);
     assert_eq!(bash("env cat notes.txt"), Tier::Allow); // benign wrapper use
+    // The reference set carries no explicit allow for git read commands, so with
+    // `defaultMode: "ask"` they take the ask fall-back rather than being denied.
+    assert_eq!(bash("git status && git diff"), Tier::Ask);
+    assert_eq!(bash("git add . && git commit -m msg"), Tier::Ask);
     // A benign unit next to an `ask`-tier unit escalates only to ask.
     assert_eq!(bash("ls && git push origin main"), Tier::Ask);
 }

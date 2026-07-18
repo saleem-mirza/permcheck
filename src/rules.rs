@@ -71,6 +71,10 @@ pub struct CompiledRule {
 pub struct RuleSet {
     pub rules: Vec<CompiledRule>,
     index: HashMap<String, Vec<usize>>,
+    /// Tier applied when a call matches **no** rule (§6.4). Configured by the
+    /// `defaultMode` field: `"ask"` → [`Tier::Ask`], otherwise (`"deny"`,
+    /// missing, or any other value) → [`Tier::Deny`], fail-closed.
+    pub default_tier: Tier,
 }
 
 impl RuleSet {
@@ -125,12 +129,23 @@ impl RuleSet {
             }
         }
 
+        // Fall-back tier for unmatched calls (§6.4). `"ask"` opts into
+        // asking; "deny", missing, or any other value stays fail-closed.
+        let default_tier = match permissions.get("defaultMode").and_then(Value::as_str) {
+            Some("ask") => Tier::Ask,
+            _ => Tier::Deny,
+        };
+
         let mut index: HashMap<String, Vec<usize>> = HashMap::new();
         for (idx, rule) in rules.iter().enumerate() {
             index.entry(rule.tool.clone()).or_default().push(idx);
         }
 
-        Ok(RuleSet { rules, index })
+        Ok(RuleSet {
+            rules,
+            index,
+            default_tier,
+        })
     }
 }
 
