@@ -1,0 +1,36 @@
+[package]
+name = "permcheck"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "permcheck"
+path = "src/lib.rs"
+
+[[bin]]
+name = "permcheck"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "evaluate"
+harness = false
+
+[profile.release]
+opt-level = "z"        # optimize for size — cold-start binary, not steady-state
+lto = true
+codegen-units = 1
+strip = true
+panic = "unwind"       # load-bearing: hook mode relies on catch_unwind -> deny (§9.1)
+
+[profile.dev.package."*"]
+debug = false
