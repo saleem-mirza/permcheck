@@ -112,7 +112,7 @@ The consequence — and the whole reason permcheck exists — is that a narrow r
 | `kubectl get pods` | **allow** | `Bash(kubectl get:*)` beats `Bash(kubectl:*)` deny |
 | `git push --force origin` | **deny** | narrow `Bash(git push --force:*)` deny (16) beats `Bash(git push:*)` ask (8) |
 
-> This is *not* the native "deny always wins" model — permcheck layers specificity on top of it. See the decision-flow diagram in [`docs/DESIGN.md`](docs/DESIGN.md).
+> This is *not* the native "deny always wins" model — permcheck layers specificity on top of it.
 
 > **These rows illustrate the mechanism with example rules.** The shipped `rules/permissions.json` sets `"defaultMode": "ask"` (so a call matching no rule prompts rather than blocks) and does **not** itself carry the narrow `aws`/`kubectl` read-only allows — add them, as above, to opt into read-only cloud access.
 
@@ -229,8 +229,6 @@ The only runtime dependencies are `serde` / `serde_json` — no `regex`, no `cla
 ```
 rules/permissions.json   canonical reference rule set
 specs/SPEC.md            behavioral source of truth
-docs/DESIGN.md           technical design + decision-flow diagram
-docs/PROPOSAL.md         problem statement
 benches/                 Criterion benchmark + results
 src/                     library (engine) + binary (thin I/O shell)
 tests/                   integration tests (binary + public API), incl. evasion suites

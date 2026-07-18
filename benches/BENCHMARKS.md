@@ -72,7 +72,7 @@ end-to-end.
 
 The production cost model is **one fresh, short-lived process per tool call**, so
 **startup cost dominates** — there is no steady state to amortize against. Two
-manifest choices follow directly (§12.2 of the spec):
+manifest choices in `Cargo.toml` follow directly:
 
 - **No `regex`, no `clap`.** Every matcher (§6.5) and the argument parser (§2)
   are hand-written. Hand-written globs cost microseconds cold; compiling a regex
