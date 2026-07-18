@@ -24,11 +24,19 @@ fn main() {
 
     let install = args.iter().any(|a| a == "--install");
     let uninstall = args.iter().any(|a| a == "--uninstall");
-    if install && uninstall {
-        eprintln!("error: --install and --uninstall are mutually exclusive");
+    let init_rules = args.iter().any(|a| a == "--init-rules");
+    if [install, uninstall, init_rules]
+        .iter()
+        .filter(|b| **b)
+        .count()
+        > 1
+    {
+        eprintln!("error: --install, --uninstall, and --init-rules are mutually exclusive");
         process::exit(3);
     }
-    if install {
+    if init_rules {
+        run_init_rules(&args);
+    } else if install {
         run_install(&args);
     } else if uninstall {
         run_uninstall(&args);
@@ -94,7 +102,7 @@ fn settings_path(scope: Scope) -> Option<PathBuf> {
 
 /// Serialize `value` as pretty JSON and write it atomically: to a sibling
 /// temp file, then `rename` over the target (atomic-replace on Unix and Windows).
-fn write_settings_atomic(path: &Path, value: &serde_json::Value) -> std::io::Result<()> {
+fn write_json_atomic(path: &Path, value: &serde_json::Value) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -117,6 +125,7 @@ fn run_install(args: &[String]) {
         Some(p) => p,
         None => {
             eprintln!("error: --install requires --rules <path>");
+            eprintln!("hint: create a starter rules file with `permcheck --init-rules <path>`");
             process::exit(3);
         }
     };
@@ -132,6 +141,10 @@ fn run_install(args: &[String]) {
     };
     if let Err(e) = load_rules(&abs_rules) {
         eprintln!("error: {e}");
+        eprintln!(
+            "hint: create a starter rules file with `permcheck --init-rules {}`",
+            abs_rules.display()
+        );
         process::exit(3);
     }
     let Some(abs_rules_str) = abs_rules.to_str() else {
@@ -154,11 +167,44 @@ fn run_install(args: &[String]) {
         println!("permcheck hook already up to date → {}", path.display());
         process::exit(0);
     }
-    if let Err(e) = write_settings_atomic(&path, &out) {
+    if let Err(e) = write_json_atomic(&path, &out) {
         eprintln!("error: cannot write {}: {e}", path.display());
         process::exit(3);
     }
     println!("Installed permcheck PreToolUse hook → {}", path.display());
+    process::exit(0);
+}
+
+/// Write a secure starter rules file: the canonical `deny` list, `defaultMode`
+/// `ask`, and empty `allow`/`ask`. Refuses to overwrite an existing file.
+fn run_init_rules(args: &[String]) {
+    let Some(path) = init_rules_path(args) else {
+        eprintln!("error: --init-rules requires a file path");
+        eprintln!("usage: permcheck --init-rules <path>");
+        process::exit(3);
+    };
+
+    if path.exists() {
+        eprintln!(
+            "error: refusing to overwrite existing file {}",
+            path.display()
+        );
+        process::exit(3);
+    }
+
+    let rules = permcheck::rules::starter_rules();
+    if let Err(e) = write_json_atomic(&path, &rules) {
+        eprintln!("error: cannot write {}: {e}", path.display());
+        process::exit(3);
+    }
+    // The file we just wrote must load — a broken starter would deny everything.
+    if let Err(e) = load_rules(&path) {
+        eprintln!("error: wrote an invalid rules file ({e})");
+        process::exit(3);
+    }
+
+    println!("Wrote starter rules → {}", path.display());
+    println!("  next: permcheck --install --rules {}", path.display());
     process::exit(0);
 }
 
@@ -187,7 +233,7 @@ fn run_uninstall(args: &[String]) {
         println!("no permcheck hook found in {}", path.display());
         process::exit(0);
     }
-    if let Err(e) = write_settings_atomic(&path, &out) {
+    if let Err(e) = write_json_atomic(&path, &out) {
         eprintln!("error: cannot write {}: {e}", path.display());
         process::exit(3);
     }
@@ -351,6 +397,7 @@ fn print_help() {
 {yellow}USAGE{reset}
   permcheck {green}<Tool>{reset} {green}<payload>{reset} --rules <path> [--json]   check one call (manual)
   permcheck {cyan}--hook{reset} --rules <path>                          hook mode: event JSON on stdin
+  permcheck {cyan}--init-rules{reset} <path>                           write a secure starter rules file
   permcheck {cyan}--install{reset} --rules <path> [scope]              wire the hook into settings.json
   permcheck {cyan}--uninstall{reset} [scope]                           remove the hook from settings.json
 
@@ -366,6 +413,7 @@ fn print_help() {
   {cyan}--rules{reset} <path>   Permissions JSON file {bold}(required){reset}. Reference: rules/permissions.json
   {cyan}--json{reset}           {red}(CLI mode only){reset} Print the hook-format JSON decision instead of using the exit code.
   {cyan}--hook{reset}           Read a PreToolUse event on stdin, write decision JSON, always exit 0.
+  {cyan}--init-rules{reset} <path>  Write a secure starter rules file — canonical deny list, empty allow/ask, defaultMode ask. Refuses to overwrite.
   {cyan}--install{reset}        Idempotently add the PreToolUse hook to settings.json (needs {cyan}--rules{reset}).
   {cyan}--uninstall{reset}      Idempotently remove the permcheck PreToolUse hook from settings.json.
   {cyan}-h, --help{reset}       Show this help.
@@ -394,6 +442,24 @@ fn print_help() {
         red = red,
         reset = reset,
     );
+}
+
+/// The path argument for `--init-rules`, in either form: `--init-rules <path>`
+/// or `--init-rules=<path>`. A following flag (or nothing) means no path.
+fn init_rules_path(args: &[String]) -> Option<PathBuf> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if let Some(path) = arg.strip_prefix("--init-rules=") {
+            return Some(PathBuf::from(path));
+        }
+        if arg == "--init-rules" {
+            return iter
+                .next()
+                .filter(|a| !a.starts_with("--"))
+                .map(PathBuf::from);
+        }
+    }
+    None
 }
 
 /// Find the `--rules` value in either form: `--rules <path>` or `--rules=<path>`.

@@ -55,7 +55,15 @@ The plugin decides against its bundled [`rules/permissions.json`](rules/permissi
 
 ### 2. Self-wiring into `settings.json` (`--install` / `--uninstall`)
 
-If you [build](#build) the binary yourself instead of using the plugin, permcheck can wire its own `PreToolUse` hook into a Claude Code `settings.json`, **idempotently** (safe to re-run; never touches your other settings or hooks):
+If you [build](#build) the binary yourself instead of using the plugin, permcheck can wire its own `PreToolUse` hook into a Claude Code `settings.json`, **idempotently** (safe to re-run; never touches your other settings or hooks).
+
+**First, a rules file** — needed by this method and by [method 3](#3-by-hand-in-settingsjson). If you don't have one, generate a secure starter: the canonical deny list (blocks `sudo`, `rm -rf`, secret reads, force-push, …), `defaultMode: ask`, and empty `allow`/`ask` you grow yourself:
+
+```sh
+permcheck --init-rules ~/.claude/permcheck.json   # refuses to overwrite an existing file
+```
+
+Then wire it in:
 
 ```
 permcheck --install --rules <path> [--user|--project|--local]
@@ -77,7 +85,7 @@ permcheck --uninstall                                       # remove from ~/.cla
 
 ### 3. By hand in `settings.json`
 
-Or add the hook yourself under `hooks.PreToolUse`, pointing `--rules` at your rules file:
+Or add the hook yourself under `hooks.PreToolUse`, pointing `--rules` at your rules file (generate a secure starter with `permcheck --init-rules <path>` — see method 2):
 
 ```json
 {
@@ -179,7 +187,7 @@ permcheck Read "/home/user/.ssh/id_rsa" --rules rules/permissions.json   # exit 
 
 ## Rules
 
-Rules are passed explicitly via `--rules <path>`; there is no hardcoded default. The canonical reference set ships at [`rules/permissions.json`](rules/permissions.json).
+Rules are passed explicitly via `--rules <path>`; there is no decision-time default — the hook and CLI always require `--rules`. The canonical reference set ships at [`rules/permissions.json`](rules/permissions.json); it is also embedded in the binary purely as the seed for `permcheck --init-rules` (which emits its deny list into a fresh starter file), never as a silent fallback.
 
 Both of these shapes parse identically. `defaultMode` sets the fall-back for calls that match no rule (`"ask"` → ask, otherwise deny); any other keys are ignored — so the file can double as a Claude Code settings file:
 

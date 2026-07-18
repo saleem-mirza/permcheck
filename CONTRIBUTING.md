@@ -11,16 +11,20 @@ binary. Decision pipeline: `rules` → `matcher` → `engine`.
 
 | File | Responsibility |
 |---|---|
-| `src/rules.rs` | grammar, loading, compiled `RuleSet` |
+| `src/rules.rs` | grammar, loading, compiled `RuleSet`, `starter_rules()` |
 | `src/matcher.rs` | per-family matchers + specificity scoring |
 | `src/engine.rs` | winner selection + candidate forms |
 | `src/bash.rs` | compound-command splitter, tokenizer, file-access cross-check |
 | `src/types.rs` | `Tier`, `Decision`, `Family`, payload extraction |
 | `src/settings.rs` | `--install` / `--uninstall` JSON transforms |
 | `src/lib.rs` | crate root: `evaluate()`, loaders, re-exports |
-| `src/main.rs` | arg parsing, hook / CLI / install dispatch |
+| `src/main.rs` | arg parsing, hook / CLI / install / init-rules dispatch |
 
 Tests live in `tests/` (separate crates, never linked into the binary).
+
+`src/rules.rs` embeds the canonical `rules/permissions.json` via `include_str!` — it is
+the source of the deny list `starter_rules()` writes for `permcheck --init-rules`, and is
+**not** a decision-time default (the hook always requires an explicit `--rules`).
 
 ## Building the plugin binaries
 
