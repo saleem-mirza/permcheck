@@ -12,15 +12,14 @@ before it runs. For what permcheck is, how it decides, and use cases, see the
 From the marketplace:
 
 ```sh
-/plugin marketplace add https://raw.githubusercontent.com/saleem-mirza/permcheck/plugin-dist/.claude-plugin/marketplace.json
+/plugin marketplace add saleem-mirza/marketplace
 /plugin install permcheck@zethian
 ```
 
-Both the catalog and the plugin come from the `plugin-dist` branch — a source-free
-bundle of just the hook, rules, and prebuilt binaries — so nothing pulls the Rust
-source onto your machine, and once fetched the plugin runs offline. (The raw URL
-targets that branch directly; the shorthand `add saleem-mirza/permcheck` would instead
-clone the default branch, source and all.)
+The plugin is served from the dedicated
+[`saleem-mirza/marketplace`](https://github.com/saleem-mirza/marketplace) repo — a
+source-free bundle of just the catalog, hook, rules, and prebuilt binaries — so nothing
+pulls the Rust source onto your machine, and once fetched the plugin runs offline.
 
 For local development, point Claude Code straight at this directory:
 
