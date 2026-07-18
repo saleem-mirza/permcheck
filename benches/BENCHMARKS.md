@@ -65,8 +65,8 @@ Path matching is a plain recursive glob matcher: rule specifiers are trusted
 operator config (the rule file is the source of truth) and use at most a few
 wildcards, so backtracking stays cheap. It is intentionally **not** hardened
 against adversarial many-wildcard patterns — a documented non-goal (SPEC §9.2).
-Every figure sits far below the ~3 ms process-spawn floor below, so it is
-immaterial end-to-end.
+Every figure sits far below the ~3 ms process-spawn floor, so it is immaterial
+end-to-end.
 
 ## Why this is fast (and why the manifest looks the way it does)
 
@@ -87,4 +87,4 @@ manifest choices follow directly (§12.2 of the spec):
 
 End-to-end, a cold CLI invocation (process spawn + load + evaluate + exit)
 measures ~2.9 ms, almost entirely OS process-creation overhead; the engine's own
-work is the microsecond figures above. The stripped release binary is ~361 KB.
+work is the microsecond figures above.
