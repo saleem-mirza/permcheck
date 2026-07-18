@@ -65,12 +65,15 @@ permcheck --uninstall [--user|--project|--local]
 - **Scope** (default `--user`): `--user` → `~/.claude/settings.json`, `--project` → `./.claude/settings.json`, `--local` → `./.claude/settings.local.json`.
 - `--install` requires `--rules`; the path is absolutized, validated (it must load), and baked into the injected `permcheck --hook --rules "<abs>"` command. Re-running rewrites the existing entry in place rather than duplicating it.
 - `--uninstall` removes only permcheck's entry and prunes emptied hook containers. Works across Linux, macOS, and Windows.
+- **You don't create the file.** `--install` creates `settings.json` and its `.claude/` directory if absent, and preserves every existing key and hook otherwise. If the file exists but isn't valid JSON, it **errors instead of writing** — it can't corrupt a settings file.
 
 ```sh
 permcheck --install --rules rules/permissions.json          # → ~/.claude/settings.json
 permcheck --install --project --rules .permcheck/rules.json # → ./.claude/settings.json
 permcheck --uninstall                                       # remove from ~/.claude/settings.json
 ```
+
+**Verify it wired up:** run `/hooks` in Claude Code — the permcheck `PreToolUse` entry appears there. Or re-run the same `--install`; a no-op prints `permcheck hook already up to date`.
 
 ### 3. By hand in `settings.json`
 
@@ -94,7 +97,7 @@ Or add the hook yourself under `hooks.PreToolUse`, pointing `--rules` at your ru
 }
 ```
 
-This invokes the hook interface documented under [Usage](#usage).
+This invokes the hook interface documented under [Usage](#usage). Use **absolute paths** for both the binary and `--rules`. After editing, confirm the file is valid JSON (`jq . ~/.claude/settings.json`) and that Claude Code loaded it with `/hooks` — a malformed file is silently ignored. If unsure of the exact shape, run `--install` once (method 2) and copy the block it generates.
 
 ## How it decides: most specific rule wins
 
