@@ -11,7 +11,7 @@ broad one* (e.g. `python3 -m http.server` is denied even though `python3 *` is a
 
 ## Install
 
-From the marketplace (after a release has been published — see *Releases*):
+From the marketplace:
 
 ```sh
 /plugin marketplace add saleem-mirza/permcheck
@@ -124,8 +124,3 @@ The same workflow also force-updates the **`plugin-dist`** branch — a
 self-contained copy of the plugin with `bin/` committed — which the marketplace
 catalog (`.claude-plugin/marketplace.json`, `git-subdir` source) serves. Bump
 `plugin.json`'s `version` on each release so already-installed users get the update.
-
-## Next steps (not yet included)
-
-- Submit to the Anthropic community marketplace. (`cargo` checks + manifest
-  validation already run in CI via `.github/workflows/ci.yml`.)

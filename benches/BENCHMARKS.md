@@ -53,7 +53,7 @@ Benchmarks are grouped by matcher family, plus the one-time rule-set load. Run
 | `mcp_default_ask` | `mcp__db__query(SELECT 1)` | ask (`defaultMode` fall-back) | ~0.20 µs |
 
 **Reading the numbers.** Simple single-command Bash calls are ~1.7–2.1 µs — a few
-hundred prefix comparisons over the ~157 Bash rules. Cost rises with *work*, not
+hundred prefix comparisons over the ~139 Bash rules. Cost rises with *work*, not
 tier: `wrapper_env_aws` (~3.4 µs) decides the command twice (the wrapper and the
 wrapped command); `compound_pipe` (~7.1 µs) splits into two units and runs the
 file-access cross-check on each, matching operands against every `Read` deny glob
