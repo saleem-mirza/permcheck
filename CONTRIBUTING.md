@@ -61,13 +61,8 @@ bundle directly:
 claude --plugin-url https://github.com/saleem-mirza/permcheck/releases/download/<tag>/permcheck-plugin-<tag>.zip
 ```
 
-The same workflow also rebuilds the **`plugin-dist`** branch as a **source-free
-orphan** each release: it holds only `.claude-plugin/marketplace.json` and the
-`plugin/` tree with `bin/` committed — no Rust source, and no accumulated old
-binaries (the orphan drops all prior history). This branch is the **staging artifact**
-the distribution repo is synced from (below). Bump the `version` in both `Cargo.toml`
-and `plugin/.claude-plugin/plugin.json` before tagging, so already-installed users get
-the update.
+Bump the `version` in both `Cargo.toml` and `plugin/.claude-plugin/plugin.json` before
+tagging, so already-installed users get the update.
 
 ## Distribution repo (the install channel)
 
@@ -93,20 +88,24 @@ claude plugin marketplace add saleem-mirza/marketplace
 claude plugin install permcheck@zethian
 ```
 
-### Syncing the distribution repo on release
+### How the dist repo is updated
 
-The dist repo is synced from the `plugin-dist` staging branch. **This is currently a
-manual step** — the release workflow does not yet push to the other repo:
+The `publish-marketplace` job in `release.yml` pushes the source-free bundle to
+`saleem-mirza/marketplace` on every tag: it clones that repo, preserves its catalog and
+README, refreshes `plugin/` with the source files plus the freshly built binaries, and
+force-pushes an orphan commit (so old binaries don't pile up in history). Editing the
+catalog itself (adding a plugin, changing keywords) is done directly in the marketplace
+repo — this repo no longer carries a `marketplace.json`.
+
+**One-time setup — the job needs a cross-repo token.** The default `GITHUB_TOKEN` is
+scoped to this repo and cannot push to another, so create a **fine-grained PAT** with
+`contents: read and write` on `saleem-mirza/marketplace` and store it as the repo secret
+`DIST_REPO_TOKEN` (Settings → Secrets and variables → Actions). Until that secret exists
+the job fails; sync manually meanwhile:
 
 ```sh
-git clone --depth 1 -b plugin-dist https://github.com/saleem-mirza/permcheck.git dist-src
 git clone https://github.com/saleem-mirza/marketplace.git dist
-rm -rf dist/plugin && cp -R dist-src/plugin dist/plugin   # keep .claude-plugin/marketplace.json as-is
+rm -rf dist/plugin && cp -R plugin dist/plugin        # from a checkout of this repo
+# drop the built binaries into dist/plugin/bin (from `cargo build --release` or a Release)
 cd dist && git add -A && git commit -m "permcheck <tag>" && git push
 ```
-
-To automate it, add a job to `release.yml` that pushes the assembled bundle to
-`saleem-mirza/marketplace` using a **fine-grained PAT** with `contents:write` on that
-repo, stored as a secret (e.g. `DIST_REPO_TOKEN`) — the default `GITHUB_TOKEN` is scoped
-to the current repo and cannot push cross-repo. Until that secret exists, sync stays
-manual.

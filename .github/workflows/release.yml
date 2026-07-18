@@ -124,46 +124,58 @@ jobs:
             artifacts/**/permcheck-*
             permcheck-plugin-*.zip
 
-  # Publish a SOURCE-FREE, self-contained plugin distribution to the
-  # `plugin-dist` branch. The branch is rebuilt as an orphan each release and
-  # holds only the marketplace catalog and the plugin/ tree (with bin/
-  # populated) — no Rust source, no old binaries. The marketplace is served
-  # from this branch, so cloning the catalog never pulls src/, tests/, or
-  # Cargo.* onto a user's machine.
-  publish-dist:
-    name: publish plugin-dist branch
+  # Push the source-free plugin bundle to the dedicated distribution repo
+  # (saleem-mirza/marketplace) — the one marketplace users install from. Only
+  # the plugin/ tree is refreshed; that repo owns its
+  # .claude-plugin/marketplace.json (a relative "./plugin" source) and README,
+  # which are carried over as-is. The default branch is rebuilt as an orphan
+  # each release so superseded binaries don't accumulate in history.
+  #
+  # Requires a fine-grained PAT with contents:write on saleem-mirza/marketplace,
+  # stored as the DIST_REPO_TOKEN secret — the default GITHUB_TOKEN is scoped to
+  # this repo and cannot push cross-repo.
+  publish-marketplace:
+    name: publish to marketplace repo
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out this repo (for the plugin/ tree)
+        uses: actions/checkout@v7
 
       - name: Download all binaries
         uses: actions/download-artifact@v8
         with:
           path: artifacts
 
-      - name: Assemble and push source-free plugin-dist
+      - name: Publish source-free bundle to marketplace repo
+        env:
+          DIST_REPO_TOKEN: ${{ secrets.DIST_REPO_TOKEN }}
         run: |
-          # Stage exactly what the marketplace + plugin need, nothing else:
-          #   .claude-plugin/marketplace.json  -> catalog (served from this branch)
-          #   plugin/**                        -> the plugin, with bin/ populated
-          mkdir -p staging/.claude-plugin
-          cp .claude-plugin/marketplace.json staging/.claude-plugin/marketplace.json
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="${{ github.event.inputs.tag }}"
+          fi
+
+          git clone "https://x-access-token:${DIST_REPO_TOKEN}@github.com/saleem-mirza/marketplace.git" dist
+
+          # New tree = the dist repo's own catalog + README (preserved), plus a
+          # fresh plugin/ (source files from this repo + built binaries).
+          rm -rf staging && mkdir -p staging
+          cp -R dist/.claude-plugin staging/.claude-plugin
+          cp dist/README.md staging/README.md 2>/dev/null || true
           cp -R plugin staging/plugin
           find artifacts -type f -name 'permcheck-*' -exec cp {} staging/plugin/bin/ \;
           chmod +x staging/plugin/bin/permcheck-darwin-* staging/plugin/bin/permcheck-linux-* 2>/dev/null || true
 
+          cd dist
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # Rebuild plugin-dist from scratch as an orphan so no source history or
-          # superseded binaries accumulate on the branch.
-          git checkout --orphan plugin-dist
+          git checkout --orphan release-tmp
           git rm -rf --quiet . >/dev/null 2>&1 || true
-          cp -R staging/. .
-          rm -rf staging artifacts
+          cp -R ../staging/. .
           git add -A
-          git commit -m "release ${{ github.ref_name }}: source-free plugin bundle"
-          git push -f origin plugin-dist
+          git commit -m "permcheck ${tag}: source-free plugin bundle"
+          git branch -M release-tmp main
+          git push -f origin main

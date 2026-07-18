@@ -27,7 +27,6 @@ jobs:
         run: |
           for f in \
             plugin/.claude-plugin/plugin.json \
-            plugin/hooks/hooks.json \
-            .claude-plugin/marketplace.json; do
+            plugin/hooks/hooks.json; do
             python3 -c "import json,sys; json.load(open(sys.argv[1])); print('ok:', sys.argv[1])" "$f"
           done
