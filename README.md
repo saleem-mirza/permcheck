@@ -85,8 +85,21 @@ permcheck --uninstall [--user|--project|--local]
 - **You don't create the file.** `--install` creates `settings.json` and its `.claude/` directory if absent, and preserves every existing key and hook otherwise. If the file exists but isn't valid JSON, it **errors instead of writing** — it can't corrupt a settings file.
 - **What the created file looks like.** When no `settings.json` exists, `--install` writes a minimal but complete Claude Code settings file — just the `hooks.PreToolUse` entry. Claude Code has no required keys (a settings file is any JSON object; every field is optional), so nothing else is needed and permcheck adds nothing else:
   ```json
-  { "hooks": { "PreToolUse": [ { "matcher": "*",
-      "hooks": [ { "type": "command", "command": "permcheck --hook --rules \"<abs path to your rules file>\"" } ] } ] } }
+  {
+    "hooks": {
+      "PreToolUse": [
+        {
+          "matcher": "*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "permcheck --hook --rules \"<abs path to your rules file>\""
+            }
+          ]
+        }
+      ]
+    }
+  }
   ```
 
 ```sh
