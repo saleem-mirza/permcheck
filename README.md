@@ -228,19 +228,6 @@ The only runtime dependencies are `serde` / `serde_json` — no `regex`, no `cla
 
 Packaging the plugin and cutting a release are documented in [`CONTRIBUTING.md`](CONTRIBUTING.md), and the code map is under [Code map](CONTRIBUTING.md#code-map).
 
-## Changelog
-
-Binaries and full notes for every version are on the
-[Releases page](https://github.com/saleem-mirza/permcheck/releases). The decision engine
-has been stable since `v0.1.5`; the releases below are distribution and packaging changes
-with no behavior change unless noted.
-
-- **v0.1.9** — Rules de-duplicated: top-level [`rules/permissions.json`](rules/permissions.json) is the single canonical set, and the plugin's bundled copy is generated at build.
-- **v0.1.8** — Distribution moved to a dedicated, source-free marketplace repo — install with `/plugin marketplace add saleem-mirza/marketplace`. Releases sync it automatically.
-- **v0.1.7** — Corrected the bundled plugin README's install instructions.
-- **v0.1.6** — Source-free distribution: installing no longer pulls the Rust source onto your machine. README / SPEC / CONTRIBUTING overhaul.
-- **v0.1.5** — Added the `-V` / `--version` flag; named the marketplace **zethian** (install id `permcheck@zethian`).
-
 ## License
 
 Licensed under the [GNU General Public License v3.0](LICENSE).
