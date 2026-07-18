@@ -33,6 +33,15 @@ Claude Code's native model resolves rule conflicts with a fixed precedence — a
 
 permcheck decides `allow` / `ask` / `deny` for each tool call against a rules file you provide. There are three ways to wire it into Claude Code — **method 1 (the plugin) is easiest** and needs no local build; methods 2 and 3 are for a binary you build yourself.
 
+**Two files, two jobs** — don't conflate them:
+
+| File | Owned by | Job |
+|---|---|---|
+| **`settings.json`** (Claude Code's) | Claude Code | *Wiring* — the `hooks.PreToolUse` entry that tells Claude Code to run permcheck before each tool call. Method 2 (`--install`) writes it; the plugin registers the hook without touching it. |
+| **rules file** (e.g. `rules/permcheck.json`, or your own) | you | *Policy* — the `allow`/`ask`/`deny` rules permcheck decides against, passed via `--rules`. Seed one with `--init-rules` (method 2 below). |
+
+The wiring file just points at the policy file (`permcheck --hook --rules <policy>`). The plugin (method 1) hides both; methods 2 and 3 expose them.
+
 ### 1. As a Claude Code plugin (recommended)
 
 The bundled plugin ships prebuilt binaries for macOS, Linux, and Windows and wires the hook for you:
@@ -74,6 +83,11 @@ permcheck --uninstall [--user|--project|--local]
 - `--install` requires `--rules`; the path is absolutized, validated (it must load), and baked into the injected `permcheck --hook --rules "<abs>"` command. Re-running rewrites the existing entry in place rather than duplicating it.
 - `--uninstall` removes only permcheck's entry and prunes emptied hook containers. Works across Linux, macOS, and Windows.
 - **You don't create the file.** `--install` creates `settings.json` and its `.claude/` directory if absent, and preserves every existing key and hook otherwise. If the file exists but isn't valid JSON, it **errors instead of writing** — it can't corrupt a settings file.
+- **What the created file looks like.** When no `settings.json` exists, `--install` writes a minimal but complete Claude Code settings file — just the `hooks.PreToolUse` entry. Claude Code has no required keys (a settings file is any JSON object; every field is optional), so nothing else is needed and permcheck adds nothing else:
+  ```json
+  { "hooks": { "PreToolUse": [ { "matcher": "*",
+      "hooks": [ { "type": "command", "command": "permcheck --hook --rules \"<abs path to your rules file>\"" } ] } ] } }
+  ```
 
 ```sh
 permcheck --install --rules rules/permcheck.json          # → ~/.claude/settings.json
