@@ -224,11 +224,14 @@ cargo bench                # Criterion benchmarks (see benches/BENCHMARKS.md)
 
 The only runtime dependencies are `serde` / `serde_json` — no `regex`, no `clap`. The binary is a fresh short-lived process per tool call, so it is optimized for cold start (matchers and argument parsing are hand-written; a cold invocation is dominated by process spawn, not the engine's microseconds of work).
 
+Packaging the plugin and cutting a release are documented in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 ## Project layout
 
 ```
 rules/permissions.json   canonical reference rule set
 specs/SPEC.md            behavioral source of truth
+CONTRIBUTING.md          packaging + release workflow
 benches/                 Criterion benchmark + results
 src/                     library (engine) + binary (thin I/O shell)
 tests/                   integration tests (binary + public API), incl. evasion suites
