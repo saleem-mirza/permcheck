@@ -124,9 +124,12 @@ jobs:
             artifacts/**/permcheck-*
             permcheck-plugin-*.zip
 
-  # Publish a self-contained plugin (source + binaries) to the `plugin-dist`
-  # branch, which the marketplace serves via a git-subdir source. Binaries are
-  # gitignored on the source branches, so they only ever live here.
+  # Publish a SOURCE-FREE, self-contained plugin distribution to the
+  # `plugin-dist` branch. The branch is rebuilt as an orphan each release and
+  # holds only the marketplace catalog and the plugin/ tree (with bin/
+  # populated) — no Rust source, no old binaries. The marketplace is served
+  # from this branch, so cloning the catalog never pulls src/, tests/, or
+  # Cargo.* onto a user's machine.
   publish-dist:
     name: publish plugin-dist branch
     needs: build
@@ -141,15 +144,26 @@ jobs:
         with:
           path: artifacts
 
-      - name: Assemble and push plugin-dist
+      - name: Assemble and push source-free plugin-dist
         run: |
-          mkdir -p plugin/bin
-          find artifacts -type f -name 'permcheck-*' -exec cp {} plugin/bin/ \;
-          chmod +x plugin/bin/permcheck-darwin-* plugin/bin/permcheck-linux-* 2>/dev/null || true
+          # Stage exactly what the marketplace + plugin need, nothing else:
+          #   .claude-plugin/marketplace.json  -> catalog (served from this branch)
+          #   plugin/**                        -> the plugin, with bin/ populated
+          mkdir -p staging/.claude-plugin
+          cp .claude-plugin/marketplace.json staging/.claude-plugin/marketplace.json
+          cp -R plugin staging/plugin
+          find artifacts -type f -name 'permcheck-*' -exec cp {} staging/plugin/bin/ \;
+          chmod +x staging/plugin/bin/permcheck-darwin-* staging/plugin/bin/permcheck-linux-* 2>/dev/null || true
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -B plugin-dist
-          git add -f plugin/bin/permcheck-*
-          git commit -m "release ${{ github.ref_name }}: bundle plugin binaries" \
-            || { echo "no binary changes to commit"; exit 0; }
+
+          # Rebuild plugin-dist from scratch as an orphan so no source history or
+          # superseded binaries accumulate on the branch.
+          git checkout --orphan plugin-dist
+          git rm -rf --quiet . >/dev/null 2>&1 || true
+          cp -R staging/. .
+          rm -rf staging artifacts
+          git add -A
+          git commit -m "release ${{ github.ref_name }}: source-free plugin bundle"
           git push -f origin plugin-dist

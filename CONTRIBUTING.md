@@ -61,8 +61,38 @@ bundle directly:
 claude --plugin-url https://github.com/saleem-mirza/permcheck/releases/download/<tag>/permcheck-plugin-<tag>.zip
 ```
 
-The same workflow also force-updates the **`plugin-dist`** branch — a self-contained
-copy of the plugin with `bin/` committed — which the marketplace catalog
-(`.claude-plugin/marketplace.json`, `git-subdir` source) serves. Bump the `version`
-in both `Cargo.toml` and `plugin/.claude-plugin/plugin.json` before tagging, so
+The same workflow also rebuilds the **`plugin-dist`** branch as a **source-free
+orphan** each release: it holds only `.claude-plugin/marketplace.json` and the
+`plugin/` tree with `bin/` committed — no Rust source, and no accumulated old
+binaries (the orphan drops all prior history). Bump the `version` in both
+`Cargo.toml` and `plugin/.claude-plugin/plugin.json` before tagging, so
 already-installed users get the update.
+
+### Installing source-free from `plugin-dist`
+
+Both the catalog and the plugin come from the one `plugin-dist` branch, so nothing
+ever clones `src/`, `tests/`, or `Cargo.*` onto a user's machine. Add the marketplace
+by the **raw URL of its `marketplace.json`** on that branch:
+
+```sh
+/plugin marketplace add \
+  https://raw.githubusercontent.com/saleem-mirza/permcheck/plugin-dist/.claude-plugin/marketplace.json
+```
+
+This fetches only that one JSON file (no repo clone); the plugin then resolves via its
+own `git-subdir` source, which pins `ref: plugin-dist` and is itself source-free.
+
+Why the raw URL rather than the shorter `/plugin marketplace add saleem-mirza/permcheck`:
+`add <owner/repo>` has **no branch option** — every remote form clones the repo's
+**default branch** (`main`), which would drag the Rust source into the marketplace
+clone. Branch pinning at registration time was requested and closed as *not planned*
+([issue #23551](https://github.com/anthropics/claude-code/issues/23551)). The raw-URL
+form is what keeps a normal source-carrying dev repo and a source-free install on the
+same repository.
+
+> Two caveats to check before relying on it: `/plugin marketplace update` must re-fetch
+> the URL for version bumps to propagate, and raw GitHub URLs sit behind a short CDN
+> cache (~5 min), so updates aren't instant.
+>
+> Alternative if you'd rather use the `add <owner/repo>` shorthand: publish the orphan
+> tree as its own repo's default branch and register that instead.
