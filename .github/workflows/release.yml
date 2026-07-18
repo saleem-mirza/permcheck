@@ -1,0 +1,155 @@
+name: release
+
+# Cross-compile the permcheck binary for all supported plugin targets and
+# publish them (plus a ready-to-use plugin bundle) to a GitHub Release.
+#
+# Triggers on a version tag (`v*`), or manually via workflow_dispatch with a tag.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.1.0)"
+        required: true
+
+jobs:
+  build:
+    name: build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: permcheck-darwin-arm64
+            target: aarch64-apple-darwin
+            os: macos-latest
+            cross: false
+          - name: permcheck-darwin-x64
+            target: x86_64-apple-darwin
+            os: macos-latest
+            cross: false
+          - name: permcheck-linux-x64
+            target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+          - name: permcheck-linux-arm64
+            target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+          - name: permcheck-windows-x64.exe
+            target: x86_64-pc-windows-msvc
+            os: windows-latest
+            cross: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build (native)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --locked --target ${{ matrix.target }}
+
+      - name: Stage binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          src="target/${{ matrix.target }}/release/permcheck"
+          [ "${{ runner.os }}" = "Windows" ] && src="${src}.exe"
+          cp "$src" "dist/${{ matrix.name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}
+          path: dist/${{ matrix.name }}
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve tag
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Assemble plugin bundle
+        run: |
+          tag="${{ steps.meta.outputs.tag }}"
+          # Populate the checked-out plugin (bin/ is gitignored, so empty) with
+          # every built binary, then zip a ready-to-install plugin.
+          mkdir -p plugin/bin
+          find artifacts -type f -name 'permcheck-*' -exec cp {} plugin/bin/ \;
+          chmod +x plugin/bin/permcheck-darwin-* plugin/bin/permcheck-linux-* 2>/dev/null || true
+          ( cd plugin && zip -rq "../permcheck-plugin-${tag}.zip" . )
+          ls -l plugin/bin
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: permcheck ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            artifacts/**/permcheck-*
+            permcheck-plugin-*.zip
+
+  # Publish a self-contained plugin (source + binaries) to the `plugin-dist`
+  # branch, which the marketplace serves via a git-subdir source. Binaries are
+  # gitignored on the source branches, so they only ever live here.
+  publish-dist:
+    name: publish plugin-dist branch
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Assemble and push plugin-dist
+        run: |
+          mkdir -p plugin/bin
+          find artifacts -type f -name 'permcheck-*' -exec cp {} plugin/bin/ \;
+          chmod +x plugin/bin/permcheck-darwin-* plugin/bin/permcheck-linux-* 2>/dev/null || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B plugin-dist
+          git add -f plugin/bin/permcheck-*
+          git commit -m "release ${{ github.ref_name }}: bundle plugin binaries" \
+            || { echo "no binary changes to commit"; exit 0; }
+          git push -f origin plugin-dist

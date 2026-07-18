@@ -1,0 +1,20 @@
+{
+  "name": "permcheck",
+  "description": "Specificity-aware PreToolUse permission engine — narrow allow/deny rules override broad ones. Defense-in-depth for Bash, Read/Write/Edit, WebFetch/WebSearch, and MCP tool calls.",
+  "version": "0.1.3",
+  "author": {
+    "name": "Saleem Mirza",
+    "url": "https://github.com/saleem-mirza"
+  },
+  "homepage": "https://github.com/saleem-mirza/permcheck",
+  "repository": "https://github.com/saleem-mirza/permcheck",
+  "license": "GPL-3.0",
+  "keywords": [
+    "security",
+    "permissions",
+    "pretooluse",
+    "hook",
+    "least-privilege",
+    "guardrails"
+  ]
+}

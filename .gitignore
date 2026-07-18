@@ -4,3 +4,6 @@
 *.log
 .idea/
 .vscode/
+
+# plugin: prebuilt binaries are produced by release CI, not committed from dev machines
+/plugin/bin/permcheck-*

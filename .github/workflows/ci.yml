@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    name: fmt / clippy / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --locked
+
+  manifests:
+    name: validate plugin & marketplace manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: JSON is well-formed
+        run: |
+          for f in \
+            plugin/.claude-plugin/plugin.json \
+            plugin/hooks/hooks.json \
+            .claude-plugin/marketplace.json; do
+            python3 -c "import json,sys; json.load(open(sys.argv[1])); print('ok:', sys.argv[1])" "$f"
+          done
