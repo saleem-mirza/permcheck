@@ -8,7 +8,7 @@ The behavioral source of truth is [`specs/SPEC.md`](specs/SPEC.md); the implemen
 
 permcheck is **defense-in-depth, not a sandbox** — the OS sandbox and enterprise `managed-settings.json` remain the security boundary. It exists to express the least-privilege rules the native permission model cannot.
 
-Claude Code's native model resolves rule conflicts with a fixed precedence — a `deny` always wins over an `allow`, no matter how broad — so you can't deny a whole tool *and* carve out a narrow safe exception; the broad deny swallows it. permcheck fills that gap: as a PreToolUse hook it gathers *every* matching rule and lets the **most specific one win**, so a narrow rule overrides a broad one in *either* direction — a targeted `allow` punches through a broad `deny`, and a targeted `deny` through a broad `allow`.
+Claude Code's native model resolves rule conflicts with a fixed precedence — a `deny` always wins over an `allow`, no matter how broad — so you can't deny a whole tool *and* carve out a narrow safe exception; the broad deny swallows it (tracked upstream in [anthropics/claude-code#79759](https://github.com/anthropics/claude-code/issues/79759)). permcheck fills that gap: as a PreToolUse hook it gathers *every* matching rule and lets the **most specific one win**, so a narrow rule overrides a broad one in *either* direction — a targeted `allow` punches through a broad `deny`, and a targeted `deny` through a broad `allow`.
 
 **Highlights**
 
