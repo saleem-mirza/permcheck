@@ -104,6 +104,7 @@ fn nested_shells_and_eval_are_denied() {
         "source /tmp/evil.sh",
         ". /tmp/evil.sh",
         "exec aws ec2 terminate-instances",
+        "env cat notes.txt", // env can prefix an arbitrary command to launder it
     ]);
 }
 
@@ -124,7 +125,6 @@ fn legitimate_compounds_are_not_over_denied() {
     assert_eq!(bash("ls && cat notes.txt"), Tier::Allow);
     assert_eq!(bash("cat a.txt | grep needle"), Tier::Allow);
     assert_eq!(bash("find . -name '*.rs'"), Tier::Allow);
-    assert_eq!(bash("env cat notes.txt"), Tier::Allow); // benign wrapper use
     // The reference set carries no explicit allow for git read commands, so with
     // `defaultMode: "ask"` they take the ask fall-back rather than being denied.
     assert_eq!(bash("git status && git diff"), Tier::Ask);
