@@ -32,6 +32,18 @@ fn read_json(path: &Path) -> serde_json::Value {
     serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
 }
 
+/// The `command` string of the first permcheck PreToolUse hook, if present.
+/// Windows-only: used to assert against the decoded command rather than raw JSON.
+#[cfg(windows)]
+fn permcheck_command(v: &serde_json::Value) -> Option<String> {
+    v["hooks"]["PreToolUse"].as_array()?.iter().find_map(|g| {
+        g["hooks"].as_array()?.iter().find_map(|h| {
+            let c = h.get("command").and_then(|c| c.as_str())?;
+            (c.contains("permcheck") && c.contains("--hook")).then(|| c.to_string())
+        })
+    })
+}
+
 fn has_permcheck_hook(v: &serde_json::Value) -> bool {
     v["hooks"]["PreToolUse"]
         .as_array()
@@ -65,9 +77,21 @@ fn install_user_creates_settings_and_is_idempotent() {
     assert!(settings.exists());
     let v = read_json(&settings);
     assert!(has_permcheck_hook(&v));
-    // rules path baked in, absolute and double-quoted
-    let s = fs::read_to_string(&settings).unwrap();
-    assert!(s.contains(&format!("--rules \\\"{}\\\"", rules.display())));
+    // rules path baked in, absolute and double-quoted.
+    #[cfg(not(windows))]
+    {
+        // POSIX paths have no backslashes, so the escaped-quote substring appears
+        // verbatim in the raw JSON text.
+        let s = fs::read_to_string(&settings).unwrap();
+        assert!(s.contains(&format!("--rules \\\"{}\\\"", rules.display())));
+    }
+    #[cfg(windows)]
+    {
+        // The JSON escapes each path backslash (`\` -> `\\`), so scanning raw text
+        // for the single-backslash path fails. Assert against the decoded command.
+        let command = permcheck_command(&v).expect("permcheck hook command present");
+        assert!(command.contains(&format!("--rules \"{}\"", rules.display())));
+    }
 
     // Second install is a no-op: byte-identical file, "already up to date".
     let before = fs::read_to_string(&settings).unwrap();

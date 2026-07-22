@@ -1,5 +1,7 @@
 //! Path matcher unit tests (§6.5).
 
+#[cfg(windows)]
+use permcheck::matcher::normalize_root;
 use permcheck::matcher::{Matcher, compile};
 use permcheck::types::Family;
 
@@ -85,10 +87,29 @@ fn matches_tricky_cases_correctly() {
 
 #[test]
 fn tilde_expands_to_home() {
-    // The pattern's `~` expands via the process $HOME; a candidate carrying the
-    // same expansion must match.
+    // The pattern's `~` expands via the process home dir; a candidate carrying
+    // the same expansion must match. `test_home` mirrors `home_dir`'s resolution
+    // on each platform so this holds on Windows too (drive-letter home).
     let matcher = m("~/.npmrc");
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = test_home();
     assert!(matcher.matches(&format!("{home}/.npmrc")));
     assert!(!matcher.matches(&format!("{home}/.other")));
+}
+
+/// The home dir the way `home_dir()` resolves it, for building the expected
+/// candidate. POSIX reads `$HOME` verbatim.
+#[cfg(not(windows))]
+fn test_home() -> String {
+    std::env::var("HOME").unwrap_or_default()
+}
+
+/// Windows mirrors `home_dir`: `$HOME` (or `%USERPROFILE%` fallback), normalized.
+#[cfg(windows)]
+fn test_home() -> String {
+    let raw = std::env::var("HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("USERPROFILE").ok())
+        .unwrap_or_default();
+    normalize_root(&raw)
 }

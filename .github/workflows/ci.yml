@@ -18,6 +18,17 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --locked
 
+  windows:
+    name: clippy / test (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --locked
+
   manifests:
     name: validate plugin & marketplace manifests
     runs-on: ubuntu-latest

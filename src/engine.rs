@@ -4,7 +4,9 @@
 //! every family. [`decide_payload`] is the whole decision for Path and Generic
 //! tools; Bash adds the compound step in [`crate::bash`].
 
-use crate::matcher::home_dir;
+#[cfg(windows)]
+use crate::matcher::normalize_root;
+use crate::matcher::{home_dir, is_absolute};
 use crate::rules::{CompiledRule, RuleSet};
 use crate::types::{Decision, Family, Tier};
 
@@ -60,8 +62,15 @@ pub fn decide_payload(rs: &RuleSet, tool: &str, payload: &str, cwd: Option<&str>
 /// Candidate forms for a Path payload: raw, `~`-expanded, and `cwd`-absolutized
 /// (§7.1, §7.2).
 pub(crate) fn path_candidates(payload: &str, cwd: Option<&str>) -> Vec<String> {
-    let mut v = Vec::with_capacity(3);
+    let mut v = Vec::with_capacity(4);
     v.push(payload.to_string());
+
+    // A Windows payload arrives drive-letter-rooted with backslashes
+    // (`D:\proj\.env`); its POSIX-anchored form (`/D:/proj/.env`) is what the
+    // `/`-based Path globs match. POSIX needs no such candidate — the raw
+    // payload above is already anchored — so this whole step compiles out there.
+    #[cfg(windows)]
+    push_unique(&mut v, normalize_root(payload));
 
     if payload == "~" {
         push_unique(&mut v, home_dir().to_string());
@@ -69,11 +78,17 @@ pub(crate) fn path_candidates(payload: &str, cwd: Option<&str>) -> Vec<String> {
         push_unique(&mut v, format!("{}/{}", home_dir(), rest));
     }
 
-    // Relative payloads are absolutized against cwd (§7.2).
-    if !payload.starts_with('/')
+    // Relative payloads are absolutized against cwd (§7.2). An already-absolute
+    // payload (`/`-rooted, or a Windows drive-letter root) is left to its
+    // normalized form above and must not be joined onto cwd.
+    if !is_absolute(payload)
         && !payload.starts_with('~')
         && let Some(dir) = cwd
     {
+        // Only the cwd base needs Windows normalization (`D:\proj` -> `/D:/proj`);
+        // on POSIX `dir` is already `/`-rooted and is used as-is, allocation-free.
+        #[cfg(windows)]
+        let dir = normalize_root(dir);
         let rel = payload.strip_prefix("./").unwrap_or(payload);
         push_unique(&mut v, format!("{}/{}", dir.trim_end_matches('/'), rel));
     }

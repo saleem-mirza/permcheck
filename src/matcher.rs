@@ -11,10 +11,80 @@ use std::sync::OnceLock;
 /// wildcard at all, so a literal specifier outranks any wildcard one (§6.1).
 pub const EXACT_MATCH_BONUS: u32 = 1000;
 
-/// `$HOME`, read once and cached for the process lifetime.
+/// The home directory, read once and cached for the process lifetime, in a
+/// POSIX-anchored form (see [`normalize_root`]).
 pub(crate) fn home_dir() -> &'static str {
     static HOME: OnceLock<String> = OnceLock::new();
-    HOME.get_or_init(|| std::env::var("HOME").unwrap_or_default())
+    HOME.get_or_init(|| normalize_root(&raw_home()))
+}
+
+/// The raw home directory from the environment, before normalization.
+#[cfg(not(windows))]
+fn raw_home() -> String {
+    std::env::var("HOME").unwrap_or_default()
+}
+
+/// On Windows, fall back to `%USERPROFILE%` when `$HOME` is unset (native,
+/// non-MSYS shells set only the former).
+#[cfg(windows)]
+fn raw_home() -> String {
+    std::env::var("HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("USERPROFILE").ok())
+        .unwrap_or_default()
+}
+
+/// Normalize an absolute base path (a CWD or home dir) into a POSIX-anchored form
+/// so the `/`-based Path globs match.
+///
+/// Path specifiers are written POSIX-style (leading `/`, `/` separators), so a
+/// POSIX base is already anchored: on non-Windows targets this is the identity
+/// function and the whole transform compiles out. The Windows implementation
+/// below is the only platform-specific behavior.
+#[cfg(not(windows))]
+#[inline]
+pub fn normalize_root(dir: &str) -> String {
+    dir.to_string()
+}
+
+/// A Windows base is a drive-letter path with backslashes (e.g. `D:\proj`); we
+/// convert `\` to `/` and prepend a `/` to the drive-letter root, so `D:\proj`
+/// becomes `/D:/proj` — an absolute-rooted candidate a rule like `/**/.env*`
+/// matches. A path already starting with `/` (an MSYS-style form) is left as is.
+#[cfg(windows)]
+pub fn normalize_root(dir: &str) -> String {
+    if dir.starts_with('/') {
+        return dir.to_string();
+    }
+    let slashed = dir.replace('\\', "/");
+    let b = slashed.as_bytes();
+    // A Windows drive-letter root (`X:/…`) needs a leading `/` to anchor.
+    if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        format!("/{slashed}")
+    } else {
+        slashed
+    }
+}
+
+/// True if `path` is already absolute and so must not be joined onto a CWD
+/// (§7.2). POSIX (and MSYS) absolute paths are `/`-rooted.
+#[cfg(not(windows))]
+#[inline]
+pub(crate) fn is_absolute(path: &str) -> bool {
+    path.starts_with('/')
+}
+
+/// On Windows a payload is also absolute when it is drive-letter-rooted
+/// (`X:\…` or `X:/…`); such a path is normalized by [`normalize_root`], not
+/// absolutized against the CWD.
+#[cfg(windows)]
+pub(crate) fn is_absolute(path: &str) -> bool {
+    if path.starts_with('/') {
+        return true;
+    }
+    let b = path.as_bytes();
+    b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
 }
 
 /// Why a specifier could not be compiled into a matcher (§4).
@@ -215,6 +285,14 @@ impl PathMatcher {
             spec
         };
 
+        // Windows paths are case-insensitive, so fold the pattern to
+        // ASCII-lowercase; candidates are folded the same way in `matches`, and
+        // the byte-exact `path_match` then compares like cases. POSIX is
+        // case-sensitive and left untouched. (ASCII folding only — it covers
+        // drive letters and the common file names this tool matches on.)
+        #[cfg(windows)]
+        let normalized = normalized.to_ascii_lowercase();
+
         let bytes = normalized.as_bytes();
         let mut tokens = Vec::with_capacity(bytes.len());
         let mut i = 0;
@@ -244,6 +322,11 @@ impl PathMatcher {
     }
 
     fn matches(&self, candidate: &str) -> bool {
+        // On Windows the candidate is ASCII-lowercased to match the pattern,
+        // which was folded the same way at compile time (case-insensitive FS).
+        // POSIX stays byte-exact and allocation-free on this hot path.
+        #[cfg(windows)]
+        let candidate = candidate.to_ascii_lowercase();
         path_match(&self.0, candidate.as_bytes())
     }
 }

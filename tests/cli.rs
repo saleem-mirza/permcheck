@@ -76,7 +76,9 @@ fn missing_tool_arg_is_config_error() {
 #[test]
 fn relative_path_absolutizes_against_process_cwd() {
     // `.env` is relative; it absolutizes against the process CWD and hits the
-    // Read `.env` deny, while an unrelated absolute path stays allowed.
+    // Read `.env` deny, while an unrelated absolute path stays allowed. This
+    // holds cross-platform: a Windows drive-letter CWD (e.g. `D:\proj`) is
+    // normalized to a POSIX-anchored form (`/D:/proj`) before Path matching.
     let f = rules_file(r#"{"allow":["Read"],"deny":["Read(/**/.env*)"]}"#);
     assert_eq!(exit_code(&["Read", ".env"], f.path()), 2);
     assert_eq!(exit_code(&["Read", "/tmp/notes.txt"], f.path()), 0);
