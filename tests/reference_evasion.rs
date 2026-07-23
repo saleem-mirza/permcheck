@@ -95,6 +95,21 @@ fn obfuscated_command_names_fall_to_default_fallback() {
 }
 
 #[test]
+fn escaped_quote_cannot_swallow_a_chained_command() {
+    // Regression: an unquoted `\"` is a *literal* quote in shell, not a quote
+    // opener. The splitter used to misread it as opening a quoted region with no
+    // close, swallowing the rest of the line into a single unit — so
+    // `ls \" ; <denied>` rode in on `Bash(ls:*)` and the chained command was
+    // never decided. The chained unit must still be seen and win.
+    assert_all_deny(&[
+        r#"ls \" ; kubectl delete pod x"#,
+        r#"cat \" && aws ec2 terminate-instances"#,
+        r#"find . \" | sudo rm -rf /"#,
+        r#"ls \' ; kubectl delete pod x"#, // escaped single quote, same shape
+    ]);
+}
+
+#[test]
 fn nested_shells_and_eval_are_denied() {
     assert_all_deny(&[
         r#"bash -c "aws ec2 terminate-instances""#,

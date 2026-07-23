@@ -80,6 +80,11 @@ fn scan(s: &str, start: usize, end: usize, out: &mut Vec<(usize, usize)>) {
     let mut unit_start = start;
     while i < end {
         match b[i] {
+            // Outside quotes a backslash escapes the next byte, making it
+            // literal: `\"` is a literal quote (not a quote opener), `\;` a
+            // literal semicolon, etc. Skip both bytes so an escaped metachar
+            // never opens a quoted region or a split point.
+            b'\\' => i += 2,
             b'\'' => i = skip_single(b, i + 1, end),
             b'"' => i = skip_double(s, i + 1, end, out),
             b'`' => i = handle_backtick(s, i + 1, end, out),
@@ -155,7 +160,12 @@ fn skip_single(b: &[u8], mut i: usize, end: usize) -> usize {
 fn skip_double(s: &str, mut i: usize, end: usize, out: &mut Vec<(usize, usize)>) -> usize {
     let b = s.as_bytes();
     while i < end && b[i] != b'"' {
-        if b[i] == b'$' && i + 1 < end && b[i + 1] == b'(' {
+        if b[i] == b'\\' {
+            // Inside double quotes a backslash escapes `"`, `` ` ``, `$` and
+            // `\`; skip the escaped byte so `\"` does not close the string and
+            // `\$(`, `` \` `` do not open a substitution.
+            i += 2;
+        } else if b[i] == b'$' && i + 1 < end && b[i + 1] == b'(' {
             if i + 2 < end && b[i + 2] == b'(' {
                 i = skip_arith(b, i + 3, end);
             } else {

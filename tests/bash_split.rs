@@ -76,6 +76,27 @@ fn deeply_nested_substitution_extracts_inner() {
 }
 
 #[test]
+fn escaped_quote_does_not_open_a_quoted_region() {
+    // An unquoted `\"` / `\'` is a literal quote, not a delimiter, so it must not
+    // suppress the following split points. Regression for the escaped-quote
+    // splitter bypass.
+    assert_eq!(
+        split(r#"ls \" ; rm -rf /tmp/x"#),
+        [r#"ls \""#, "rm -rf /tmp/x"]
+    );
+    assert_eq!(
+        split(r#"ls \' ; rm -rf /tmp/x"#),
+        [r#"ls \'"#, "rm -rf /tmp/x"]
+    );
+    // A backslash-escaped operator is literal and must NOT split (`a&&b` is one
+    // word); the escaped bytes stay attached.
+    assert_eq!(split(r"echo a\&\&b"), [r"echo a\&\&b"]);
+    // An escaped `"` *inside* a real double-quoted string does not close it, so
+    // the `;` stays quoted and does not split.
+    assert_eq!(split(r#"echo "a \" ; b""#), [r#"echo "a \" ; b""#]);
+}
+
+#[test]
 fn process_substitution_output_form_is_extracted() {
     assert!(
         split("tee >(grep secret)")
