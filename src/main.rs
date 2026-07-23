@@ -604,7 +604,10 @@ fn find_rules_arg(args: &[String]) -> Option<PathBuf> {
             // A following flag (or nothing) means no value — don't swallow it as
             // the path (mirrors `init_rules_path`). Callers treat this as a
             // dangling `--rules` and error, rather than silently seeding.
-            return iter.next().filter(|a| !a.starts_with("--")).map(PathBuf::from);
+            return iter
+                .next()
+                .filter(|a| !a.starts_with("--"))
+                .map(PathBuf::from);
         }
     }
     None

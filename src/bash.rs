@@ -353,8 +353,46 @@ const PATTERN_FIRST: &[&str] = &[
     "grep", "egrep", "fgrep", "zgrep", "rgrep", "sed", "awk", "gawk",
 ];
 
-/// Writers whose file operands are checked against `Write`/`Edit` deny rules.
-const WRITERS: &[&str] = &["tee", "dd", "truncate"];
+/// Writers whose plain file operands are checked against `Write`/`Edit` deny
+/// rules. (`dd` is handled separately: its files arrive as `if=`/`of=` operands.)
+const WRITERS: &[&str] = &["tee", "truncate"];
+
+/// A value-bearing option of a pattern-first reader (`grep`/`sed`/`awk` family):
+/// `-e`/`--regexp` supplies the pattern, `-f`/`--file` names a file the tool
+/// *reads*. Carries any value attached in the same token (`-fFILE`, `--file=X`).
+enum ReaderOpt<'a> {
+    /// Pattern supplied via option — no leading operand is the pattern.
+    Pattern(Option<&'a str>),
+    /// A pattern *file* the reader opens — check it against `Read` deny rules.
+    File(Option<&'a str>),
+}
+
+/// Classify a pattern-first reader's option token, or `None` if it is a plain
+/// flag. Recognizes `-e`/`-f` (bare or attached) and `--regexp`/`--file`.
+fn reader_option(op: &str) -> Option<ReaderOpt<'_>> {
+    if op == "--file" {
+        return Some(ReaderOpt::File(None));
+    }
+    if let Some(v) = op.strip_prefix("--file=") {
+        return Some(ReaderOpt::File(Some(v)));
+    }
+    if op == "--regexp" {
+        return Some(ReaderOpt::Pattern(None));
+    }
+    if let Some(v) = op.strip_prefix("--regexp=") {
+        return Some(ReaderOpt::Pattern(Some(v)));
+    }
+    let b = op.as_bytes();
+    if b.len() >= 2 && b[0] == b'-' && b[1] != b'-' {
+        let attached = (op.len() > 2).then(|| &op[2..]);
+        match b[1] {
+            b'f' => return Some(ReaderOpt::File(attached)),
+            b'e' => return Some(ReaderOpt::Pattern(attached)),
+            _ => {}
+        }
+    }
+    None
+}
 
 /// Cross-check a single simple command for reads/writes to denied paths, raising
 /// the verdict to `deny` on a hit (§8.3). Never loosens.
@@ -389,15 +427,60 @@ fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> bool {
     let name = basename(cmd0);
     let operands = &words[1..];
 
-    if READERS.contains(&name) {
-        let pattern_first = PATTERN_FIRST.contains(&name);
-        let mut skipped_pattern = false;
+    if name == "dd" {
+        // `dd` names its files as `if=<path>` (read) and `of=<path>` (write),
+        // not as bare operands, so it needs its own operand shape.
         for op in operands {
-            if op.starts_with('-') {
+            if let Some(path) = op.strip_prefix("if=")
+                && !path.is_empty()
+                && engine::path_hits_deny(rs, &["Read"], path, cwd)
+            {
+                return true;
+            }
+            if let Some(path) = op.strip_prefix("of=")
+                && !path.is_empty()
+                && engine::path_hits_deny(rs, &["Write", "Edit"], path, cwd)
+            {
+                return true;
+            }
+        }
+    } else if READERS.contains(&name) {
+        let pattern_first = PATTERN_FIRST.contains(&name);
+        let mut pattern_consumed = false;
+        let mut end_of_options = false;
+        let mut k = 0;
+        while k < operands.len() {
+            let op = operands[k];
+            k += 1;
+            if !end_of_options && op == "--" {
+                end_of_options = true;
                 continue;
             }
-            if pattern_first && !skipped_pattern {
-                skipped_pattern = true;
+            if !end_of_options && op.len() > 1 && op.starts_with('-') {
+                // On pattern-first readers, `-e`/`-f` supply the pattern via the
+                // option (so no leading operand is the pattern); `-f` additionally
+                // names a file the tool reads, checked here. Its value may be
+                // attached (`-fFILE`, `--file=X`) or the next operand.
+                if pattern_first && let Some(kind) = reader_option(op) {
+                    pattern_consumed = true;
+                    let (is_file, attached) = match kind {
+                        ReaderOpt::File(a) => (true, a),
+                        ReaderOpt::Pattern(a) => (false, a),
+                    };
+                    let value = attached.or_else(|| operands.get(k).copied().inspect(|_| k += 1));
+                    if is_file
+                        && let Some(v) = value
+                        && !v.is_empty()
+                        && engine::path_hits_deny(rs, &["Read"], v, cwd)
+                    {
+                        return true;
+                    }
+                }
+                continue;
+            }
+            // A pattern-first reader's first bare operand is the regex, not a file.
+            if pattern_first && !pattern_consumed {
+                pattern_consumed = true;
                 continue;
             }
             if engine::path_hits_deny(rs, &["Read"], op, cwd) {
@@ -407,7 +490,7 @@ fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> bool {
     } else if WRITERS.contains(&name) {
         for op in operands {
             if op.starts_with('-') || op.contains('=') {
-                continue; // options and dd's if=/of= key-values (§9.2)
+                continue; // skip options and any key=value operand
             }
             if engine::path_hits_deny(rs, &["Write", "Edit"], op, cwd) {
                 return true;
@@ -415,6 +498,16 @@ fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> bool {
         }
     }
     false
+}
+
+/// A wrapper's own trailing argument that is peeled to reach the wrapped command:
+/// an option (`-n`), a `NAME=value` assignment (`env FOO=bar`), or a numeric arg
+/// (`timeout 5`). Shared by the token-level [`peel_wrappers`] and the string-level
+/// [`strip_leading_wrappers`] so the two stay in lockstep.
+fn is_wrapper_arg(w: &str) -> bool {
+    w.starts_with('-')
+        || w.contains('=')
+        || (!w.is_empty() && w.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Drop leading wrapper commands (and their options / assignments / numeric
@@ -426,10 +519,7 @@ fn peel_wrappers(words: &mut Vec<&str>) {
         }
         words.remove(0);
         while let Some(&w) = words.first() {
-            let is_option = w.starts_with('-');
-            let is_assignment = w.contains('=');
-            let is_numeric = !w.is_empty() && w.bytes().all(|b| b.is_ascii_digit());
-            if is_option || is_assignment || is_numeric {
+            if is_wrapper_arg(w) {
                 words.remove(0);
             } else {
                 break;
@@ -474,11 +564,7 @@ fn strip_leading_wrappers(cmd: &str) -> Option<&str> {
                 i = ws;
                 break;
             }
-            let w = &cmd[ws..we];
-            let is_option = w.starts_with('-');
-            let is_assignment = w.as_bytes().contains(&b'=');
-            let is_numeric = w.bytes().all(|c| c.is_ascii_digit());
-            if is_option || is_assignment || is_numeric {
+            if is_wrapper_arg(&cmd[ws..we]) {
                 i = we;
             } else {
                 i = ws;
