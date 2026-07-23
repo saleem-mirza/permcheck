@@ -100,6 +100,19 @@ fn settings_path(scope: Scope) -> Option<PathBuf> {
     Some(base.join(".claude").join(file))
 }
 
+/// The canonical rules-file path for a scope — next to that scope's settings
+/// file, so `--install` can seed/copy the policy into a predictable location.
+/// Local uses a `.local` variant, mirroring `settings.local.json`, so it never
+/// collides with a project-scope `permcheck.json` in the same repo.
+fn rules_dest_path(scope: Scope) -> Option<PathBuf> {
+    let (base, file): (PathBuf, &str) = match scope {
+        Scope::User => (home_dir()?, "permcheck.json"),
+        Scope::Project => (PathBuf::from("."), "permcheck.json"),
+        Scope::Local => (PathBuf::from("."), "permcheck.local.json"),
+    };
+    Some(base.join(".claude").join(file))
+}
+
 /// Serialize `value` as pretty JSON and write it atomically: to a sibling
 /// temp file, then `rename` over the target (atomic-replace on Unix and Windows).
 fn write_json_atomic(path: &Path, value: &serde_json::Value) -> std::io::Result<()> {
@@ -114,40 +127,46 @@ fn write_json_atomic(path: &Path, value: &serde_json::Value) -> std::io::Result<
     std::fs::rename(&tmp, path)
 }
 
+/// Copy `src` to `dest` atomically: to a sibling temp file, then `rename` over
+/// the target. Byte-copy counterpart to [`write_json_atomic`].
+fn copy_rules_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = dest.with_extension("json.permcheck-tmp");
+    std::fs::copy(src, &tmp)?;
+    std::fs::rename(&tmp, dest)
+}
+
 fn run_install(args: &[String]) {
     let scope = scope_from_args(args);
     let Some(path) = settings_path(scope) else {
         eprintln!("error: cannot resolve home directory (set HOME or USERPROFILE)");
         process::exit(3);
     };
-
-    let rules_path = match find_rules_arg(args) {
-        Some(p) => p,
-        None => {
-            eprintln!("error: --install requires --rules <path>");
-            eprintln!("hint: create a starter rules file with `permcheck --init-rules <path>`");
-            process::exit(3);
-        }
+    let Some(dest) = rules_dest_path(scope) else {
+        eprintln!("error: cannot resolve home directory (set HOME or USERPROFILE)");
+        process::exit(3);
     };
-
-    // Absolutize without touching the filesystem, then validate it actually
-    // loads — a broken rules file would deny every tool call.
-    let abs_rules = match std::path::absolute(&rules_path) {
+    // Absolute form baked into the hook command — a path in settings.json must
+    // resolve regardless of the hook's working directory.
+    let dest_abs = match std::path::absolute(&dest) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("error: cannot resolve rules path: {e}");
+            eprintln!("error: cannot resolve rules destination: {e}");
             process::exit(3);
         }
     };
-    if let Err(e) = load_rules(&abs_rules) {
-        eprintln!("error: {e}");
-        eprintln!(
-            "hint: create a starter rules file with `permcheck --init-rules {}`",
-            abs_rules.display()
-        );
-        process::exit(3);
+
+    // Land the canonical rules file at `dest` *before* touching settings.json,
+    // and never overwrite an existing one (avoid clobbering user edits). Each of
+    // these aborts the whole install (exit 3) on error or conflict.
+    match find_rules_arg(args) {
+        Some(rules_path) => install_copy_rules(&rules_path, &dest_abs),
+        None => install_seed_rules(&dest_abs),
     }
-    let Some(abs_rules_str) = abs_rules.to_str() else {
+
+    let Some(dest_str) = dest_abs.to_str() else {
         eprintln!("error: rules path is not valid UTF-8");
         process::exit(3);
     };
@@ -160,11 +179,15 @@ fn run_install(args: &[String]) {
         }
     };
 
-    let command = settings::hook_command(abs_rules_str);
+    let command = settings::hook_command(dest_str);
     let out = settings::install(&existing, &command);
 
     if out == existing && path.exists() {
-        println!("permcheck hook already up to date → {}", path.display());
+        println!(
+            "permcheck already configured → {}  (rules → {})",
+            path.display(),
+            dest_abs.display()
+        );
         process::exit(0);
     }
     if let Err(e) = write_json_atomic(&path, &out) {
@@ -173,6 +196,95 @@ fn run_install(args: &[String]) {
     }
     println!("Installed permcheck PreToolUse hook → {}", path.display());
     process::exit(0);
+}
+
+/// Copy mode for `--install --rules <src>`: land the policy file at the canonical
+/// `dest`. Validates `src` loads, and refuses to overwrite an existing `dest`
+/// whose content differs (an identical `dest` is a no-op). Aborts on error.
+fn install_copy_rules(src: &Path, dest: &Path) {
+    // Absolutize + validate the source — a broken rules file would deny everything.
+    let abs_src = match std::path::absolute(src) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: cannot resolve rules path: {e}");
+            process::exit(3);
+        }
+    };
+    if let Err(e) = load_rules(&abs_src) {
+        eprintln!("error: {e}");
+        eprintln!(
+            "hint: create a starter rules file with `permcheck --init-rules {}`",
+            abs_src.display()
+        );
+        process::exit(3);
+    }
+
+    // The source already *is* the canonical file — nothing to copy.
+    if abs_src == dest {
+        return;
+    }
+
+    match std::fs::read(dest) {
+        // `dest` already exists: only proceed if it is byte-identical, else refuse
+        // — never silently clobber a policy the user may have edited.
+        Ok(existing) => {
+            let incoming = match std::fs::read(&abs_src) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("error: cannot read {}: {e}", abs_src.display());
+                    process::exit(3);
+                }
+            };
+            if existing == incoming {
+                return; // identical — idempotent, no write
+            }
+            eprintln!(
+                "error: {} exists and differs from {}; remove it or edit it in place to change policy",
+                dest.display(),
+                abs_src.display()
+            );
+            process::exit(3);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if let Err(e) = copy_rules_atomic(&abs_src, dest) {
+                eprintln!("error: cannot write {}: {e}", dest.display());
+                process::exit(3);
+            }
+            println!("Copied rules → {}", dest.display());
+        }
+        Err(e) => {
+            eprintln!("error: cannot read {}: {e}", dest.display());
+            process::exit(3);
+        }
+    }
+}
+
+/// Auto-seed mode for `--install` with no `--rules`: reuse an existing canonical
+/// rules file (never overwrite it), or write a fresh starter. Aborts on error or
+/// a broken existing file (a broken policy must not be wired).
+fn install_seed_rules(dest: &Path) {
+    if dest.exists() {
+        if let Err(e) = load_rules(dest) {
+            eprintln!(
+                "error: existing rules file {} does not load: {e}",
+                dest.display()
+            );
+            process::exit(3);
+        }
+        println!("Using existing rules → {}", dest.display());
+        return;
+    }
+    let rules = permcheck::rules::starter_rules();
+    if let Err(e) = write_json_atomic(dest, &rules) {
+        eprintln!("error: cannot write {}: {e}", dest.display());
+        process::exit(3);
+    }
+    // The file we just wrote must load — a broken starter would deny everything.
+    if let Err(e) = load_rules(dest) {
+        eprintln!("error: wrote an invalid rules file ({e})");
+        process::exit(3);
+    }
+    println!("Wrote starter rules → {}", dest.display());
 }
 
 /// Write a secure starter rules file: the canonical `deny` list, `defaultMode`
@@ -395,7 +507,7 @@ fn print_help() {
   permcheck {green}<Tool>{reset} {green}<payload>{reset} --rules <path> [--json]   check one call (manual)
   permcheck {cyan}--hook{reset} --rules <path>                          hook mode: event JSON on stdin
   permcheck {cyan}--init-rules{reset} [path]                           write a secure starter rules file (default: permcheck.json)
-  permcheck {cyan}--install{reset} --rules <path> [scope]              wire the hook into settings.json
+  permcheck {cyan}--install{reset} [--rules <path>] [scope]            seed/copy rules under .claude and wire the hook
   permcheck {cyan}--uninstall{reset} [scope]                           remove the hook from settings.json
 
 {yellow}ARGUMENTS{reset}
@@ -411,7 +523,7 @@ fn print_help() {
   {cyan}--json{reset}           {red}(CLI mode only){reset} Print the hook-format JSON decision instead of using the exit code.
   {cyan}--hook{reset}           Read a PreToolUse event on stdin, write decision JSON, always exit 0.
   {cyan}--init-rules{reset} [path]  Write a secure starter rules file (path defaults to permcheck.json) — canonical deny list, empty allow/ask, defaultMode ask. Refuses to overwrite.
-  {cyan}--install{reset}        Idempotently add the PreToolUse hook to settings.json (needs {cyan}--rules{reset}).
+  {cyan}--install{reset}        Wire the PreToolUse hook into settings.json. With {cyan}--rules{reset} <path>, copies that file to the canonical location under .claude/; without it, writes a starter there. Never overwrites an existing rules file.
   {cyan}--uninstall{reset}      Idempotently remove the permcheck PreToolUse hook from settings.json.
   {cyan}-h, --help{reset}       Show this help.
   {cyan}-V, --version{reset}    Print the version and exit.

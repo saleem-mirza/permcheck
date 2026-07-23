@@ -77,30 +77,35 @@ fn install_user_creates_settings_and_is_idempotent() {
     assert!(settings.exists());
     let v = read_json(&settings);
     assert!(has_permcheck_hook(&v));
-    // rules path baked in, absolute and double-quoted.
+
+    // The rules file is copied to the canonical location under .claude/, and the
+    // hook references THAT path (not the user's source path).
+    let dest = home.join(".claude").join("permcheck.json");
+    assert!(dest.exists());
+    assert_eq!(fs::read(&dest).unwrap(), fs::read(&rules).unwrap());
     #[cfg(not(windows))]
     {
         // POSIX paths have no backslashes, so the escaped-quote substring appears
         // verbatim in the raw JSON text.
         let s = fs::read_to_string(&settings).unwrap();
-        assert!(s.contains(&format!("--rules \\\"{}\\\"", rules.display())));
+        assert!(s.contains(&format!("--rules \\\"{}\\\"", dest.display())));
     }
     #[cfg(windows)]
     {
         // The JSON escapes each path backslash (`\` -> `\\`), so scanning raw text
         // for the single-backslash path fails. Assert against the decoded command.
         let command = permcheck_command(&v).expect("permcheck hook command present");
-        assert!(command.contains(&format!("--rules \"{}\"", rules.display())));
+        assert!(command.contains(&format!("--rules \"{}\"", dest.display())));
     }
 
-    // Second install is a no-op: byte-identical file, "already up to date".
+    // Second install is a no-op: identical dest + wired hook → "already configured".
     let before = fs::read_to_string(&settings).unwrap();
     cmd(home, home)
         .args(["--install", "--rules"])
         .arg(&rules)
         .assert()
         .code(0)
-        .stdout(predicates::str::contains("already up to date"));
+        .stdout(predicates::str::contains("already configured"));
     assert_eq!(before, fs::read_to_string(&settings).unwrap());
 }
 
@@ -119,6 +124,8 @@ fn install_project_and_local_scopes() {
     assert!(has_permcheck_hook(&read_json(
         &proj.path().join(".claude").join("settings.json")
     )));
+    // Project scope seeds ./.claude/permcheck.json.
+    assert!(proj.path().join(".claude").join("permcheck.json").exists());
 
     cmd(home, proj.path())
         .args(["--install", "--local", "--rules"])
@@ -128,16 +135,113 @@ fn install_project_and_local_scopes() {
     assert!(has_permcheck_hook(&read_json(
         &proj.path().join(".claude").join("settings.local.json")
     )));
+    // Local scope uses the .local variant, distinct from the project file above.
+    assert!(
+        proj.path()
+            .join(".claude")
+            .join("permcheck.local.json")
+            .exists()
+    );
 }
 
 #[test]
-fn install_without_rules_is_config_error() {
+fn install_without_rules_seeds_starter() {
     let tmp = tempfile::tempdir().unwrap();
-    cmd(tmp.path(), tmp.path())
+    let home = tmp.path();
+
+    cmd(home, home)
         .arg("--install")
         .assert()
+        .code(0)
+        .stdout(predicates::str::contains("starter"));
+
+    // A starter rules file lands at the canonical location and the hook wires to it.
+    let dest = home.join(".claude").join("permcheck.json");
+    assert!(dest.exists());
+    assert!(has_permcheck_hook(&read_json(
+        &home.join(".claude").join("settings.json")
+    )));
+
+    // The seeded starter loads and enforces the canonical deny list.
+    let event = r#"{"tool_name":"Bash","tool_input":{"command":"sudo rm -rf /"}}"#;
+    cmd(home, home)
+        .args(["--hook", "--rules"])
+        .arg(&dest)
+        .write_stdin(event)
+        .assert()
+        .code(0)
+        .stdout(predicates::str::contains(r#""permissionDecision":"deny""#));
+}
+
+#[test]
+fn install_refuses_to_overwrite_differing_rules() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let rules = rules_file(home);
+
+    // First install copies the rules to the canonical dest.
+    cmd(home, home)
+        .args(["--install", "--rules"])
+        .arg(&rules)
+        .assert()
+        .code(0);
+    let dest = home.join(".claude").join("permcheck.json");
+    let settings = home.join(".claude").join("settings.json");
+    let dest_before = fs::read(&dest).unwrap();
+    let settings_before = fs::read_to_string(&settings).unwrap();
+
+    // Change the source and re-install: must refuse and touch nothing.
+    let mut f = fs::File::create(&rules).unwrap();
+    write!(f, r#"{{"allow":["Bash(ls:*)"]}}"#).unwrap();
+    cmd(home, home)
+        .args(["--install", "--rules"])
+        .arg(&rules)
+        .assert()
         .code(3)
-        .stderr(predicates::str::contains("--rules"));
+        .stderr(predicates::str::contains("differs"));
+    assert_eq!(dest_before, fs::read(&dest).unwrap());
+    assert_eq!(settings_before, fs::read_to_string(&settings).unwrap());
+}
+
+#[test]
+fn install_seed_reuses_existing_rules() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let dest = home.join(".claude").join("permcheck.json");
+    fs::create_dir_all(dest.parent().unwrap()).unwrap();
+    fs::write(&dest, RULES).unwrap();
+    let before = fs::read(&dest).unwrap();
+
+    // Auto-seed with an existing canonical file reuses it, never overwriting.
+    cmd(home, home)
+        .arg("--install")
+        .assert()
+        .code(0)
+        .stdout(predicates::str::contains("Using existing rules"));
+    assert_eq!(before, fs::read(&dest).unwrap());
+    assert!(has_permcheck_hook(&read_json(
+        &home.join(".claude").join("settings.json")
+    )));
+}
+
+#[test]
+fn install_rules_pointing_at_dest_is_safe() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let dest = home.join(".claude").join("permcheck.json");
+    fs::create_dir_all(dest.parent().unwrap()).unwrap();
+    fs::write(&dest, RULES).unwrap();
+
+    // Passing --rules pointing at the canonical file itself must not corrupt it.
+    cmd(home, home)
+        .args(["--install", "--rules"])
+        .arg(&dest)
+        .assert()
+        .code(0);
+    assert_eq!(fs::read_to_string(&dest).unwrap(), RULES);
+    assert!(has_permcheck_hook(&read_json(
+        &home.join(".claude").join("settings.json")
+    )));
 }
 
 #[test]

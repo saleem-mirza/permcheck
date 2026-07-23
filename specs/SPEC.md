@@ -86,7 +86,7 @@ Invoked as `permcheck <Tool> [payload] --rules <path> [--json]`.
 
 ### 2.3 Install / uninstall
 
-Invoked as `permcheck --install --rules <path> [scope]` and
+Invoked as `permcheck --install [--rules <path>] [scope]` and
 `permcheck --uninstall [scope]`. These **idempotently** add or remove permcheck's
 own `PreToolUse` hook entry in a Claude Code `settings.json`, and never touch
 unrelated settings or other hooks.
@@ -94,11 +94,17 @@ unrelated settings or other hooks.
 - **Scope** selects the target file (default `--user`): `--user`
   (`~/.claude/settings.json`), `--project` (`./.claude/settings.json`), or
   `--local` (`./.claude/settings.local.json`). At most one scope may be given.
-- **`--install`** requires `--rules <path>`; the path is absolutized and
-  validated (it must load) before writing, then baked into the injected command
-  `permcheck --hook --rules "<abs>"`. A permcheck hook already present is
-  rewritten in place (refreshing a changed rules path), never duplicated; a fresh
-  `{ "matcher": "*", … }` group is appended otherwise.
+- **`--install`** lands the policy file at a canonical location next to the
+  scope's settings file — `<scope .claude>/permcheck.json` (`permcheck.local.json`
+  for `--local`) — and bakes that absolute path into the injected command
+  `permcheck --hook --rules "<abs>"`. With `--rules <path>` the given file is
+  absolutized and validated (it must load), then **copied** into the canonical
+  location; with no `--rules` a secure starter (the canonical deny list,
+`defaultMode: "ask"`, empty `allow`/`ask`) is written there. An
+  existing canonical rules file is **never overwritten**: copy mode refuses (exit
+  `3`) when the source differs from it (an identical file is a no-op), and seed
+  mode reuses it as-is. A permcheck hook already present is rewritten in place,
+  never duplicated; a fresh `{ "matcher": "*", … }` group is appended otherwise.
 - **`--uninstall`** removes every permcheck hook entry and prunes emptied
   matcher groups / `PreToolUse` / `hooks` containers.
 - Detection is by command marker (contains `permcheck` and `--hook`), so a
@@ -110,9 +116,11 @@ unrelated settings or other hooks.
 
 ## 3. Rule file
 
-The rules file is passed explicitly via `--rules <path>`. There is no hardcoded
-default location; the caller (hook config or CLI user) always names the file.
-The canonical reference rule set ships at `rules/permcheck.json`.
+The rules file is passed explicitly via `--rules <path>`. At **decision time**
+there is no hardcoded default location — the hook config or CLI user always names
+the file. `--install` (§2.3) is the one place permcheck picks a location for you:
+it seeds/copies the policy to a canonical path next to `settings.json` and points
+the hook there. The canonical reference rule set ships at `rules/permcheck.json`.
 
 ### 3.1 Accepted shapes
 

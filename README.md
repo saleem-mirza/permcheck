@@ -72,7 +72,7 @@ brew install saleem-mirza/tap/permcheck
 
 Or [build](#build) it yourself. Either way, permcheck can then wire its own `PreToolUse` hook into a Claude Code `settings.json`, **idempotently** (safe to re-run; never touches your other settings or hooks).
 
-**First, a rules file** — needed by this method and by [method 3](#3-by-hand-in-settingsjson). If you don't have one, generate a secure starter: the canonical deny list (blocks `sudo`, `rm -rf`, secret reads, force-push, …), `defaultMode: ask`, and empty `allow`/`ask` you grow yourself:
+**A rules file.** `--install` seeds one for you if you don't pass `--rules` (see below), so you can skip straight to wiring. To create one explicitly — required for [method 3](#3-by-hand-in-settingsjson) — generate a secure starter: the canonical deny list (blocks `sudo`, `rm -rf`, secret reads, force-push, …), `defaultMode: ask`, and empty `allow`/`ask` you grow yourself:
 
 ```sh
 permcheck --init-rules ~/.claude/permcheck.json   # refuses to overwrite an existing file
@@ -82,12 +82,13 @@ permcheck --init-rules                             # no path → writes ./permch
 Then wire it in:
 
 ```
-permcheck --install --rules <path> [--user|--project|--local]
+permcheck --install [--rules <path>] [--user|--project|--local]
 permcheck --uninstall [--user|--project|--local]
 ```
 
 - **Scope** (default `--user`): `--user` → `~/.claude/settings.json`, `--project` → `./.claude/settings.json`, `--local` → `./.claude/settings.local.json`.
-- `--install` requires `--rules`; the path is absolutized, validated (it must load), and baked into the injected `permcheck --hook --rules "<abs>"` command. Re-running rewrites the existing entry in place rather than duplicating it.
+- **Rules placement.** `--install` lands the policy at a canonical path next to `settings.json` (`~/.claude/permcheck.json`, or `./.claude/permcheck.json` / `permcheck.local.json` for project/local) and points the hook there. With `--rules <path>` it validates that file loads and copies it into place; with no `--rules` it writes a secure starter there. It **never overwrites an existing rules file** — if `--rules` names a file whose content differs from one already at the canonical path, it refuses (exit 3) rather than clobber your policy.
+- Re-running rewrites the existing hook entry in place rather than duplicating it; a fully-configured install is a no-op.
 - `--uninstall` removes only permcheck's entry and prunes emptied hook containers. Works across Linux, macOS, and Windows.
 - **You don't create the file.** `--install` creates `settings.json` and its `.claude/` directory if absent, and preserves every existing key and hook otherwise. If the file exists but isn't valid JSON, it **errors instead of writing** — it can't corrupt a settings file.
 - **What the created file looks like.** When no `settings.json` exists, `--install` writes a minimal but complete Claude Code settings file — just the `hooks.PreToolUse` entry. Claude Code has no required keys (a settings file is any JSON object; every field is optional), so nothing else is needed and permcheck adds nothing else:
@@ -110,12 +111,13 @@ permcheck --uninstall [--user|--project|--local]
   ```
 
 ```sh
-permcheck --install --rules rules/permcheck.json          # → ~/.claude/settings.json
-permcheck --install --project --rules .permcheck/rules.json # → ./.claude/settings.json
-permcheck --uninstall                                       # remove from ~/.claude/settings.json
+permcheck --install                                       # seed ~/.claude/permcheck.json + wire ~/.claude/settings.json
+permcheck --install --rules rules/permcheck.json          # copy that policy to ~/.claude/permcheck.json, then wire
+permcheck --install --project                             # seed ./.claude/permcheck.json + wire ./.claude/settings.json
+permcheck --uninstall                                     # remove from ~/.claude/settings.json
 ```
 
-**Verify it wired up:** run `/hooks` in Claude Code — the permcheck `PreToolUse` entry appears there. Or re-run the same `--install`; a no-op prints `permcheck hook already up to date`.
+**Verify it wired up:** run `/hooks` in Claude Code — the permcheck `PreToolUse` entry appears there. Or re-run the same `--install`; a no-op prints `permcheck already configured`.
 
 ### 3. By hand in `settings.json`
 
