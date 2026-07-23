@@ -1,0 +1,27 @@
+class Permcheck < Formula
+  desc "PreToolUse permission engine for Claude Code"
+  homepage "https://github.com/saleem-mirza/marketplace"
+  version "__VERSION__"
+  license "Apache-2.0"
+
+  # Binaries are published as release assets on this public tap repo
+  # (the permcheck source repo is private). See release.yml -> publish-homebrew.
+  on_macos do
+    on_arm do
+      url "https://github.com/saleem-mirza/homebrew-tap/releases/download/v#{version}/permcheck-darwin-arm64"
+      sha256 "__SHA_ARM64__"
+    end
+    on_intel do
+      url "https://github.com/saleem-mirza/homebrew-tap/releases/download/v#{version}/permcheck-darwin-x64"
+      sha256 "__SHA_X64__"
+    end
+  end
+
+  def install
+    bin.install Dir["permcheck-darwin-*"].first => "permcheck"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/permcheck --version")
+  end
+end

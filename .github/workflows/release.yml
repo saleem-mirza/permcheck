@@ -190,3 +190,80 @@ jobs:
           git commit -m "permcheck ${tag}: source-free plugin bundle"
           git branch -M release-tmp main
           git push -f origin main
+
+  # Publish the Homebrew install path into the public, self-contained tap repo
+  # saleem-mirza/homebrew-tap (the permcheck source repo is PRIVATE, so its own
+  # release assets 404 for anonymous `brew` downloads). This job:
+  #   1. publishes the prebuilt macOS binaries as RELEASE ASSETS on homebrew-tap
+  #      (tag `v<version>`), which serve anonymous downloads;
+  #   2. renders Formula/permcheck.rb (pinning those assets' sha256) and commits
+  #      it into the same repo, so users can `brew install saleem-mirza/tap/permcheck`.
+  #
+  # Auth is PUBLISH_TOKEN — a fine-grained PAT with Contents: read/write on
+  # saleem-mirza/homebrew-tap only. (A deploy key can't reach the Releases API.)
+  publish-homebrew:
+    name: publish Homebrew formula
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out this repo (for the formula template)
+        uses: actions/checkout@v7
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Publish binaries + formula to the tap
+        env:
+          GH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+          TAP: saleem-mirza/homebrew-tap
+        run: |
+          set -euo pipefail
+
+          # Fail fast with a clear message if the PAT secret is missing or blank
+          # (e.g. `gh secret set` run non-interactively sets an empty value) —
+          # otherwise gh fails later with an opaque "set GH_TOKEN" error.
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::PUBLISH_TOKEN secret is empty or unset. Set a fine-grained PAT with Contents: read/write on ${TAP}." >&2
+            exit 1
+          fi
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="${{ github.event.inputs.tag }}"
+          fi
+          version="${tag#v}"      # 0.1.11
+          rel="v${version}"       # release tag on the tap repo
+
+          arm64_bin="$(find artifacts -type f -name 'permcheck-darwin-arm64' | head -n1)"
+          x64_bin="$(find artifacts -type f -name 'permcheck-darwin-x64' | head -n1)"
+
+          # 1. Publish both macOS binaries as release assets on the tap repo
+          #    (idempotent: create the release if absent, --clobber replaces on re-run).
+          if ! gh release view "$rel" -R "$TAP" >/dev/null 2>&1; then
+            gh release create "$rel" -R "$TAP" \
+              --title "permcheck ${rel}" \
+              --notes "permcheck ${rel} — prebuilt macOS binaries for the Homebrew formula."
+          fi
+          gh release upload "$rel" -R "$TAP" --clobber "$arm64_bin" "$x64_bin"
+
+          # 2. Pin the just-published assets and render the formula.
+          sha_arm64="$(sha256sum "$arm64_bin" | cut -d' ' -f1)"
+          sha_x64="$(sha256sum "$x64_bin" | cut -d' ' -f1)"
+          sed \
+            -e "s/__VERSION__/${version}/g" \
+            -e "s/__SHA_ARM64__/${sha_arm64}/g" \
+            -e "s/__SHA_X64__/${sha_x64}/g" \
+            homebrew/permcheck.rb.tmpl > permcheck.rb
+
+          # 3. Commit the formula into the tap via the Contents API
+          #    (create on first release, update thereafter).
+          content_b64="$(base64 -w0 permcheck.rb)"
+          existing_sha="$(gh api "repos/${TAP}/contents/Formula/permcheck.rb" \
+            --jq .sha 2>/dev/null || true)"
+          gh api -X PUT "repos/${TAP}/contents/Formula/permcheck.rb" \
+            -f message="permcheck ${tag}: update formula" \
+            -f content="$content_b64" \
+            ${existing_sha:+-f sha="$existing_sha"}

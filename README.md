@@ -31,7 +31,7 @@ Claude Code's native model resolves rule conflicts with a fixed precedence — a
 
 ## Installation
 
-permcheck decides `allow` / `ask` / `deny` for each tool call against a rules file you provide. There are three ways to wire it into Claude Code — **method 1 (the plugin) is easiest** and needs no local build; methods 2 and 3 are for a binary you build yourself.
+permcheck decides `allow` / `ask` / `deny` for each tool call against a rules file you provide. There are three ways to wire it into Claude Code — **method 1 (the plugin) is easiest** and needs no local build; methods 2 and 3 are for the standalone CLI, which you can install with Homebrew (`brew install saleem-mirza/tap/permcheck`) or [build yourself](#build).
 
 **Two files, two jobs** — don't conflate them:
 
@@ -64,7 +64,13 @@ The plugin decides against its bundled [`rules/permcheck.json`](rules/permcheck.
 
 ### 2. Self-wiring into `settings.json` (`--install` / `--uninstall`)
 
-If you [build](#build) the binary yourself instead of using the plugin, permcheck can wire its own `PreToolUse` hook into a Claude Code `settings.json`, **idempotently** (safe to re-run; never touches your other settings or hooks).
+Instead of the plugin, install the standalone `permcheck` CLI with Homebrew (macOS) — prebuilt, no Rust toolchain, no source:
+
+```sh
+brew install saleem-mirza/tap/permcheck
+```
+
+Or [build](#build) it yourself. Either way, permcheck can then wire its own `PreToolUse` hook into a Claude Code `settings.json`, **idempotently** (safe to re-run; never touches your other settings or hooks).
 
 **First, a rules file** — needed by this method and by [method 3](#3-by-hand-in-settingsjson). If you don't have one, generate a secure starter: the canonical deny list (blocks `sudo`, `rm -rf`, secret reads, force-push, …), `defaultMode: ask`, and empty `allow`/`ask` you grow yourself:
 
