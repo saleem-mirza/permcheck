@@ -100,11 +100,16 @@ unrelated settings or other hooks.
   `permcheck --hook --rules "<abs>"`. With `--rules <path>` the given file is
   absolutized and validated (it must load), then **copied** into the canonical
   location; with no `--rules` a secure starter (the canonical deny list,
-`defaultMode: "ask"`, empty `allow`/`ask`) is written there. An
+`defaultMode: "ask"`, empty `allow`/`ask`) is written there. `--rules` **requires
+  a value**: a bare `--rules` (no path, or one followed by a flag) is a usage
+  error (exit `3`), never a silent auto-seed. An
   existing canonical rules file is **never overwritten**: copy mode refuses (exit
   `3`) when the source differs from it (an identical file is a no-op), and seed
   mode reuses it as-is. A permcheck hook already present is rewritten in place,
-  never duplicated; a fresh `{ "matcher": "*", … }` group is appended otherwise.
+  never duplicated; a fresh `{ "matcher": "*", … }` group is appended otherwise —
+  **except** when that hook already targets a *non-canonical* rules path (e.g. a
+  legacy install): re-pointing it would silently abandon that policy, so
+  `--install` refuses (exit `3`) and directs the user to `--uninstall` first.
 - **`--uninstall`** removes every permcheck hook entry and prunes emptied
   matcher groups / `PreToolUse` / `hooks` containers.
 - Detection is by command marker (contains `permcheck` and `--hook`), so a

@@ -157,19 +157,20 @@ fn run_install(args: &[String]) {
             process::exit(3);
         }
     };
-
-    // Land the canonical rules file at `dest` *before* touching settings.json,
-    // and never overwrite an existing one (avoid clobbering user edits). Each of
-    // these aborts the whole install (exit 3) on error or conflict.
-    match find_rules_arg(args) {
-        Some(rules_path) => install_copy_rules(&rules_path, &dest_abs),
-        None => install_seed_rules(&dest_abs),
-    }
-
+    // Validate the destination is UTF-8 *before* touching the filesystem, so a
+    // non-UTF-8 path aborts without orphaning a half-written rules file.
     let Some(dest_str) = dest_abs.to_str() else {
         eprintln!("error: rules path is not valid UTF-8");
         process::exit(3);
     };
+
+    // Resolve the rules source. A bare `--rules` with no value (or one followed
+    // by a flag) is a usage error, not a request to auto-seed a starter.
+    let rules_arg = find_rules_arg(args);
+    if rules_arg.is_none() && args.iter().any(|a| a == "--rules") {
+        eprintln!("error: --rules requires a path");
+        process::exit(3);
+    }
 
     let existing = match read_settings(&path) {
         Ok(v) => v,
@@ -178,6 +179,27 @@ fn run_install(args: &[String]) {
             process::exit(3);
         }
     };
+
+    // Refuse to silently re-point an existing hook away from a non-canonical
+    // rules path — completing the install would abandon whatever policy that
+    // hook currently references. (A hook already pointing at `dest` is a no-op.)
+    if let Some(old) = settings::installed_rules_path(&existing)
+        && old != dest_str
+    {
+        eprintln!(
+            "error: an existing permcheck hook points at {old}; refusing to silently re-point it to {dest_str}"
+        );
+        eprintln!("hint: run `permcheck --uninstall [scope]` first, then re-install");
+        process::exit(3);
+    }
+
+    // Land the canonical rules file at `dest` *before* touching settings.json,
+    // and never overwrite an existing one (avoid clobbering user edits). Each of
+    // these aborts the whole install (exit 3) on error or conflict.
+    match rules_arg {
+        Some(rules_path) => install_copy_rules(&rules_path, &dest_abs),
+        None => install_seed_rules(&dest_abs),
+    }
 
     let command = settings::hook_command(dest_str);
     let out = settings::install(&existing, &command);
@@ -523,7 +545,7 @@ fn print_help() {
   {cyan}--json{reset}           {red}(CLI mode only){reset} Print the hook-format JSON decision instead of using the exit code.
   {cyan}--hook{reset}           Read a PreToolUse event on stdin, write decision JSON, always exit 0.
   {cyan}--init-rules{reset} [path]  Write a secure starter rules file (path defaults to permcheck.json) — canonical deny list, empty allow/ask, defaultMode ask. Refuses to overwrite.
-  {cyan}--install{reset}        Wire the PreToolUse hook into settings.json. With {cyan}--rules{reset} <path>, copies that file to the canonical location under .claude/; without it, writes a starter there. Never overwrites an existing rules file.
+  {cyan}--install{reset}        Wire the PreToolUse hook into settings.json. With {cyan}--rules{reset} <path>, copies that file to the canonical location under .claude/; without it, writes a starter there. Never overwrites an existing rules file, and refuses to re-point a hook that already targets a different rules path (uninstall first).
   {cyan}--uninstall{reset}      Idempotently remove the permcheck PreToolUse hook from settings.json.
   {cyan}-h, --help{reset}       Show this help.
   {cyan}-V, --version{reset}    Print the version and exit.
@@ -579,7 +601,10 @@ fn find_rules_arg(args: &[String]) -> Option<PathBuf> {
             return Some(PathBuf::from(path));
         }
         if arg == "--rules" {
-            return iter.next().map(PathBuf::from);
+            // A following flag (or nothing) means no value — don't swallow it as
+            // the path (mirrors `init_rules_path`). Callers treat this as a
+            // dangling `--rules` and error, rather than silently seeding.
+            return iter.next().filter(|a| !a.starts_with("--")).map(PathBuf::from);
         }
     }
     None

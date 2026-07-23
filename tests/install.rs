@@ -337,3 +337,69 @@ fn installed_hook_command_actually_decides() {
         .code(0)
         .stdout(predicates::str::contains(r#""permissionDecision":"deny""#));
 }
+
+#[test]
+fn install_refuses_to_repoint_noncanonical_hook() {
+    // Simulate a legacy install whose hook points at a non-canonical rules path
+    // (the pre-canonical-dest behavior). A bare `--install` must refuse rather
+    // than silently re-point the hook and abandon that policy file.
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let rules = rules_file(home);
+
+    cmd(home, home)
+        .args(["--install", "--rules"])
+        .arg(&rules)
+        .assert()
+        .code(0);
+
+    let settings = home.join(".claude").join("settings.json");
+    let dest = home.join(".claude").join("permcheck.json");
+    // Rewrite the baked command to reference a bogus, non-canonical path.
+    let rewired = fs::read_to_string(&settings)
+        .unwrap()
+        .replace(&dest.display().to_string(), "/custom/policy.json");
+    fs::write(&settings, &rewired).unwrap();
+    let dest_before = fs::read(&dest).unwrap();
+
+    cmd(home, home)
+        .arg("--install")
+        .assert()
+        .code(3)
+        .stderr(predicates::str::contains("re-point"));
+
+    // Nothing touched: the settings and canonical rules file are byte-identical.
+    assert_eq!(rewired, fs::read_to_string(&settings).unwrap());
+    assert_eq!(dest_before, fs::read(&dest).unwrap());
+}
+
+#[test]
+fn install_rules_flag_without_value_errors() {
+    // A dangling `--rules` (no path) is a usage error, not a request to seed.
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+
+    cmd(home, home)
+        .args(["--install", "--rules"])
+        .assert()
+        .code(3)
+        .stderr(predicates::str::contains("requires a path"));
+
+    // No starter was seeded and no hook was wired.
+    assert!(!home.join(".claude").join("permcheck.json").exists());
+    assert!(!home.join(".claude").join("settings.json").exists());
+}
+
+#[test]
+fn install_rules_does_not_swallow_flag() {
+    // `--rules` followed by a flag must not treat the flag as the path; it is a
+    // dangling `--rules` → clean usage error, not a "cannot load --user" failure.
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+
+    cmd(home, home)
+        .args(["--install", "--rules", "--user"])
+        .assert()
+        .code(3)
+        .stderr(predicates::str::contains("requires a path"));
+}

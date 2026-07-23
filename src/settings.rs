@@ -33,6 +33,24 @@ pub fn is_permcheck_hook(command: &str) -> bool {
     command.contains("permcheck") && command.contains("--hook")
 }
 
+/// The `--rules` path baked into the first installed permcheck PreToolUse hook,
+/// if any. Parses the value out of the single known command shape produced by
+/// [`hook_command`] (`permcheck --hook --rules "<abs>"`): everything between the
+/// `--rules "` marker and the next `"`. Used by `--install` to detect (and
+/// refuse) a re-point that would silently abandon a hook's current policy file.
+pub fn installed_rules_path(settings: &Value) -> Option<String> {
+    let groups = settings["hooks"]["PreToolUse"].as_array()?;
+    let command = groups.iter().find_map(|g| {
+        g["hooks"].as_array()?.iter().find_map(|h| {
+            let c = h.get("command").and_then(Value::as_str)?;
+            is_permcheck_hook(c).then_some(c)
+        })
+    })?;
+    let rest = command.split_once(r#"--rules ""#)?.1;
+    let path = rest.split_once('"')?.0;
+    (!path.is_empty()).then(|| path.to_string())
+}
+
 /// Return a new settings object with the permcheck PreToolUse hook present.
 ///
 /// Idempotent: if a permcheck hook already exists anywhere under
@@ -211,6 +229,27 @@ mod tests {
         assert_eq!(count, 1);
         assert!(second.to_string().contains("/new.json"));
         assert!(!second.to_string().contains("/old.json"));
+    }
+
+    #[test]
+    fn installed_rules_path_reads_the_baked_path() {
+        let out = install(&json!({}), &hook_command("/abs/permcheck.json"));
+        assert_eq!(
+            installed_rules_path(&out).as_deref(),
+            Some("/abs/permcheck.json")
+        );
+        // No permcheck hook → None.
+        assert_eq!(installed_rules_path(&json!({})), None);
+        assert_eq!(
+            installed_rules_path(&json!({
+                "hooks": { "PreToolUse": [
+                    { "matcher": "Bash", "hooks": [
+                        { "type": "command", "command": "my-own-linter" }
+                    ] }
+                ] }
+            })),
+            None
+        );
     }
 
     #[test]
