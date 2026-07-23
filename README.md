@@ -27,7 +27,7 @@ Claude Code's native model resolves rule conflicts with a fixed precedence — a
 | **Install** | `/plugin install permcheck@zethian` (see [Installation](#installation)) |
 | **Language** | Rust (edition 2024) |
 | **Role** | defense-in-depth overlay — *not* a sandbox or security boundary |
-| **License** | [GPL-3.0](LICENSE) |
+| **License** | [Apache-2.0](LICENSE) |
 
 ## Installation
 
@@ -282,4 +282,4 @@ Packaging the plugin and cutting a release are documented in [`CONTRIBUTING.md`]
 
 ## License
 
-Licensed under the [GNU General Public License v3.0](LICENSE).
+Licensed under the [Apache License, Version 2.0](LICENSE).

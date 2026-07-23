@@ -8,7 +8,7 @@
   },
   "homepage": "https://github.com/saleem-mirza/permcheck",
   "repository": "https://github.com/saleem-mirza/permcheck",
-  "license": "GPL-3.0",
+  "license": "Apache-2.0",
   "keywords": [
     "security",
     "permissions",
