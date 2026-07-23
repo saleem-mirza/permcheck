@@ -355,10 +355,21 @@ fn install_refuses_to_repoint_noncanonical_hook() {
 
     let settings = home.join(".claude").join("settings.json");
     let dest = home.join(".claude").join("permcheck.json");
-    // Rewrite the baked command to reference a bogus, non-canonical path.
-    let rewired = fs::read_to_string(&settings)
-        .unwrap()
-        .replace(&dest.display().to_string(), "/custom/policy.json");
+    // Rewrite the baked command to reference a bogus, non-canonical path. Mutate
+    // the parsed JSON (not the raw text) so this is independent of how the path is
+    // escaped on the platform — on Windows the stored path is drive-lettered with
+    // escaped backslashes, which a raw `dest.display()` replace would miss.
+    let mut v = read_json(&settings);
+    for group in v["hooks"]["PreToolUse"].as_array_mut().unwrap() {
+        for h in group["hooks"].as_array_mut().unwrap() {
+            let c = h["command"].as_str().unwrap();
+            if c.contains("permcheck") && c.contains("--hook") {
+                h["command"] =
+                    serde_json::json!("permcheck --hook --rules \"/custom/policy.json\"");
+            }
+        }
+    }
+    let rewired = serde_json::to_string_pretty(&v).unwrap();
     fs::write(&settings, &rewired).unwrap();
     let dest_before = fs::read(&dest).unwrap();
 
