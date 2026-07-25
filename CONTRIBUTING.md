@@ -2,7 +2,7 @@
 
 Building from source, tests, and benchmarks are covered in the
 [README](README.md#build). This document covers the **code map** and **packaging /
-releasing** — the parts a maintainer needs.
+releasing**, the parts a maintainer needs.
 
 ## Code map
 
@@ -22,15 +22,15 @@ binary. Decision pipeline: `rules` → `matcher` → `engine`.
 
 Tests live in `tests/` (separate crates, never linked into the binary).
 
-`src/rules.rs` embeds the canonical `rules/permcheck.json` via `include_str!` — it is
-the source of the deny list `starter_rules()` writes for `permcheck --init-rules`, and is
+`src/rules.rs` embeds the canonical `rules/permcheck.json` via `include_str!`, which is
+the source of the deny list `starter_rules()` writes for `permcheck --init-rules` and is
 **not** a decision-time default (the hook always requires an explicit `--rules`).
 
 ## Building the plugin binaries
 
 The plugin's `bin/` binaries come from the Rust source in the repo root, and its
 `rules/permcheck.json` is a generated copy of the **canonical** top-level
-`rules/permcheck.json` (single source of truth — edit only the top-level file):
+`rules/permcheck.json` (single source of truth, edit only the top-level file):
 
 ```sh
 cargo build --release
@@ -38,8 +38,8 @@ cp target/release/permcheck plugin/bin/permcheck-darwin-arm64   # this host
 cp rules/permcheck.json plugin/rules/permcheck.json         # bundled rules copy
 ```
 
-Both `plugin/bin/permcheck-*` and `plugin/rules/permcheck.json` are gitignored — they
-are generated, not committed. The release workflow produces them for every platform; for
+Both `plugin/bin/permcheck-*` and `plugin/rules/permcheck.json` are gitignored,
+generated, not committed. The release workflow produces them for every platform. For
 local `--plugin-dir` testing, run the two `cp`s above first so the plugin has a binary
 and its rules.
 
@@ -85,7 +85,7 @@ Users install from a **dedicated, source-free repo**,
 ```
 
 Its default branch holds the catalog (`.claude-plugin/marketplace.json`, whose plugin
-`source` is the relative path `"./plugin"` — not a `git-subdir`, since the plugin lives
+`source` is the relative path `"./plugin"`, not a `git-subdir`, since the plugin lives
 in the same repo) and the `plugin/` bundle with binaries. The repo has no `src/` or
 `Cargo.*`, so even the full clone the shorthand performs is source-free. Verified
 end-to-end against Claude Code 2.1.204 (add → install → hook runs, payload source-free).
@@ -104,9 +104,9 @@ The `publish-marketplace` job in `release.yml` pushes the source-free bundle to
 README, refreshes `plugin/` with the source files plus the freshly built binaries, and
 force-pushes an orphan commit (so old binaries don't pile up in history). Editing the
 catalog itself (adding a plugin, changing keywords) is done directly in the marketplace
-repo — this repo no longer carries a `marketplace.json`.
+repo. This repo no longer carries a `marketplace.json`.
 
-**Auth — a write deploy key.** The default `GITHUB_TOKEN` is scoped to this repo and
+**Auth: a write deploy key.** The default `GITHUB_TOKEN` is scoped to this repo and
 cannot push to another, so the job authenticates with a **deploy key** on
 `saleem-mirza/marketplace` (repo-scoped, no expiry, not tied to a personal account). It
 is already configured: the public half is a write deploy key on that repo, and the

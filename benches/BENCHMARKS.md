@@ -2,11 +2,11 @@
 
 Measured with `cargo bench` (Criterion) against `rules/permcheck.json`, the
 canonical reference rule set, on a **MacBook Pro (Apple M3 Max)**, macOS 26,
-release profile (`opt-level=z`, LTO, `strip`). Numbers are indicative; re-run
+release profile (`opt-level=z`, LTO, `strip`). Numbers are indicative. Re-run
 locally for your hardware.
 
 Benchmarks are grouped by matcher family, plus the one-time rule-set load. Run
-`cargo bench` to reproduce; each case exercises a distinct decision path.
+`cargo bench` to reproduce. Each case exercises a distinct decision path.
 
 ### Loading (one-time, per process)
 
@@ -14,7 +14,7 @@ Benchmarks are grouped by matcher family, plus the one-time rule-set load. Run
 |---|---|---|
 | `load/reference_set` | parse + compile the whole reference set (51 allow · 17 ask · 142 deny) | ~50 µs |
 
-### `bash` — winner selection, cross-check, wrapper re-decision, compound split (§6.3, §8)
+### `bash`: winner selection, cross-check, wrapper re-decision, compound split (§6.3, §8)
 
 | Case | Command | Decision | Time |
 |---|---|---|---|
@@ -33,7 +33,7 @@ Benchmarks are grouped by matcher family, plus the one-time rule-set load. Run
 | `compound_pipe` | `cat file.txt \| grep something` | (2 units, both cross-checked) | ~6.2 µs |
 | `compound_subshell` | `echo $(kubectl delete pod x)` | deny (substitution extracted) | ~3.3 µs |
 
-### `path` — candidate forms vs ~30 path globs (§6.5, §7)
+### `path`: candidate forms vs ~30 path globs (§6.5, §7)
 
 | Case | Call | Decision | Time |
 |---|---|---|---|
@@ -44,7 +44,7 @@ Benchmarks are grouped by matcher family, plus the one-time rule-set load. Run
 | `write_deny_bashrc` | `Write(/home/user/.bashrc)` | deny | ~2.1 µs |
 | `glob_allow_skills` | `Glob(~/.claude/skills/x)` (`~` expansion) | allow | ~0.46 µs |
 
-### `generic` — URL/host extraction and the `defaultMode` fall-back (§6.5)
+### `generic`: URL/host extraction and the `defaultMode` fall-back (§6.5)
 
 | Case | Call | Decision | Time |
 |---|---|---|---|
@@ -52,39 +52,39 @@ Benchmarks are grouped by matcher family, plus the one-time rule-set load. Run
 | `websearch_deny` | `WebSearch(rust async)` | deny | ~0.22 µs |
 | `mcp_default_ask` | `mcp__db__query(SELECT 1)` | ask (`defaultMode` fall-back) | ~0.20 µs |
 
-**Reading the numbers.** Simple single-command Bash calls are ~1.5–1.8 µs — a few
+**Reading the numbers.** Simple single-command Bash calls are ~1.5-1.8 µs, a few
 hundred prefix comparisons over the ~139 Bash rules. Cost rises with *work*, not
 tier: `wrapper_env_aws` (~2.7 µs) decides the command twice (the wrapper and the
-wrapped command); `compound_pipe` (~6.2 µs) splits into two units and runs the
+wrapped command), and `compound_pipe` (~6.2 µs) splits into two units and runs the
 file-access cross-check on each, matching operands against every `Read` deny glob
 × up to three candidate forms. Path cases are naturally pricier than Generic
-because there are ~30 path globs to test; Generic has only the two bare
-`WebFetch`/`WebSearch` denies, so it finishes in ~200–440 ns.
+because there are ~30 path globs to test, whereas Generic has only the two bare
+`WebFetch`/`WebSearch` denies, so it finishes in ~200-440 ns.
 
 Path matching is a plain recursive glob matcher: rule specifiers are trusted
 operator config (the rule file is the source of truth) and use at most a few
 wildcards, so backtracking stays cheap. It is intentionally **not** hardened
-against adversarial many-wildcard patterns — a documented non-goal (SPEC §9.2).
+against adversarial many-wildcard patterns, a documented non-goal (SPEC §9.2).
 Every figure sits far below the ~3 ms process-spawn floor, so it is immaterial
 end-to-end.
 
 ## Why this is fast (and why the manifest looks the way it does)
 
 The production cost model is **one fresh, short-lived process per tool call**, so
-**startup cost dominates** — there is no steady state to amortize against. Two
+**startup cost dominates**: there is no steady state to amortize against. Two
 manifest choices in `Cargo.toml` follow directly:
 
 - **No `regex`, no `clap`.** Every matcher (§6.5) and the argument parser (§2)
-  are hand-written. Hand-written globs cost microseconds cold; compiling a regex
+  are hand-written. Hand-written globs cost microseconds cold, and compiling a regex
   set would cost milliseconds each launch with nothing to amortize. Loading and
-  compiling the entire reference rule set is ~50 µs — cheaper than a single
+  compiling the entire reference rule set is ~50 µs, cheaper than a single
   regex compilation would be.
 - **`opt-level = "z"` + LTO + `strip`.** Size, not steady-state throughput, is
-  the lever for a cold-start binary; a smaller image pages in faster. The
+  the lever for a cold-start binary, and a smaller image pages in faster. The
   release binary is ~360 KB.
 - **`panic = "unwind"`** is retained (not `abort`) because hook mode relies on
   `catch_unwind` to convert any unexpected panic into `deny` (§9.1).
 
 End-to-end, a cold CLI invocation (process spawn + load + evaluate + exit)
-measures ~2.9 ms, almost entirely OS process-creation overhead; the engine's own
+measures ~2.9 ms, almost entirely OS process-creation overhead. The engine's own
 work is the microsecond figures above.

@@ -1,7 +1,7 @@
-# permcheck — Claude Code plugin
+# permcheck: Claude Code plugin
 
-Runs [permcheck](https://github.com/saleem-mirza/permcheck) — a specificity-aware
-permission engine — as a **PreToolUse hook**: every tool call (Bash,
+Runs [permcheck](https://github.com/saleem-mirza/permcheck), a specificity-aware
+permission engine, as a **PreToolUse hook**: every tool call (Bash,
 Read/Write/Edit, WebFetch/WebSearch, MCP, …) is decided `allow`, `ask`, or `deny`
 before it runs. For what permcheck is, how it decides, and use cases, see the
 [main README](https://github.com/saleem-mirza/permcheck#readme) and
@@ -17,8 +17,8 @@ From the marketplace:
 ```
 
 The plugin is served from the dedicated
-[`saleem-mirza/marketplace`](https://github.com/saleem-mirza/marketplace) repo — a
-source-free bundle of just the catalog, hook, rules, and prebuilt binaries — so nothing
+[`saleem-mirza/marketplace`](https://github.com/saleem-mirza/marketplace) repo, a
+source-free bundle of only the catalog, hook, rules, and prebuilt binaries, so nothing
 pulls the Rust source onto your machine, and once fetched the plugin runs offline.
 
 For local development, point Claude Code straight at this directory:
@@ -28,29 +28,29 @@ claude --plugin-dir /path/to/permcheck/plugin
 ```
 
 Then ask Claude to run `python3 -m http.server` (blocked) versus
-`python3 script.py` (allowed); `/plugin` confirms it loaded.
+`python3 script.py` (allowed). `/plugin` confirms it loaded.
 
 ## How it activates (no `settings.json` edit)
 
 Enabling the plugin **automatically** makes permcheck your `PreToolUse` permission
-engine — functionally identical to a `PreToolUse` hook in `settings.json`, but with
+engine, functionally identical to a `PreToolUse` hook in `settings.json`, but with
 nothing to hand-wire:
 
 - Claude Code loads `hooks/hooks.json` and runs the hook on **every** tool call the
-  moment the plugin is enabled. Your `settings.json` is **not** modified — the
+  moment the plugin is enabled. Your `settings.json` is **not** modified, and the
   plugin is only recorded under `enabledPlugins`.
 - Run `/hooks` to see it, labeled with source **`Plugin`**.
 - It **merges with** (doesn't replace) any existing PreToolUse hooks, and across
   hooks a `deny` wins.
-- To turn it off, disable or uninstall the plugin via `/plugin`; there is nothing to
+- To turn it off, disable or uninstall the plugin via `/plugin`. There is nothing to
   unpick from `settings.json`.
 
 ## Configuring rules
 
 The hook decides against a JSON rule file, resolved first-hit-wins:
 
-1. `$PERMCHECK_RULES` — an absolute path you set.
-2. `<project>/.permcheck/rules.json` — per-project rules (via
+1. `$PERMCHECK_RULES`: an absolute path you set.
+2. `<project>/.permcheck/rules.json`: per-project rules (via
    `$CLAUDE_PROJECT_DIR`).
 3. The bundled default `rules/permcheck.json` (the canonical reference set).
 
@@ -60,8 +60,8 @@ For the rule grammar and matching semantics, see the
 
 ## Platforms
 
-`hooks/permcheck-hook.sh` (POSIX) — plus `hooks/permcheck-hook.cmd` for native
-Windows `cmd.exe` — selects a prebuilt binary from `bin/` by OS/arch:
+`hooks/permcheck-hook.sh` (POSIX), plus `hooks/permcheck-hook.cmd` for native
+Windows `cmd.exe`, selects a prebuilt binary from `bin/` by OS/arch:
 `permcheck-{darwin,linux,windows}-{arm64,x64}`. macOS, Linux, and
 Windows-under-git-bash are handled by the shell wrapper.
 
