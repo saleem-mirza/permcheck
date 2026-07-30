@@ -572,45 +572,33 @@ fn print_help() {
   echo '{{…}}' | permcheck {cyan}--hook{reset}               --rules rules/permcheck.json    # hook
 
 {yellow}NOTE{reset}  A specifier like {red}"aws:*"{reset} is a rule pattern, not a payload — passing it checks the
-      literal command "aws:*" (which default-denies). Pass a real command instead."#,
-        bold = bold,
-        yellow = yellow,
-        cyan = cyan,
-        green = green,
-        red = red,
-        reset = reset,
+      literal command "aws:*" (which default-denies). Pass a real command instead."#
     );
 }
 
 /// The path argument for `--init-rules`, in either form: `--init-rules <path>`
-/// or `--init-rules=<path>`. A following flag (or nothing) means no path.
+/// or `--init-rules=<path>`.
 fn init_rules_path(args: &[String]) -> Option<PathBuf> {
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        if let Some(path) = arg.strip_prefix("--init-rules=") {
-            return Some(PathBuf::from(path));
-        }
-        if arg == "--init-rules" {
-            return iter
-                .next()
-                .filter(|a| !a.starts_with("--"))
-                .map(PathBuf::from);
-        }
-    }
-    None
+    flag_value(args, "--init-rules")
 }
 
 /// Find the `--rules` value in either form: `--rules <path>` or `--rules=<path>`.
 fn find_rules_arg(args: &[String]) -> Option<PathBuf> {
+    flag_value(args, "--rules")
+}
+
+/// The value of a path-taking flag, in either `--flag=<path>` or `--flag <path>`
+/// form. A following flag (or nothing) means no value: the next token is not
+/// swallowed as the path, so callers see a dangling flag and error rather than
+/// silently seeding.
+fn flag_value(args: &[String], flag: &str) -> Option<PathBuf> {
+    let eq_prefix = format!("{flag}=");
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
-        if let Some(path) = arg.strip_prefix("--rules=") {
+        if let Some(path) = arg.strip_prefix(&eq_prefix) {
             return Some(PathBuf::from(path));
         }
-        if arg == "--rules" {
-            // A following flag (or nothing) means no value — don't swallow it as
-            // the path (mirrors `init_rules_path`). Callers treat this as a
-            // dangling `--rules` and error, rather than silently seeding.
+        if arg == flag {
             return iter
                 .next()
                 .filter(|a| !a.starts_with("--"))

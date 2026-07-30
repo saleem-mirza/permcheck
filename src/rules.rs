@@ -86,23 +86,16 @@ impl RuleSet {
     }
 
     /// Author-time lint warnings that do **not** block loading (a flagged rule is
-    /// inert or resolved safely by the engine, not dangerous). The binary prints
-    /// these to stderr in the CLI-check and `--install` paths, never in hook mode.
+    /// inert, not dangerous). The binary prints these to stderr in the CLI-check
+    /// and `--install` paths, never in hook mode.
     ///
-    /// Two checks:
-    ///
-    /// 1. **Dead rule.** A Bash `cmd:*` specifier whose prefix contains `*`. The
-    ///    `cmd:*` form matches `cmd` literally, so an interior `*` is a literal
-    ///    asterisk and the rule matches nothing (§11.2).
-    /// 2. **Cross-tier conflict.** A less-restrictive rule that outscores a more-
-    ///    restrictive rule it overlaps without being a subset of. Specificity says
-    ///    the permissive rule wins; the subset guard (§6.3a) makes the restrictive
-    ///    one win on the shared inputs. Safe either way, but the disagreement is
-    ///    almost always an authoring surprise worth flagging.
+    /// **Dead rule.** A Bash `cmd:*` specifier whose prefix contains `*`. The
+    /// `cmd:*` form matches `cmd` literally, so an interior `*` is a literal
+    /// asterisk and the rule matches nothing (§11.2).
     pub fn lint_warnings(&self) -> Vec<String> {
         let mut out = Vec::new();
 
-        // 1. Dead `cmd:*` rules with an interior `*`.
+        // Dead `cmd:*` rules with an interior `*`.
         for rule in &self.rules {
             if let Matcher::Bash(matcher::BashMatcher::Prefix(prefix)) = &rule.matcher
                 && prefix.contains('*')
@@ -110,41 +103,6 @@ impl RuleSet {
                 out.push(format!(
                     "rule `{}` has `*` before `:*`; the `cmd:*` form matches `cmd` literally, so the `*` is a literal asterisk and this rule matches nothing. For a mid-command wildcard use the glob form (no `:*`).",
                     rule.source,
-                ));
-            }
-        }
-
-        // 2. Cross-tier conflicts: a less-restrictive rule outscoring a more-
-        // restrictive one it overlaps without refining. Cheap filters (same tool,
-        // different tier, higher specificity) run before the automaton work.
-        let n = self.rules.len();
-        for i in 0..n {
-            for j in (i + 1)..n {
-                let (a, b) = (&self.rules[i], &self.rules[j]);
-                if a.tool != b.tool || a.tier == b.tier {
-                    continue;
-                }
-                // `x` less restrictive, `y` more restrictive.
-                let (x, y) = if a.tier < b.tier { (a, b) } else { (b, a) };
-                if x.specificity <= y.specificity {
-                    continue; // specificity already agrees with the guard
-                }
-                if !matcher::matchers_intersect(&x.matcher, &y.matcher) {
-                    continue; // no shared input -> no conflict
-                }
-                if matcher::matcher_subset(&x.matcher, &y.matcher) {
-                    continue; // a genuine narrow exception, intended
-                }
-                out.push(format!(
-                    "conflicting rules: `{}` (specificity {}, {}) outscores `{}` (specificity {}, {}) but their patterns overlap without the first being a subset of the second. On shared inputs the more-restrictive `{}` wins (subset guard), not the higher-scoring `{}`. Make the first a subset of the second if you intend it to override.",
-                    x.source,
-                    x.specificity,
-                    x.tier.label(),
-                    y.source,
-                    y.specificity,
-                    y.tier.label(),
-                    y.tier.label(),
-                    x.tier.label(),
                 ));
             }
         }
@@ -329,59 +287,12 @@ mod lint_tests {
 
     #[test]
     fn reference_set_has_no_lint_warnings() {
-        // The shipped policy is clean under both lints: no dead rules and no
-        // cross-tier conflict where a permissive rule outscores a deny it does
-        // not refine.
+        // The shipped policy has no dead rules.
         let rs = RuleSet::load_str(DEFAULT_RULES).unwrap();
         assert!(
             rs.lint_warnings().is_empty(),
             "reference rules have lint warnings: {:?}",
             rs.lint_warnings()
-        );
-    }
-
-    fn conflicts(json: &str) -> Vec<String> {
-        RuleSet::load_str(json)
-            .unwrap()
-            .lint_warnings()
-            .into_iter()
-            .filter(|w| w.contains("conflicting rules"))
-            .collect()
-    }
-
-    #[test]
-    fn cross_tier_overlap_without_subset_warns() {
-        // The inversion footgun: a longer allow that outscores a deny it overlaps
-        // without refining. The engine resolves it safely; the lint surfaces it.
-        let w = conflicts(
-            r#"{"allow":["Bash(kubectl * --namespace prod)"],"deny":["Bash(kubectl delete:*)"]}"#,
-        );
-        assert_eq!(w.len(), 1);
-        assert!(w[0].contains("kubectl * --namespace prod"));
-        assert!(w[0].contains("kubectl delete"));
-
-        // The same shape across path globs.
-        assert_eq!(
-            conflicts(r#"{"allow":["Read(/**/passwd)"],"deny":["Read(/etc/**)"]}"#).len(),
-            1
-        );
-    }
-
-    #[test]
-    fn genuine_and_unrelated_pairs_do_not_warn() {
-        // Subset exception (aws describe under aws): intended, no warning.
-        assert!(
-            conflicts(r#"{"allow":["Bash(aws * describe-*)"],"deny":["Bash(aws:*)"]}"#).is_empty()
-        );
-        // Disjoint commands never conflict.
-        assert!(conflicts(r#"{"allow":["Bash(ls:*)"],"deny":["Bash(rm:*)"]}"#).is_empty());
-        // Same tier is not a cross-tier conflict.
-        assert!(conflicts(r#"{"deny":["Bash(aws:*)","Bash(aws * describe-*)"]}"#).is_empty());
-        // When the deny is already the more specific rule, specificity and the
-        // guard agree, so there is nothing to flag.
-        assert!(
-            conflicts(r#"{"ask":["Bash(git push:*)"],"deny":["Bash(git push --force:*)"]}"#)
-                .is_empty()
         );
     }
 }

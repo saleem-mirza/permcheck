@@ -242,40 +242,10 @@ tier)` pair, compared lexicographically:
 3. On a full tie (equal specificity and tier), the **first rule in file order**
    is reported, for a stable, deterministic decision.
 
-This selection, refined by the subset guard (§6.3a), is the **entire** decision
-for Path and Generic tools (Read, Write, Edit, Glob, Grep, NotebookEdit,
-WebFetch, WebSearch, MCP, …). Only `Bash` adds a step: it first decomposes the
-command into units (§8) and applies this selection per unit.
-
-### 6.3a Subset guard (two-way override safety)
-
-Specificity is a **character count**, a proxy for how narrow a rule is, not a
-measure of its match set. Where the two diverge a longer specifier matches a
-broader set than a shorter one, so §6.3 alone would let a less-restrictive rule
-override a more-restrictive rule it does not actually refine, silently defeating
-a `deny`. The guard removes that hole.
-
-After §6.3 selects a winner `W`, for every matching rule `R` strictly more
-restrictive than `W` (`R.tier > W.tier`):
-
-1. `W` overrides `R` only when `L(W) ⊆ L(R)`: every payload `W` matches, `R` also
-   matches, so `W` is a genuine narrow exception carved out of `R`.
-2. If any such `R` is **not** a proven superset of `W`, the winner becomes the
-   most restrictive of those `R` (ties by first file order). Otherwise `W`
-   stands.
-
-The guard only ever **raises** restrictiveness; it never loosens the §6.3
-verdict. The containment test is **sound and incomplete**: it returns true only
-for a proven subset, and an unproven pair is treated as non-subset, so the
-more-restrictive rule wins (fail-closed). A narrow allow that is a real subset of
-a broad deny (`Bash(aws * describe-*)` under `Bash(aws:*)`) still wins; a longer
-allow that merely overlaps a deny (`Bash(kubectl * --namespace prod)` against
-`Bash(kubectl delete:*)`) does not.
-
-The guard resolves this at decision time. `RuleSet::lint_warnings` (§11.2)
-surfaces the same conflict at **author time**, so a rule set that relies on the
-guard to override an author's naive specificity reading is flagged rather than
-silently resolved.
+This selection is the **entire** decision for Path and Generic tools (Read,
+Write, Edit, Glob, Grep, NotebookEdit, WebFetch, WebSearch, MCP, …). Only `Bash`
+adds a step: it first decomposes the command into units (§8) and applies this
+selection per unit.
 
 ### 6.4 Default decision
 
@@ -517,11 +487,8 @@ correction backlog for the reference file.
    interior wildcard; use the glob form `Bash(cmd …)` instead).
 
    `RuleSet::lint_warnings` is the author-time linter, printed to stderr by the
-   CLI checker and `--install` (never in hook mode). It reports two things: the
-   dead-rule form above, and **cross-tier conflicts** (§6.3a): a less-restrictive
-   rule that outscores a more-restrictive rule it overlaps without being a subset
-   of, where the subset guard overrides the naive specificity reading. The
-   shipped reference set is clean under both checks.
+   CLI checker and `--install` (never in hook mode). It reports the dead-rule
+   form above. The shipped reference set is clean under the check.
 
 3. **Coverage gaps / asymmetries.** `Bash(cp -R:*)` is allowed but plain
    `cp a b` matches no rule and takes the `defaultMode: "ask"` fall-back.
