@@ -356,6 +356,13 @@ decomposes it and takes the **most restrictive** verdict.
      filename (not an fd number) also count as a write. Pure fd dups/closes like
      `2>&1`, `>&2`, `>&-` are skipped.
 
+   An operand carrying a shell glob metacharacter (`*`, `?`, `[`) is matched by
+   glob **intersection**: it hits a deny when it could expand onto a denied
+   path, so `cat .en?` and `cat .e*` are caught, not only `cat .env`. This
+   escalation applies only when every path segment of the operand begins with a
+   literal, mirroring shell expansion (a segment-leading wildcard does not match
+   a hidden dotfile), so ordinary globs like `cat *.rs` are not over-denied.
+
    A cross-check hit raises that unit's verdict to `deny`. This catches
    `cat .env` even though `Bash(cat:*)` is allowed.
 
@@ -421,11 +428,12 @@ allows, so those commands are governed by the broad deny. Git read commands
 | `mcp__db__query(SELECT …)` | ask | Generic family, no rule names this MCP tool → ask fall-back |
 | `NotebookEdit(/repo/nb.ipynb)` | ask | Path family, but no `NotebookEdit` rule and bare `Edit` does not cover it → ask fall-back |
 | `Bash(some-tool foo)` | ask | no Bash rule matches → ask fall-back |
-| `Bash(python3 -c "import os")` | allow (see §11) | `python3 *` allows it, no `-c` deny exists |
+| `Bash(python3 -c "import os")` | deny | `python3 -c:*` (10) beats the broad `python3 *` allow (8) |
+| `Bash(python3 script.py)` | allow | broad `python3 *` allow, no narrower deny matches |
 
 Two rows show both directions of the design: an active protection (`cat .env`)
 denies regardless of the fall-back, while a broad allow the rules do not narrow
-(`python3 -c`) lets code through (§11).
+(`Bash(gh:*)` lets `gh auth token` through) grants more than intended (§11).
 
 ## 11. Appendix: known issues in the reference rule set
 
@@ -434,13 +442,16 @@ The engine faithfully applies §5-§8. Each item below is a case where the rules
 do not express what an operator likely intends: cautionary patterns and a
 correction backlog for the reference file.
 
-1. **Arbitrary-execution / secret bypasses.** `Bash(python3 *)` and
-   `Bash(.venv/bin/python *)` allow `python3 -c "<code>"`, which sidesteps the
-   whole deny list, and only `python3 -m http.server` is denied. `Bash(env:*)` /
-   `Bash(printenv:*)` expose secrets from the environment. `Bash(gh:*)` is
-   broad (`gh auth token`, `gh extension`). *Pattern:* pair any broad
-   interpreter/tool allow with denies for its exec/secret subforms
-   (`Bash(python3 -c:*)`, `Bash(gh auth:*)`), or move it to `ask`.
+1. **Arbitrary-execution / secret bypasses.** The `python3 -c` case is now
+   fixed: `Bash(python3 -c:*)` and `Bash(.venv/bin/python -c:*)` denies
+   (specificity 10 / 19) outscore the broad `Bash(python3 *)` /
+   `Bash(.venv/bin/python *)` allows, so `python3 -c "<code>"` denies while a
+   plain script run stays allowed. Remaining broad allows still grant more than
+   intended: `Bash(printenv:*)` exposes environment secrets, and `Bash(gh:*)` is
+   broad (`gh auth token`, `gh extension`, `gh api`). (`Bash(env:*)` is denied,
+   and `env` is peeled as a wrapper so `env <cmd>` re-decides `<cmd>`, §8.2.)
+   *Pattern:* pair any broad interpreter/tool allow with denies for its
+   exec/secret subforms (`Bash(gh auth:*)`), or move it to `ask`.
 
 2. **Dead / redundant under command-splitting.** *Pattern:* one rule per simple
    command, and never put shell operators in a specifier. A specifier like

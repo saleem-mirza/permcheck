@@ -136,7 +136,11 @@ pub(crate) fn path_hits_deny(rs: &RuleSet, tools: &[&str], path: &str, cwd: Opti
     for &tool in tools {
         for &idx in rs.rules_for(tool) {
             let rule = &rs.rules[idx];
-            if rule.tier == Tier::Deny && refs.iter().any(|c| rule.matcher.matches(c)) {
+            if rule.tier == Tier::Deny
+                && refs
+                    .iter()
+                    .any(|c| crate::matcher::path_glob_hits(&rule.matcher, c))
+            {
                 return true;
             }
         }

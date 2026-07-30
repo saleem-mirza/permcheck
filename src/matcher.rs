@@ -331,6 +331,153 @@ impl PathMatcher {
     }
 }
 
+// --- Glob-operand cross-check (§8.3) -----------------------------------------
+
+/// Does `candidate` carry a shell glob metacharacter (`*`, `?`, `[`)?
+fn has_glob_meta(s: &str) -> bool {
+    s.bytes().any(|b| matches!(b, b'*' | b'?' | b'['))
+}
+
+/// True if any path segment of `s` begins with a glob metacharacter. A shell
+/// leaves such a wildcard from matching a leading `.` (hidden files), so a
+/// segment-leading wildcard cannot resolve to a dotfile like `.env`; we defer
+/// those to the literal check and never escalate them (avoids over-denying
+/// ordinary globs such as `cat *.rs`).
+fn has_segment_leading_wildcard(s: &str) -> bool {
+    let mut seg_start = true;
+    for &c in s.as_bytes() {
+        if seg_start && matches!(c, b'*' | b'?' | b'[') {
+            return true;
+        }
+        seg_start = c == b'/';
+    }
+    false
+}
+
+/// Compile a Bash reader operand into path-glob tokens. Shell semantics: `*` and
+/// `?` span non-`/` runs, `[…]` a single char (over-approximated to `?`). Any
+/// `**` run collapses to a single `*` (shell globstar is off by default).
+pub(crate) fn compile_operand_glob(s: &str) -> Vec<PToken> {
+    let b = s.as_bytes();
+    let mut t = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'*' => {
+                t.push(PToken::Star);
+                i += 1;
+                while i < b.len() && b[i] == b'*' {
+                    i += 1;
+                }
+            }
+            b'?' => {
+                t.push(PToken::Ques);
+                i += 1;
+            }
+            b'[' => {
+                let mut j = i + 1;
+                while j < b.len() && b[j] != b']' {
+                    j += 1;
+                }
+                if j < b.len() {
+                    t.push(PToken::Ques); // a class matches one char
+                    i = j + 1;
+                } else {
+                    t.push(PToken::Lit(b'[')); // unterminated: literal
+                    i += 1;
+                }
+            }
+            c => {
+                t.push(PToken::Lit(c));
+                i += 1;
+            }
+        }
+    }
+    t
+}
+
+/// True if a `Read`/`Write` deny rule matches `candidate`, extended to catch a
+/// glob operand that could expand onto a denied path (§8.3). Escalation is
+/// monotone: it only ever adds a hit, and only for glob operands whose every
+/// segment begins with a literal (see [`has_segment_leading_wildcard`]), so
+/// ordinary reads and non-glob operands keep their exact behavior.
+pub(crate) fn path_glob_hits(m: &Matcher, candidate: &str) -> bool {
+    if m.matches(candidate) {
+        return true;
+    }
+    if !has_glob_meta(candidate) || has_segment_leading_wildcard(candidate) {
+        return false;
+    }
+    match m {
+        Matcher::Path(pm) => globs_can_intersect(&pm.0, &compile_operand_glob(candidate)),
+        Matcher::Bare => true,
+        _ => false,
+    }
+}
+
+/// Can two path globs share a concrete string? Product-automaton reachability
+/// over token positions `(i, j)`, where a wildcard either matches one shared
+/// character (staying put) or matches empty (advancing). Both inputs are short
+/// operator/operand globs, so the `(len+1)²` state space is tiny.
+pub(crate) fn globs_can_intersect(a: &[PToken], b: &[PToken]) -> bool {
+    let (la, lb) = (a.len(), b.len());
+    let width = lb + 1;
+    let mut visited = vec![false; (la + 1) * width];
+    let mut stack = vec![(0usize, 0usize)];
+    visited[0] = true;
+    while let Some((i, j)) = stack.pop() {
+        if i == la && j == lb {
+            return true;
+        }
+        let ta = a.get(i).copied();
+        let tb = b.get(j).copied();
+        // A wildcard on either side may match the empty string and advance.
+        if matches!(ta, Some(PToken::Star) | Some(PToken::DStar)) && !visited[(i + 1) * width + j]
+        {
+            visited[(i + 1) * width + j] = true;
+            stack.push((i + 1, j));
+        }
+        if matches!(tb, Some(PToken::Star) | Some(PToken::DStar)) && !visited[i * width + j + 1] {
+            visited[i * width + j + 1] = true;
+            stack.push((i, j + 1));
+        }
+        // Consume one character both sides accept.
+        if let (Some(ta), Some(tb)) = (ta, tb)
+            && tokens_share_char(ta, tb)
+        {
+            let ni = if matches!(ta, PToken::Star | PToken::DStar) {
+                i
+            } else {
+                i + 1
+            };
+            let nj = if matches!(tb, PToken::Star | PToken::DStar) {
+                j
+            } else {
+                j + 1
+            };
+            if (ni, nj) != (i, j) && !visited[ni * width + nj] {
+                visited[ni * width + nj] = true;
+                stack.push((ni, nj));
+            }
+        }
+    }
+    false
+}
+
+/// Do two glob tokens accept a common single character?
+fn tokens_share_char(a: PToken, b: PToken) -> bool {
+    use PToken::*;
+    match (a, b) {
+        (Lit(x), Lit(y)) => x == y,
+        // A `?`/`*` spans one non-separator byte; a literal `/` cannot fill it.
+        (Lit(c), Ques | Star) | (Ques | Star, Lit(c)) => c != b'/',
+        // `**` spans any byte, separators included.
+        (Lit(_), DStar) | (DStar, Lit(_)) => true,
+        // Any two wildcards agree on an ordinary character.
+        _ => true,
+    }
+}
+
 /// Anchored, full-string glob match with `/`-aware wildcards (§6.5).
 ///
 /// Plain recursive backtracking. Path specifiers come from the operator-authored

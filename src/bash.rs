@@ -346,6 +346,11 @@ const READERS: &[&str] = &[
     "expand",
     "look",
     "join",
+    "openssl",
+    "zcat",
+    "xzcat",
+    "bzcat",
+    "gpg",
 ];
 
 /// Readers whose first non-option operand is a pattern, not a file (§8.3).

@@ -22,9 +22,12 @@ fn bash(cmd: &str) -> Tier {
 }
 
 #[test]
-fn issue1_python_dash_c_bypasses_deny_list() {
-    // `Bash(python3 *)` allows arbitrary `-c` execution; no `-c` deny exists.
-    assert_eq!(bash(r#"python3 -c "import os""#), Tier::Allow);
+fn issue1_python_dash_c_is_now_denied() {
+    // §11.1 fixed: `Bash(python3 -c:*)` (specificity 10) outscores the broad
+    // `Bash(python3 *)` allow (8), so arbitrary `-c` execution is denied.
+    assert_eq!(bash(r#"python3 -c "import os""#), Tier::Deny);
+    // A plain script run stays on the broad allow.
+    assert_eq!(bash("python3 script.py"), Tier::Allow);
 }
 
 #[test]

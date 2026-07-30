@@ -120,6 +120,7 @@ fn nested_shells_and_eval_are_denied() {
         ". /tmp/evil.sh",
         "exec aws ec2 terminate-instances",
         "env cat notes.txt", // env can prefix an arbitrary command to launder it
+        r#"python3 -c "import os; os.system('id')""#, // §11.1 fixed: -c is denied
     ]);
 }
 
@@ -130,6 +131,20 @@ fn redirection_to_denied_files_is_denied() {
         "ls >> /root/.ssh/authorized_keys", // append into ssh
         "cat ~/.ssh/id_rsa",                // read a private key
         "grep -r secret /work/.env",        // pattern-first reader on .env
+    ]);
+}
+
+#[test]
+fn secret_file_coverage_includes_dotfile_and_bare_forms() {
+    // Hardening: the real Vault token is a dotfile (`.vault-token`) that a bare
+    // `vault*` rule misses, and a `backup*` secret can be a file, not only a
+    // `backup*/` directory. Both are now covered.
+    assert_all_deny(&[
+        "cat /home/user/.vault-token", // dotfile token, missed by `vault*`
+        "cat /home/user/.vault/creds", // vault config dir
+        "cat backup.sql",              // bare backup file, missed by `backup*/**`
+        "cat vault-secrets.yml",       // still covered by the original `vault*`
+        "cat backups/db.dump",         // still covered by `backup*/**`
     ]);
 }
 
@@ -153,11 +168,6 @@ fn documented_gaps_are_locked_honestly() {
     // These evasions are NOT blocked by the reference rules — they are authoring
     // gaps (SPEC §11), recorded here so the suite is truthful and any future
     // rule-set fix flips these expectations deliberately.
-    // §11.1 — `python3 *` allows arbitrary `-c` execution.
-    assert_eq!(
-        bash(r#"python3 -c "import os; os.system('id')""#),
-        Tier::Allow
-    );
     // §11.3 — `rm -rf`/`rm -f` are denied, but `rm -fr`/`rm -Rf` are not.
     assert_eq!(bash("rm -fr /tmp/x"), Tier::Ask);
     assert_eq!(bash("rm -Rf /tmp/x"), Tier::Ask);

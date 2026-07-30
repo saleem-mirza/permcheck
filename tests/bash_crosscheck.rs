@@ -133,3 +133,28 @@ fn double_dash_ends_options() {
     // After `--`, the pattern is the first operand and `.env` the file.
     assert_eq!(t("grep -- -pat .env"), Tier::Deny);
 }
+
+// --- glob-operand cross-check (§8.3) -----------------------------------------
+
+#[test]
+fn glob_operand_that_can_hit_a_denied_file_is_denied() {
+    // A reader operand whose glob could expand onto a denied path is caught, so
+    // `cat .en?` cannot slip past a `.env` deny by hiding a char behind `?`/`*`.
+    assert_eq!(tier("cat .en?"), Tier::Deny);
+    assert_eq!(tier("cat .e*"), Tier::Deny);
+    assert_eq!(tier("cat .env*"), Tier::Deny);
+    assert_eq!(tier("cat .*"), Tier::Deny); // matches all dotfiles incl. .env
+    assert_eq!(tier("cat /home/user/.en?"), Tier::Deny);
+}
+
+#[test]
+fn glob_operand_that_cannot_hit_a_denied_file_stays_allowed() {
+    // Ordinary globs must not be over-denied: none of these can expand onto a
+    // `.env*` path in a real shell.
+    assert_eq!(tier("cat *.rs"), Tier::Allow);
+    assert_eq!(tier("cat notes.??"), Tier::Allow);
+    assert_eq!(tier("cat src?.txt"), Tier::Allow);
+    // A segment-leading wildcard does not match a hidden dotfile, so it is not
+    // escalated (and no literal `.env*` byte-match fires either).
+    assert_eq!(tier("cat *.env"), Tier::Allow);
+}

@@ -40,7 +40,9 @@ fn worked_examples_table() {
     check("mcp__db__query", "SELECT 1", ASK);
     check("NotebookEdit", "/repo/nb.ipynb", ASK);
     check("Bash", "some-tool foo", ASK);
-    check("Bash", r#"python3 -c "import os""#, ALLOW);
+    // `Bash(python3 -c:*)` deny outscores the broad `Bash(python3 *)` allow.
+    check("Bash", r#"python3 -c "import os""#, DENY);
+    check("Bash", "python3 script.py", ALLOW);
 }
 
 #[test]

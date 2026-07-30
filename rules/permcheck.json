@@ -96,7 +96,10 @@
       "Read(//**/.netrc)",
       "Read(//**/.pgpass)",
       "Read(//**/vault*)",
+      "Read(//**/.vault-token)",
+      "Read(//**/.vault/**)",
       "Read(//**/backup*/**)",
+      "Read(//**/backup*)",
       "Read(//**/*.parquet)",
       "Read(//**/.bash_login)",
       "Read(//**/.bash_logout)",
@@ -215,7 +218,9 @@
       "Bash(osascript:*)",
       "Bash(security:*)",
       "Bash(python -m http.server:*)",
-      "Bash(python3 -m http.server:*)"
+      "Bash(python3 -m http.server:*)",
+      "Bash(python3 -c:*)",
+      "Bash(.venv/bin/python -c:*)"
     ]
   }
 }
