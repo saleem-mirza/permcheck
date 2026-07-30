@@ -242,10 +242,40 @@ tier)` pair, compared lexicographically:
 3. On a full tie (equal specificity and tier), the **first rule in file order**
    is reported, for a stable, deterministic decision.
 
-This single-pass selection is the **entire** decision for Path and Generic tools
-(Read, Write, Edit, Glob, Grep, NotebookEdit, WebFetch, WebSearch, MCP, …). Only
-`Bash` adds a step: it first decomposes the command into units (§8) and applies
-this selection per unit.
+This selection, refined by the subset guard (§6.3a), is the **entire** decision
+for Path and Generic tools (Read, Write, Edit, Glob, Grep, NotebookEdit,
+WebFetch, WebSearch, MCP, …). Only `Bash` adds a step: it first decomposes the
+command into units (§8) and applies this selection per unit.
+
+### 6.3a Subset guard (two-way override safety)
+
+Specificity is a **character count**, a proxy for how narrow a rule is, not a
+measure of its match set. Where the two diverge a longer specifier matches a
+broader set than a shorter one, so §6.3 alone would let a less-restrictive rule
+override a more-restrictive rule it does not actually refine, silently defeating
+a `deny`. The guard removes that hole.
+
+After §6.3 selects a winner `W`, for every matching rule `R` strictly more
+restrictive than `W` (`R.tier > W.tier`):
+
+1. `W` overrides `R` only when `L(W) ⊆ L(R)`: every payload `W` matches, `R` also
+   matches, so `W` is a genuine narrow exception carved out of `R`.
+2. If any such `R` is **not** a proven superset of `W`, the winner becomes the
+   most restrictive of those `R` (ties by first file order). Otherwise `W`
+   stands.
+
+The guard only ever **raises** restrictiveness; it never loosens the §6.3
+verdict. The containment test is **sound and incomplete**: it returns true only
+for a proven subset, and an unproven pair is treated as non-subset, so the
+more-restrictive rule wins (fail-closed). A narrow allow that is a real subset of
+a broad deny (`Bash(aws * describe-*)` under `Bash(aws:*)`) still wins; a longer
+allow that merely overlaps a deny (`Bash(kubectl * --namespace prod)` against
+`Bash(kubectl delete:*)`) does not.
+
+The guard resolves this at decision time. `RuleSet::lint_warnings` (§11.2)
+surfaces the same conflict at **author time**, so a rule set that relies on the
+guard to override an author's naive specificity reading is flagged rather than
+silently resolved.
 
 ### 6.4 Default decision
 
@@ -349,8 +379,13 @@ decomposes it and takes the **most restrictive** verdict.
      check each non-option operand against the `Read` **deny** rules
      (pattern-first readers like `grep`/`sed`/`awk` skip their first operand,
      which is a pattern, not a file).
-   - if it is a known **writer** (`tee`, `dd`, `truncate`, …), check operands
-     against the `Write`/`Edit` deny rules.
+   - if it is a known **writer** (`tee`, `truncate`), check operands against the
+     `Write`/`Edit` deny rules.
+   - `dd` names files by key-value operand: `if=<path>` is checked against `Read`
+     deny, `of=<path>` against `Write`/`Edit` deny.
+   - two exfil tools read files by argument: `curl` (`@file` on `-d`/`--data*`/
+     `-F`, or `-T`/`--upload-file`) and `wget` (`--post-file`/`--body-file`) are
+     checked against `Read` deny. The reader and exfil sets are fixed lists (§9.2).
    - check redirection targets: `<` against `Read` deny, `>` / `>>` / `&>` /
      `&>>` against `Write`/`Edit` deny. `>&word` / `>>&word` where `word` is a
      filename (not an fd number) also count as a write. Pure fd dups/closes like
@@ -387,7 +422,14 @@ out of scope and left to the OS sandbox and enterprise denies:
 
 - `eval`, shell aliases/functions, dynamic variable expansion, and commands
   assembled at runtime.
-- `dd if=/of=` key-value targets are not unwrapped.
+- Non-POSIX shells (PowerShell, `cmd.exe`): the splitter, reader vocabulary, and
+  env-stripping model POSIX syntax and do not apply there, though Windows
+  binaries ship.
+- File reads by tools outside the covered set (readers, `dd`, `curl`, `wget`):
+  `scp`, `tar`, `git`, `rsync`, and editors reading a secret are not followed.
+- Interpreter inline-exec (`node -e`, `perl -e`, …) and the `curl`/`wget`
+  file-read forms are enumerated blocklists, so an unlisted interpreter or a
+  bundled flag can slip.
 - Commands assembled by `xargs` from stdin are not followed.
 - `#` comments and heredoc bodies are not modeled (biases toward over-deny, the
   safe direction).
@@ -439,7 +481,7 @@ allows, so those commands are governed by the broad deny. Git read commands
 
 Two rows show both directions of the design: an active protection (`cat .env`)
 denies regardless of the fall-back, while a broad allow the rules do not narrow
-(`Bash(gh:*)` lets `gh auth token` through) grants more than intended (§11).
+(`Bash(printenv:*)` exposes environment secrets) grants more than intended (§11).
 
 ## 11. Appendix: known issues in the reference rule set
 
@@ -448,22 +490,38 @@ The engine faithfully applies §5-§8. Each item below is a case where the rules
 do not express what an operator likely intends: cautionary patterns and a
 correction backlog for the reference file.
 
-1. **Arbitrary-execution / secret bypasses.** The `python3 -c` case is now
-   fixed: `Bash(python3 -c:*)` and `Bash(.venv/bin/python -c:*)` denies
-   (specificity 10 / 19) outscore the broad `Bash(python3 *)` /
-   `Bash(.venv/bin/python *)` allows, so `python3 -c "<code>"` denies while a
-   plain script run stays allowed. Remaining broad allows still grant more than
-   intended: `Bash(printenv:*)` exposes environment secrets, and `Bash(gh:*)` is
-   broad (`gh auth token`, `gh extension`, `gh api`). (`Bash(env:*)` is denied,
-   and `env` is peeled as a wrapper so `env <cmd>` re-decides `<cmd>`, §8.2.)
-   *Pattern:* pair any broad interpreter/tool allow with denies for its
-   exec/secret subforms (`Bash(gh auth:*)`), or move it to `ask`.
+1. **Arbitrary-execution / secret bypasses.** Interpreter inline-exec is now
+   guarded across the shipped interpreters: `Bash(python3 -c:*)`, `python -c`,
+   `python2 -c`, `.venv/bin/python -c`, `perl -e`/`-E`, `ruby -e`, `node -e`/
+   `-p`/`--eval`/`--print`, `deno eval`, and `php -r` deny while a plain script
+   run stays allowed. Under `Bash(gh:*)`, `gh auth token` is denied and `gh api`
+   is `ask`; the arbitrary-package runners under `yarn:*`/`pnpm:*`/`uv:*`
+   (`yarn dlx`, `pnpm dlx`, `pnpm exec`, `uv run`, `uvx`, `uv tool run`) are
+   denied. (`Bash(env:*)` is denied, and `env` is peeled as a wrapper so
+   `env <cmd>` re-decides `<cmd>`, §8.2.) Remaining open: `Bash(printenv:*)`
+   exposes environment secrets, `gh extension` installs runnable code, and
+   dependency installs (`npm install`, `pip install`, `gem install`, …) run
+   package build/lifecycle code by design, which a prefix deny cannot separate
+   from a safe install. *Pattern:* pair any broad interpreter/tool allow with
+   denies for its exec/secret subforms, or move it to `ask`; the install residual
+   is a sandbox concern, not a rule fix. The blocklists are enumerated (§9.2), so
+   an unlisted interpreter or bundled flag can slip.
 
 2. **Dead / redundant under command-splitting.** *Pattern:* one rule per simple
    command, and never put shell operators in a specifier. A specifier like
    `Bash([ ! -d * ] && gh repo clone *)` contains `&&`, and §8 splits on `&&`
    before matching, so no unit ever contains it and the rule never fires.
-   (The reference set previously shipped such rules, since removed.)
+   (The reference set previously shipped such rules, since removed.) A second
+   dead-rule form: a `Bash(cmd:*)` specifier with a `*` before the `:*` compiles
+   to a literal-asterisk prefix and matches nothing (the `cmd:*` form has no
+   interior wildcard; use the glob form `Bash(cmd …)` instead).
+
+   `RuleSet::lint_warnings` is the author-time linter, printed to stderr by the
+   CLI checker and `--install` (never in hook mode). It reports two things: the
+   dead-rule form above, and **cross-tier conflicts** (§6.3a): a less-restrictive
+   rule that outscores a more-restrictive rule it overlaps without being a subset
+   of, where the subset guard overrides the naive specificity reading. The
+   shipped reference set is clean under both checks.
 
 3. **Coverage gaps / asymmetries.** `Bash(cp -R:*)` is allowed but plain
    `cp a b` matches no rule and takes the `defaultMode: "ask"` fall-back.

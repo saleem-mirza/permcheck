@@ -147,8 +147,9 @@ This invokes the hook interface documented under [Usage](#usage). Use **absolute
 
 Every rule carries a **specificity** score. For a given tool call, permcheck gathers *every* matching rule and picks the winner by `(specificity, tier)`:
 
-1. **Most specific rule wins.** Specificity = the count of literal, non-wildcard characters in the specifier, `+1000` if it has no wildcard at all. A bare rule (e.g. `Read`) scores `0`. This dominates the decision.
+1. **Most specific rule wins.** Specificity = the count of literal, non-wildcard characters in the specifier, `+1000` if it has no wildcard at all. A bare rule (e.g. `Read`) scores `0`. This dominates the decision, bounded by a subset guard (below).
 2. **On equal specificity, the most restrictive tier wins:** `deny > ask > allow`.
+   - **Subset guard.** Specificity is a character count, a proxy for narrowness, not a measure of scope. So a less-restrictive rule overrides a more-restrictive one only when its match set is a proven subset of it. A longer specifier that merely overlaps a `deny` (rather than refining it) never defeats that `deny`.
 3. **On a full tie** (equal specificity *and* tier), the first rule in file order wins, for determinism only.
 4. **If nothing matches, the `defaultMode` fall-back applies:** `deny` by default (fail-closed), or set `"defaultMode": "ask"` in the rules file to prompt on unlisted calls instead. The Bash file-access cross-check and error paths always `deny` regardless.
 
@@ -217,6 +218,11 @@ permcheck <Tool> [payload] --rules <path> [--json]
 
 `--json` prints the same decision object as hook mode instead of using the exit code. `--rules` accepts either `--rules <path>` or `--rules=<path>`. Run `permcheck --version` to print the version, `permcheck --help` for full usage.
 
+The CLI check and `--install` also print author-time lint warnings to stderr (never in hook mode). Two checks:
+
+- **Dead rule.** A `Bash(cmd:*)` specifier with a `*` before the `:*` compiles to a literal asterisk and matches nothing. Use the glob form `Bash(cmd …)` for a mid-command wildcard.
+- **Cross-tier conflict.** A less-restrictive rule that outscores a more-restrictive rule it overlaps without being a subset of (for example `allow Bash(kubectl * --namespace prod)` against `deny Bash(kubectl delete:*)`). The engine resolves this safely (the more-restrictive rule wins), but the specificity score disagrees, so the lint flags it to author.
+
 ```sh
 permcheck Bash "cat notes.txt"          --rules rules/permcheck.json   # exit 0 (allow)
 permcheck Bash "gcloud compute ..."     --rules rules/permcheck.json   # exit 1 (ask, unlisted)
@@ -269,7 +275,7 @@ Each tool routes to one of three matcher families, which determines both the pay
 A single `Bash` command often chains several commands, so it gets extra scrutiny (see [`specs/SPEC.md`](specs/SPEC.md) §8):
 
 - **Split into units** on shell operators (`&&`, `||`, `|`, `;`, `&`, newlines), pulling inner commands out of `$(…)`, backticks, and `<(…)` / `>(…)`. The verdict is the **most restrictive** unit: if any sub-command is denied, the whole command is denied.
-- **File-access cross-check**: readers (`cat`, `grep`, …), writers (`tee`, `dd`, …), and redirection targets are checked against `Read`/`Write`/`Edit` **deny** rules. This catches `cat .env` even though `Bash(cat:*)` is allowed. It only ever *raises* a verdict to `deny`.
+- **File-access cross-check**: readers (`cat`, `grep`, …), writers (`tee`, `truncate`), `dd` (`if=`/`of=`), the `curl`/`wget` file-read forms (`curl --data-binary @/repo/.env`, `wget --post-file`), and redirection targets are checked against `Read`/`Write`/`Edit` **deny** rules. This catches `cat .env` even though `Bash(cat:*)` is allowed. It only ever *raises* a verdict to `deny`. Tools outside this fixed set (`scp`, `tar`, `git`) are not followed.
 - **Wrapper re-decision**: a leading wrapper (`env`, `sudo`, `timeout`, `nice`, …) runs the command after it, so the wrapped command's rules apply too. This stops `env aws …` from laundering a denied command through a broad `Bash(env:*)` allow.
 
 The Bash analyzer is a best-effort scanner, not a full shell parser. When it cannot understand a construct, it errs toward `deny`. Documented non-goals (`eval`, aliases, `xargs`-assembled commands, adversarial glob patterns, …) are listed in SPEC §9.

