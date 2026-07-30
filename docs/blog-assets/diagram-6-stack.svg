@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 340" width="560" height="340" font-family="-apple-system, Segoe UI, Roboto, sans-serif" role="img" aria-label="Four stacked layers: prompt or agent intent, then the permcheck least-privilege overlay, then native Claude Code permissions, then the OS sandbox and managed-settings.json which is the real boundary.">
+  <title>Where permcheck sits in the defense stack</title>
+  <defs><marker id="ah6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#57606a"/></marker></defs>
+
+  <line x1="280" y1="66" x2="280" y2="96" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah6)"/>
+  <line x1="280" y1="146" x2="280" y2="176" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah6)"/>
+  <line x1="280" y1="226" x2="280" y2="256" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah6)"/>
+
+  <g text-anchor="middle">
+    <rect x="100" y="18" width="360" height="48" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/><text x="280" y="47" font-size="13.5" fill="#1f2328">Prompt / agent intent</text>
+    <rect x="100" y="98" width="360" height="48" rx="8" fill="#0969da"/><text x="280" y="121" font-size="13.5" font-weight="700" fill="#fff">permcheck</text><text x="280" y="138" font-size="12" fill="#cfe6ff">least-privilege overlay</text>
+    <rect x="100" y="178" width="360" height="48" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/><text x="280" y="207" font-size="13.5" fill="#1f2328">Native Claude Code permissions</text>
+    <rect x="70" y="258" width="420" height="58" rx="8" fill="#57606a"/><text x="280" y="282" font-size="13.5" font-weight="700" fill="#fff">OS sandbox + managed-settings.json</text><text x="280" y="301" font-size="12" fill="#d0d7de">the real security boundary</text>
+  </g>
+</svg>

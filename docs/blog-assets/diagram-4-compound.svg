@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1090 300" width="1090" height="300" font-family="-apple-system, Segoe UI, Roboto, sans-serif" role="img" aria-label="The command ls and sudo rm -rf slash splits into two units; ls allows, the sudo unit peels to rm -rf slash and denies, so the most restrictive verdict denies the whole line.">
+  <title>Compound Bash decomposition</title>
+  <defs><marker id="ah4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#57606a"/></marker></defs>
+
+  <line x1="190" y1="140" x2="260" y2="82" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah4)"/>
+  <line x1="190" y1="160" x2="232" y2="218" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah4)"/>
+  <line x1="355" y1="75" x2="406" y2="75" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah4)"/>
+  <line x1="385" y1="225" x2="436" y2="225" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah4)"/>
+  <line x1="540" y1="225" x2="581" y2="225" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah4)"/>
+  <line x1="695" y1="225" x2="736" y2="225" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah4)"/>
+  <line x1="510" y1="75" x2="918" y2="132" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah4)"/>
+  <line x1="840" y1="225" x2="913" y2="168" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah4)"/>
+  <line x1="975" y1="175" x2="975" y2="228" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah4)"/>
+
+  <g text-anchor="middle">
+    <rect x="10" y="125" width="180" height="50" rx="8" fill="#eaeef2" stroke="#57606a" stroke-width="1.5"/><text x="100" y="155" font-size="13" font-family="ui-monospace, monospace" fill="#1f2328">ls &amp;&amp; sudo rm -rf /</text>
+
+    <rect x="265" y="55" width="90" height="40" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/><text x="310" y="80" font-size="13" font-family="ui-monospace, monospace" fill="#1f2328">ls</text>
+    <rect x="406" y="55" width="104" height="40" rx="8" fill="#1a7f37"/><text x="458" y="80" font-size="13" font-weight="700" fill="#fff">allow</text>
+
+    <rect x="235" y="205" width="150" height="40" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/><text x="310" y="230" font-size="12.5" font-family="ui-monospace, monospace" fill="#1f2328">sudo rm -rf /</text>
+    <rect x="436" y="206" width="104" height="38" rx="8" fill="#fff8c5" stroke="#9a6700" stroke-width="1.5"/><text x="488" y="230" font-size="12.5" fill="#1f2328">peel sudo</text>
+    <rect x="581" y="206" width="114" height="38" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/><text x="638" y="230" font-size="12.5" font-family="ui-monospace, monospace" fill="#1f2328">rm -rf /</text>
+    <rect x="736" y="205" width="104" height="40" rx="8" fill="#cf222e"/><text x="788" y="230" font-size="13" font-weight="700" fill="#fff">deny</text>
+
+    <rect x="895" y="125" width="160" height="50" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/><text x="975" y="147" font-size="12.5" fill="#1f2328">most restrictive</text><text x="975" y="164" font-size="12.5" fill="#1f2328">unit wins</text>
+    <rect x="870" y="232" width="210" height="48" rx="8" fill="#cf222e"/><text x="975" y="261" font-size="13" font-weight="700" fill="#fff">DENY the whole line</text>
+  </g>
+</svg>
