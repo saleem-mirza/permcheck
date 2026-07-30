@@ -515,7 +515,8 @@ allow: Bash(aws * describe-*)</code></pre>
   </div>
 
   <p>The narrow allow punches through the broad deny. Flip it and a narrow deny punches through a broad allow the same way. That two-way override is the entire reason permcheck exists.</p>
-  <p>Ties resolve the way you expect: equal specificity falls back to <code>deny &gt; ask &gt; allow</code>, and a full tie takes the first rule in file order. Nothing matches? A <code>defaultMode</code> decides, defaulting to <code>deny</code>, so unlisted calls fail closed.</p>
+  <p>Ties resolve the way you expect: equal specificity falls back to <code>deny &gt; ask &gt; allow</code>, and a full tie takes the first rule in file order.</p>
+  <p>Nothing matches? The rule set's <code>defaultMode</code> decides, and this is where behavior changes with your config. With <code>defaultMode: deny</code> (the engine's default when the key is absent) an unlisted call fails closed. With <code>defaultMode: ask</code> it prompts instead. The shipped starter policy sets <code>ask</code>, so out of the box an unlisted call prompts rather than blocks. In a non-interactive setting (CI, a headless agent) where no one answers a prompt, set <code>defaultMode: deny</code> so unlisted calls fail closed rather than stall. This applies only to the no-rule-matched case: it never loosens a cross-check <code>deny</code> or the error posture, both of which stay <code>deny</code> regardless.</p>
 
   <h2 id="the-whole-pipeline">The whole pipeline</h2>
   <p>Every tool call, Bash or not, runs the same route: extract the payload, match rules, score, pick the winner. Bash gets three extra safety steps first.</p>
@@ -592,8 +593,9 @@ allow: Bash(aws * describe-*)</code></pre>
   <h3>File reads get cross-checked against path rules</h3>
   <p>You deny <code>Read(/**/.env*)</code> to protect secrets. The agent reaches for the shell instead:</p>
   <pre><code>cat .env            <span class="tok-c"># Bash(cat:*) is allowed... still DENIED</span>
-grep secret .env    <span class="tok-c"># DENIED</span></code></pre>
-  <p>permcheck pulls the file operand out of the reader and tests it against your <code>Read</code> deny rules. <code>cat .env</code> dies even though <code>Bash(cat:*)</code> is on the allow-list. This check only ever raises a verdict to <code>deny</code>.</p>
+grep secret .env    <span class="tok-c"># DENIED</span>
+cat .en?            <span class="tok-c"># glob over a literal name, could hit .env... DENIED</span></code></pre>
+  <p>permcheck pulls the file operand out of the reader and tests it against your <code>Read</code> deny rules. <code>cat .env</code> dies even though <code>Bash(cat:*)</code> is on the allow-list. A glob operand is tested the same way when each path segment starts with a literal: <code>cat .en?</code> is denied because it could expand onto <code>.env</code>. Ordinary globs that cannot reach a secret, such as <code>cat *.rs</code>, stay allowed. This check only ever raises a verdict to <code>deny</code>.</p>
 
   <h3>Wrappers get peeled</h3>
   <p>A denied command tries to ride in on a broad wrapper allow:</p>
@@ -654,12 +656,12 @@ sudo aws ec2 terminate-instances    <span class="tok-c"># re-decided as an aws c
   <p>One anchoring detail matters for the web rules: matching is full-string, never substring, so a <code>WebFetch</code> rule for <code>example.com</code> matches <code>https://example.com/path</code> but not <code>example.com.evil.com</code>. Path, web, MCP, and notebook calls all run through the same engine, no gaps.</p>
 
   <h2 id="tune-your-rules-not-the-engine">Tune your rules, not the engine</h2>
-  <p>Specificity rewards precise rules, so a loose one grants more than you intend. The shipped reference set allows <code>Bash(python3 *)</code>, which means:</p>
-  <pre><code>python3 -c "import os; os.system('rm -rf /')"   <span class="tok-c"># allowed</span></code></pre>
-  <p>The broad interpreter allow swallows arbitrary code. The engine did its job; the rule was too wide. The fix is a paired deny that outscores it:</p>
+  <p>Specificity rewards precise rules, so a loose one grants more than you intend. Take the shipped <code>Bash(python3 *)</code> allow. On its own a bare interpreter allow swallows arbitrary code:</p>
+  <pre><code>python3 -c "import os; os.system('rm -rf /')"</code></pre>
+  <p>The engine did its job; the rule was too wide. The fix is a paired deny that outscores it, and the reference set now ships exactly that:</p>
   <pre><code>allow: Bash(python3 *)          <span class="tok-c"># score 8</span>
 deny:  Bash(python3 -c:*)       <span class="tok-c"># score 10  ◄─ wins on -c calls</span></code></pre>
-  <p>Pair every broad interpreter or CLI allow with denies for its dangerous subforms (<code>python3 -c</code>, <code>gh auth</code>, <code>env</code>). That is the discipline specificity rewards.</p>
+  <p>So <code>python3 -c</code> is denied out of the box, while <code>python3 script.py</code> stays allowed. The discipline generalizes: other broad allows in the reference set still grant more than they should, so pair each with denies for its dangerous subforms. <code>Bash(gh:*)</code> allows subcommands that call the GitHub API and print stored credentials (<code>gh api</code>, <code>gh auth token</code>); <code>Bash(npm install:*)</code> allows installs, which run each package's lifecycle scripts. Guard those the same way.</p>
 
   <h2 id="what-it-costs">What it costs</h2>
   <p>permcheck runs before every tool call, so its speed is not a vanity metric. It sits on the critical path of everything the agent does. The design target follows from that: keep the decision cheap enough to disappear inside the cost of starting the process.</p>

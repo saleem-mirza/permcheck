@@ -391,6 +391,12 @@ out of scope and left to the OS sandbox and enterprise denies:
 - Commands assembled by `xargs` from stdin are not followed.
 - `#` comments and heredoc bodies are not modeled (biases toward over-deny, the
   safe direction).
+- The glob-operand cross-check (§8.3) escalates only operands whose every path
+  segment begins with a literal, so ordinary globs (`cat *.rs`) are not
+  over-denied. This leaves one gap: a segment-leading wildcard against a
+  non-dotfile filename-pattern deny. `cat *rsa` resolves to allow even though a
+  shell expands `*rsa` onto `id_rsa`, which `Read(//**/id_rsa*)` denies. A deny
+  targeting a directory (`.ssh/**`) still catches it.
 - **Path-glob matching is not hardened against catastrophic backtracking.** The
   matcher is a plain recursive backtracker. A specifier with many interacting
   wildcards (e.g. `/*a*a*a*a*a*a*a*b`) grows super-linearly in the path length.
