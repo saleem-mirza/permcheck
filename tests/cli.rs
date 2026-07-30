@@ -74,6 +74,30 @@ fn missing_tool_arg_is_config_error() {
 }
 
 #[test]
+fn dead_rule_prints_a_lint_warning_to_stderr() {
+    // A `cmd:*` specifier with an interior `*` is inert; the checker warns on
+    // stderr (never stdout) so the operator catches it before shipping.
+    let f = rules_file(r#"{"deny":["Bash(aws * --region east:*)"]}"#);
+    Command::cargo_bin("permcheck")
+        .unwrap()
+        .args(["Bash", "ls", "--rules"])
+        .arg(f.path())
+        .assert()
+        .stderr(predicates::str::contains("matches nothing"));
+}
+
+#[test]
+fn clean_rules_emit_no_lint_warning() {
+    let f = rules_file(RULES);
+    Command::cargo_bin("permcheck")
+        .unwrap()
+        .args(["Bash", "ls -la", "--rules"])
+        .arg(f.path())
+        .assert()
+        .stderr(predicates::str::is_empty());
+}
+
+#[test]
 fn relative_path_absolutizes_against_process_cwd() {
     // `.env` is relative; it absolutizes against the process CWD and hits the
     // Read `.env` deny, while an unrelated absolute path stays allowed. This

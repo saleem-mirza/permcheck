@@ -69,7 +69,8 @@
       "Bash(curl:*)",
       "Bash(wget:*)",
       "Bash(http:*)",
-      "Bash(https:*)"
+      "Bash(https:*)",
+      "Bash(gh api:*)"
     ],
     "defaultMode": "ask",
     "deny": [
@@ -220,7 +221,25 @@
       "Bash(python -m http.server:*)",
       "Bash(python3 -m http.server:*)",
       "Bash(python3 -c:*)",
-      "Bash(.venv/bin/python -c:*)"
+      "Bash(.venv/bin/python -c:*)",
+      "Bash(python -c:*)",
+      "Bash(python2 -c:*)",
+      "Bash(perl -e:*)",
+      "Bash(perl -E:*)",
+      "Bash(ruby -e:*)",
+      "Bash(node -e:*)",
+      "Bash(node -p:*)",
+      "Bash(node --eval:*)",
+      "Bash(node --print:*)",
+      "Bash(deno eval:*)",
+      "Bash(php -r:*)",
+      "Bash(gh auth token:*)",
+      "Bash(yarn dlx:*)",
+      "Bash(pnpm dlx:*)",
+      "Bash(pnpm exec:*)",
+      "Bash(uv run:*)",
+      "Bash(uv tool run:*)",
+      "Bash(uvx:*)"
     ]
   }
 }

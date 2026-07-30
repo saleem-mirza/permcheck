@@ -501,6 +501,121 @@ fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> bool {
                 return true;
             }
         }
+    } else if (name == "curl" && curl_reads_denied(rs, operands, cwd))
+        || (name == "wget" && wget_reads_denied(rs, operands, cwd))
+    {
+        return true;
+    }
+    false
+}
+
+/// The value of an option in `--flag val` or `--flag=val` form. Returns `None`
+/// when `op` is not `flag` (so a prefix like `--data` does not swallow
+/// `--data-binary`). Consumes the next operand only for the space-separated form.
+fn long_value<'a>(op: &'a str, flag: &str, operands: &[&'a str], i: &mut usize) -> Option<&'a str> {
+    let rest = op.strip_prefix(flag)?;
+    if rest.is_empty() {
+        // `--flag val`: the value is the next operand, if any.
+        let v = operands.get(*i).copied();
+        if v.is_some() {
+            *i += 1;
+        }
+        v
+    } else if let Some(v) = rest.strip_prefix('=') {
+        Some(v) // `--flag=val`
+    } else {
+        None // `--flag` is a prefix of a longer flag, not a match
+    }
+}
+
+/// The value of a single-letter short option `-x val` or `-xval`. Rejects long
+/// options (`--…`). Consumes the next operand only for the space-separated form.
+fn short_value<'a>(op: &'a str, ch: u8, operands: &[&'a str], i: &mut usize) -> Option<&'a str> {
+    let b = op.as_bytes();
+    if b.len() < 2 || b[0] != b'-' || b[1] == b'-' || b[1] != ch {
+        return None;
+    }
+    if op.len() == 2 {
+        let v = operands.get(*i).copied();
+        if v.is_some() {
+            *i += 1;
+        }
+        v
+    } else {
+        Some(&op[2..]) // attached value: `-d@file`, `-Tfile`
+    }
+}
+
+/// The file path a curl data/form value reads, or `None` for a literal value.
+/// `@file` (data options) and `field=@file` / `field=<file` (`--form`) name a
+/// file curl opens. The scan for any `@`/`<` biases toward over-deny, which is
+/// the safe direction: the cross-check only ever raises to `deny`, and only when
+/// the extracted path matches a `Read` deny rule.
+fn curl_file_ref(val: &str) -> Option<&str> {
+    if let Some(rest) = val.strip_prefix('@') {
+        return Some(rest);
+    }
+    if let Some(pos) = val.find('@') {
+        return Some(&val[pos + 1..]);
+    }
+    if let Some(pos) = val.find('<') {
+        return Some(&val[pos + 1..]);
+    }
+    None
+}
+
+/// True if a `curl` invocation reads a `Read`-denied file through a data option
+/// (`-d`/`--data`/`--data-binary`/`--data-ascii`/`--data-urlencode`,
+/// `-F`/`--form` with `@file`) or an upload option (`-T`/`--upload-file`).
+fn curl_reads_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> bool {
+    let mut i = 0;
+    while i < operands.len() {
+        let op = operands[i];
+        i += 1;
+
+        // Upload flags: the value is a direct path.
+        if let Some(path) = long_value(op, "--upload-file", operands, &mut i)
+            .or_else(|| short_value(op, b'T', operands, &mut i))
+        {
+            if !path.is_empty() && engine::path_hits_deny(rs, &["Read"], path, cwd) {
+                return true;
+            }
+            continue;
+        }
+
+        // Data/form flags: a value of the form `@file` reads a file.
+        let data_val = long_value(op, "--data-binary", operands, &mut i)
+            .or_else(|| long_value(op, "--data-ascii", operands, &mut i))
+            .or_else(|| long_value(op, "--data-urlencode", operands, &mut i))
+            .or_else(|| long_value(op, "--data", operands, &mut i))
+            .or_else(|| long_value(op, "--form", operands, &mut i))
+            .or_else(|| short_value(op, b'd', operands, &mut i))
+            .or_else(|| short_value(op, b'F', operands, &mut i));
+        if let Some(val) = data_val
+            && let Some(path) = curl_file_ref(val)
+            && !path.is_empty()
+            && engine::path_hits_deny(rs, &["Read"], path, cwd)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// True if a `wget` invocation reads a `Read`-denied file through `--post-file`
+/// or `--body-file` (both `=` and space-separated forms).
+fn wget_reads_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> bool {
+    let mut i = 0;
+    while i < operands.len() {
+        let op = operands[i];
+        i += 1;
+        if let Some(path) = long_value(op, "--post-file", operands, &mut i)
+            .or_else(|| long_value(op, "--body-file", operands, &mut i))
+            && !path.is_empty()
+            && engine::path_hits_deny(rs, &["Read"], path, cwd)
+        {
+            return true;
+        }
     }
     false
 }

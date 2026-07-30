@@ -125,6 +125,63 @@ fn nested_shells_and_eval_are_denied() {
 }
 
 #[test]
+fn interpreter_inline_exec_is_denied() {
+    // Inline-code flags run arbitrary programs, so each interpreter's `-e`/`-c`/
+    // eval form is denied outright rather than left to the `ask` fall-back.
+    assert_all_deny(&[
+        r#"perl -e 'system("id")'"#,
+        r#"perl -E 'say `id`'"#,
+        r#"ruby -e 'system("id")'"#,
+        r#"node -e "require('child_process').execSync('id')""#,
+        r#"node -p "require('fs').readFileSync('/etc/passwd')""#,
+        r#"node --eval "process.exit(0)""#,
+        r#"node --print "1+1""#,
+        r#"deno eval "Deno.exit(0)""#,
+        r#"php -r 'system("id");'"#,
+        r#"python -c "import os; os.system('id')""#,
+        r#"python2 -c "import os; os.system('id')""#,
+    ]);
+}
+
+#[test]
+fn interpreter_script_runs_are_not_over_denied() {
+    // The inline-exec denies must not swallow ordinary script runs, which take
+    // the `ask` fall-back (no explicit allow) or an existing allow.
+    assert_eq!(bash("node app.js"), Tier::Ask);
+    assert_eq!(bash("perl script.pl"), Tier::Ask);
+    assert_eq!(bash("python3 script.py"), Tier::Allow);
+}
+
+#[test]
+fn broad_allow_dangerous_subforms_are_guarded() {
+    // Broad tool allows (`gh:*`, `yarn:*`, `pnpm:*`, `uv:*`) grant credential
+    // exposure and arbitrary-package execution; paired rules outscore them.
+    assert_eq!(bash("gh auth token"), Tier::Deny); // prints the auth token
+    assert_eq!(bash("gh api repos/o/r"), Tier::Ask); // powerful API -> prompt
+    assert_all_deny(&[
+        "yarn dlx cowsay hi", // npx-equivalent arbitrary package run
+        "pnpm dlx cowsay hi", //
+        "pnpm exec some-bin", //
+        "uv run ./evil.py",   //
+        "uvx ruff",           // uv tool shorthand
+        "uv tool run ruff",   //
+    ]);
+}
+
+#[test]
+fn broad_allow_safe_subforms_stay_allowed() {
+    // The paired guards must not break the routine uses of these tools.
+    assert_eq!(bash("gh pr list"), Tier::Allow);
+    assert_eq!(bash("yarn install"), Tier::Allow);
+    assert_eq!(bash("pnpm install"), Tier::Allow);
+    assert_eq!(bash("uv pip install requests"), Tier::Allow);
+    // Dependency installs run lifecycle/build code by design and stay allowed
+    // (a documented defense-in-depth residual, not a rule fix).
+    assert_eq!(bash("npm install express"), Tier::Allow);
+    assert_eq!(bash("pip install requests"), Tier::Allow);
+}
+
+#[test]
 fn redirection_to_denied_files_is_denied() {
     assert_all_deny(&[
         "cat /etc/hosts > /work/.env",      // clobber a secret file

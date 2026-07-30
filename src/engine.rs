@@ -12,15 +12,25 @@ use crate::types::{Decision, Family, Tier};
 
 /// Select the winning rule for `tool` given the payload's candidate forms.
 ///
-/// The winner maximizes `(specificity, tier)` lexicographically; a full tie is
-/// broken by the lowest `order_index` (first in file order) for determinism
-/// (§6.3). Returns `None` when nothing matches (caller applies the `defaultMode`
+/// Two phases (§6.3):
+///
+/// 1. The specificity winner maximizes `(specificity, tier)` lexicographically;
+///    a full tie is broken by the lowest `order_index` (first in file order).
+/// 2. A subset guard (§6.3a): a less-restrictive winner overrides a more-
+///    restrictive matching rule only when it is a **proven subset** of it (a
+///    genuine narrow exception). Otherwise that rule wins, because a longer
+///    specifier is not always a narrower one -- character count is a proxy for
+///    narrowness, and where the two diverge this keeps the deny backstop. The
+///    guard only ever raises restrictiveness, never lowers it.
+///
+/// Returns `None` when nothing matches (caller applies the `defaultMode`
 /// fall-back, §6.4).
 pub(crate) fn best_match<'a>(
     rs: &'a RuleSet,
     tool: &str,
     candidates: &[&str],
 ) -> Option<&'a CompiledRule> {
+    // Phase 1: specificity/tier winner.
     let mut best: Option<&CompiledRule> = None;
     for &idx in rs.rules_for(tool) {
         let rule = &rs.rules[idx];
@@ -42,7 +52,36 @@ pub(crate) fn best_match<'a>(
             }
         });
     }
-    best
+    let winner = best?;
+
+    // Phase 2: subset guard. Find the most-restrictive matching rule that the
+    // winner does not legitimately override (a rule strictly more restrictive
+    // than the winner, of which the winner is not a proven subset). If one
+    // exists, it wins instead.
+    let mut blocker: Option<&CompiledRule> = None;
+    for &idx in rs.rules_for(tool) {
+        let rule = &rs.rules[idx];
+        if rule.tier <= winner.tier {
+            continue; // only rules more restrictive than the winner can block
+        }
+        if !candidates.iter().any(|c| rule.matcher.matches(c)) {
+            continue;
+        }
+        if crate::matcher::matcher_subset(&winner.matcher, &rule.matcher) {
+            continue; // winner is a genuine narrow exception to this rule
+        }
+        blocker = Some(match blocker {
+            None => rule,
+            Some(b) => {
+                if rule.tier > b.tier || (rule.tier == b.tier && rule.order_index < b.order_index) {
+                    rule
+                } else {
+                    b
+                }
+            }
+        });
+    }
+    Some(blocker.unwrap_or(winner))
 }
 
 /// The complete decision for a Path or Generic tool (§6.3, §7).

@@ -232,13 +232,16 @@ fn install_copy_rules(src: &Path, dest: &Path) {
             process::exit(3);
         }
     };
-    if let Err(e) = load_rules(&abs_src) {
-        eprintln!("error: {e}");
-        eprintln!(
-            "hint: create a starter rules file with `permcheck --init-rules {}`",
-            abs_src.display()
-        );
-        process::exit(3);
+    match load_rules(&abs_src) {
+        Ok(rs) => print_lint_warnings(&rs),
+        Err(e) => {
+            eprintln!("error: {e}");
+            eprintln!(
+                "hint: create a starter rules file with `permcheck --init-rules {}`",
+                abs_src.display()
+            );
+            process::exit(3);
+        }
     }
 
     // The source already *is* the canonical file — nothing to copy.
@@ -286,12 +289,15 @@ fn install_copy_rules(src: &Path, dest: &Path) {
 /// a broken existing file (a broken policy must not be wired).
 fn install_seed_rules(dest: &Path) {
     if dest.exists() {
-        if let Err(e) = load_rules(dest) {
-            eprintln!(
-                "error: existing rules file {} does not load: {e}",
-                dest.display()
-            );
-            process::exit(3);
+        match load_rules(dest) {
+            Ok(rs) => print_lint_warnings(&rs),
+            Err(e) => {
+                eprintln!(
+                    "error: existing rules file {} does not load: {e}",
+                    dest.display()
+                );
+                process::exit(3);
+            }
         }
         println!("Using existing rules → {}", dest.display());
         return;
@@ -485,6 +491,7 @@ fn run_cli(args: &[String]) {
             process::exit(3);
         }
     };
+    print_lint_warnings(&rule_set);
 
     // Relative path payloads are absolutized against the process CWD in CLI mode (§7.2).
     let cwd = std::env::current_dir().ok();
@@ -611,6 +618,15 @@ fn find_rules_arg(args: &[String]) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Print author-time lint warnings to stderr (never stdout, which carries the
+/// hook JSON). Called from the CLI-check and `--install` paths, never in hook
+/// mode, where a per-call warning would spam the logs.
+fn print_lint_warnings(rs: &permcheck::RuleSet) {
+    for w in rs.lint_warnings() {
+        eprintln!("warning: {w}");
+    }
 }
 
 fn build_tool_input(tool: &str, payload: &str) -> serde_json::Value {
