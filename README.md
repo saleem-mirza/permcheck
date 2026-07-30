@@ -165,6 +165,8 @@ The consequence, and the whole reason permcheck exists, is that a narrow rule be
 
 > **These rows illustrate the mechanism with example rules.** The shipped `rules/permcheck.json` sets `"defaultMode": "ask"` (so a call matching no rule prompts rather than blocks) and does **not** itself carry the narrow `aws`/`kubectl` read-only allows. Add them, as above, to opt into read-only cloud access.
 
+> **Specificity is a character count, not a scope measure.** Where a longer specifier is actually broader, the count inverts: `allow Read(/**/passwd)` (8) outscores `deny Read(/etc/**)` (5), so `/etc/passwd` is allowed even though the allow is not a subset of the deny. The engine trusts the score; it does not verify containment. Make a deny out-score the allow it must beat, or keep the allow a strict subset of the deny.
+
 ## Use cases
 
 permcheck expresses least-privilege rules the native model cannot: a narrow rule overrides a broad one *in either direction*.

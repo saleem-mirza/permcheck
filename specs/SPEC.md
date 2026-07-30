@@ -223,6 +223,14 @@ specificity = (count of literal, non-wildcard characters in the specifier)
 - A **bare rule** has specificity `0`.
 - The `+1000` exact-match bonus guarantees a literal specifier outranks any
   wildcard specifier, regardless of length.
+- Specificity is a **character count**, a proxy for narrowness, not a measure of
+  match-set scope. Where a longer specifier matches a broader set, §6.3 lets it
+  override a shorter rule it does not refine. `allow Read(/**/passwd)` (8) beats
+  `deny Read(/etc/**)` (5), so `/etc/passwd` is allowed even though the allow is
+  not a subset of the deny. The engine trusts the score and does not verify
+  containment. Authoring rule: make a deny out-score the allow it must beat, or
+  keep the allow a strict subset of the deny. The only automatic check is the
+  dead-`cmd:*` lint (§11.2).
 
 ### 6.2 Tier ordering
 
