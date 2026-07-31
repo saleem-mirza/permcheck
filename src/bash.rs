@@ -31,7 +31,9 @@ pub fn decide_bash(command: &str, rs: &RuleSet, cwd: Option<&str>) -> Decision {
                 tier = inner_tier;
             }
         }
-        // Cross-check can only raise; skip it once we are already at deny.
+        // The file-access cross-check raises a unit to deny only; skip it once we
+        // are already at deny. Flag-variant and interpreter-inline normalization
+        // are handled inside `unit_tier` (for the command and the wrapped inner).
         if tier != Tier::Deny && cross_check(rs, cmd, cwd) {
             tier = Tier::Deny;
         }
@@ -46,8 +48,223 @@ pub fn decide_bash(command: &str, rs: &RuleSet, cwd: Option<&str>) -> Decision {
 /// The tier of a single (already env-stripped) command string against the Bash
 /// matchers, taking the rule set's `defaultMode` fall-back when nothing matches
 /// (§6.3, §6.4).
+///
+/// The command is matched in normalized forms as well as verbatim, so an
+/// invocation cannot dodge a rule by dressing up the command line. Two kinds:
+///
+/// - **Identity** forms — the same command spelled with a path or global
+///   options: a **path-qualified** executable (`/usr/bin/aws …`) matches by
+///   basename, and a **git** invocation with global options before the
+///   subcommand (`git -c x config …`) matches the subcommand-exposed form. These
+///   decide together with the raw command, so an allow can still win (a
+///   path-qualified allowed binary stays allowed).
+///
+/// - **Escalation** forms — a clustered/split short-flag set (`rm -Rf` -> `rm -f`)
+///   and an interpreter inline-code invocation (`perl -we` -> `perl -e`,
+///   `node --eval` -> `node -e`). Each is decided on its own and can only RAISE
+///   the verdict, and only on a real rule match — so an interpreter the rules do
+///   not mention keeps the base verdict (its `defaultMode`), never a hard-coded
+///   deny. The policy stays in the rules; the engine only normalizes the form.
 fn unit_tier(rs: &RuleSet, cmd: &str) -> Tier {
-    engine::decide_tier(rs, "Bash", &[cmd]).unwrap_or(rs.default_tier)
+    let base_owned = basename_command(cmd);
+    let base: &str = base_owned.as_deref().unwrap_or(cmd);
+    let git_owned = git_subcommand_form(base);
+
+    let mut identity: Vec<&str> = vec![cmd];
+    identity.extend(base_owned.as_deref());
+    identity.extend(git_owned.as_deref());
+    let mut tier = engine::decide_tier(rs, "Bash", &identity).unwrap_or(rs.default_tier);
+
+    let mut esc: Vec<String> = flag_split_candidates(base);
+    esc.extend(inline_exec_candidate(base));
+    for e in &esc {
+        if let Some(t) = engine::decide_tier(rs, "Bash", &[e.as_str()])
+            && t > tier
+        {
+            tier = t;
+        }
+    }
+    tier
+}
+
+/// Git global options placed *before* the subcommand that consume the following
+/// token as their value, so it is not mistaken for the subcommand.
+const GIT_VALUE_OPTS: &[&str] = &[
+    "-c",
+    "-C",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--super-prefix",
+    "--config-env",
+    "--exec-path",
+];
+
+/// If `cmd` is a `git` invocation with global options before the subcommand
+/// (`git -c core.pager=cat config …`, `git -C /repo push --force`), return the
+/// command with those options dropped so the subcommand is exposed to the
+/// `Bash(git <sub>:*)` rules. Returns `None` when `cmd` is not `git`, has no
+/// leading global options, or leaves no subcommand.
+fn git_subcommand_form(cmd: &str) -> Option<String> {
+    let after = cmd
+        .trim_start()
+        .strip_prefix("git")?
+        .strip_prefix([' ', '\t'])?;
+    let tokens: Vec<&str> = after.split_ascii_whitespace().collect();
+    let mut i = 0;
+    let mut peeled = false;
+    while let Some(&tok) = tokens.get(i) {
+        if !tok.starts_with('-') {
+            break; // the subcommand
+        }
+        peeled = true;
+        // `-c name=value` / `-C path` consume the next token; `--opt=value` and
+        // bare flags are self-contained.
+        i += if GIT_VALUE_OPTS.contains(&tok) { 2 } else { 1 };
+    }
+    if !peeled || i >= tokens.len() {
+        return None;
+    }
+    Some(format!("git {}", tokens[i..].join(" ")))
+}
+
+/// An interpreter and the option forms that make it run inline code from the
+/// command line (rather than a script file). The inline flag is interpreter-
+/// specific — `perl -c` is a *syntax check*, `python -c` *executes* — so this is
+/// a per-interpreter table, not a shared flag set: `short` lists short flags
+/// (each canonicalized to `-<flag>`), `long` maps a long option to its canonical
+/// short form, and `subcommand` lists an inline subcommand (`deno eval`). Adding
+/// a language is one row. The table normalizes the *form* only; whether an
+/// interpreter's inline exec is denied stays in the rules.
+struct Interp {
+    name: &'static str,
+    short: &'static [u8],
+    long: &'static [(&'static str, &'static str)],
+    subcommand: &'static [&'static str],
+}
+
+const INTERPRETERS: &[Interp] = &[
+    Interp { name: "python", short: b"c", long: &[], subcommand: &[] },
+    Interp { name: "python2", short: b"c", long: &[], subcommand: &[] },
+    Interp { name: "python3", short: b"c", long: &[], subcommand: &[] },
+    Interp { name: "pypy", short: b"c", long: &[], subcommand: &[] },
+    Interp { name: "pypy3", short: b"c", long: &[], subcommand: &[] },
+    Interp { name: "perl", short: b"eE", long: &[], subcommand: &[] },
+    Interp { name: "perl5", short: b"eE", long: &[], subcommand: &[] },
+    Interp { name: "ruby", short: b"e", long: &[], subcommand: &[] },
+    Interp { name: "node", short: b"ep", long: &[("--eval", "-e"), ("--print", "-p")], subcommand: &[] },
+    Interp { name: "nodejs", short: b"ep", long: &[("--eval", "-e"), ("--print", "-p")], subcommand: &[] },
+    Interp { name: "bun", short: b"e", long: &[("--eval", "-e")], subcommand: &[] },
+    Interp { name: "deno", short: b"", long: &[], subcommand: &["eval"] },
+    Interp { name: "php", short: b"r", long: &[], subcommand: &[] },
+    Interp { name: "lua", short: b"e", long: &[], subcommand: &[] },
+    Interp { name: "luajit", short: b"e", long: &[], subcommand: &[] },
+    Interp { name: "Rscript", short: b"e", long: &[], subcommand: &[] },
+];
+
+/// If `cmd` invokes a known interpreter with an inline-code option in any form
+/// (`python3 -cimport`, `python3 -W ignore -c`, `perl -we`, `node --eval`,
+/// `deno eval`, `bun -e`), return the canonical `<basename> <flag>` form
+/// (`python3 -c`, `perl -e`, `node -e`, `deno eval`) so every spelling matches
+/// whatever the rules say about that interpreter. Returns `None` for a plain
+/// script/module run (`python3 app.py`, `perl -c`) — no inline option present.
+fn inline_exec_candidate(cmd: &str) -> Option<String> {
+    let mut toks = cmd.split_ascii_whitespace();
+    let name = basename(toks.next()?);
+    let interp = INTERPRETERS.iter().find(|i| i.name == name)?;
+    for tok in toks {
+        if tok == "--" {
+            break; // end of options; the rest are operands
+        }
+        let b = tok.as_bytes();
+        if b.first() != Some(&b'-') {
+            // A non-option token: an inline subcommand (`deno eval`), else a
+            // script/operand — keep scanning for a later inline flag.
+            if interp.subcommand.contains(&tok) {
+                return Some(format!("{name} {tok}"));
+            }
+            continue;
+        }
+        if let Some(rest) = tok.strip_prefix("--") {
+            let head = rest.split('=').next().unwrap_or(rest);
+            for &(long, canon) in interp.long {
+                if long.strip_prefix("--") == Some(head) {
+                    return Some(format!("{name} {canon}"));
+                }
+            }
+            continue;
+        }
+        // Short bundle: an inline flag anywhere in the run, before an attached
+        // value (`-cimport`, `-we`). A value-taking flag can misread here, but
+        // over-approximating toward the deny is the safe direction.
+        for &c in &b[1..] {
+            if interp.short.contains(&c) {
+                return Some(format!("{name} -{}", c as char));
+            }
+            if !c.is_ascii_alphanumeric() {
+                break; // attached value begins
+            }
+        }
+    }
+    None
+}
+
+/// Split the leading short-flag bundles of `cmd` into individual `<cmd> -<flag>`
+/// candidate strings, so a reordered / clustered / split flag set can match a
+/// single-flag deny rule. Returns empty when fewer than two distinct flags lead
+/// the command — a lone `-x` already matches its prefix rule verbatim, and a
+/// bare command has no flags. Only leading option tokens are scanned; a long
+/// option (`--force`) or the first operand ends the scan, and a bundle carrying
+/// an attached value (`-e'code'`, `--x=y`) is left intact.
+fn flag_split_candidates(cmd: &str) -> Vec<String> {
+    let mut toks = cmd.split_ascii_whitespace();
+    let Some(cmd_word) = toks.next() else {
+        return Vec::new();
+    };
+    let mut flags: Vec<u8> = Vec::new();
+    for tok in toks {
+        let b = tok.as_bytes();
+        // Stop at an operand or a long option; a short bundle is `-` + alnums.
+        if b.len() < 2 || b[0] != b'-' || b[1] == b'-' {
+            break;
+        }
+        if !b[1..].iter().all(|&c| c.is_ascii_alphanumeric()) {
+            break; // attached value / `=` — not a plain flag bundle
+        }
+        for &f in &b[1..] {
+            if !flags.contains(&f) {
+                flags.push(f);
+            }
+        }
+    }
+    if flags.len() < 2 {
+        return Vec::new();
+    }
+    flags
+        .iter()
+        .map(|&f| format!("{cmd_word} -{}", f as char))
+        .collect()
+}
+
+/// If the command's leading executable token is path-qualified (`/usr/bin/aws`,
+/// `./aws`, `../bin/rm`), return the command with that token reduced to its
+/// basename (`aws …`, `rm …`). Returns `None` when the leading token carries no
+/// `/` (nothing to strip) or reduces to empty (a bare `/`, or a trailing-slash
+/// token), so a bare-name command allocates nothing.
+fn basename_command(cmd: &str) -> Option<String> {
+    let trimmed = cmd.trim_start();
+    let end = trimmed
+        .find(|c: char| c.is_ascii_whitespace())
+        .unwrap_or(trimmed.len());
+    let exe = &trimmed[..end];
+    if !exe.contains('/') {
+        return None;
+    }
+    let base = basename(exe);
+    if base.is_empty() || base == exe {
+        return None;
+    }
+    Some(format!("{base}{}", &trimmed[end..]))
 }
 
 // --- Splitter (§8.1) ---------------------------------------------------------
@@ -297,8 +514,12 @@ pub enum Token {
 }
 
 /// Wrapper commands whose leading options are peeled to reach the real command.
+/// `xargs` builds its command line by appending stdin items to the command that
+/// follows it, so the wrapped command (`xargs cat …`, `xargs rm -rf …`) is the
+/// one that must be decided and cross-checked.
 const WRAPPERS: &[&str] = &[
     "sudo", "doas", "env", "timeout", "nice", "ionice", "nohup", "stdbuf", "setsid", "command",
+    "xargs",
 ];
 
 /// Readers whose file operands are checked against `Read` deny rules.
@@ -498,12 +719,70 @@ fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> bool {
                 return true;
             }
         }
+    } else if (name == "cp" || name == "mv") && cp_mv_writes_denied(rs, operands, cwd) {
+        return true;
     } else if (name == "curl" && curl_reads_denied(rs, operands, cwd))
         || (name == "wget" && wget_reads_denied(rs, operands, cwd))
     {
         return true;
     }
     false
+}
+
+/// True if a `cp`/`mv` invocation writes to a `Write`/`Edit`-denied destination
+/// (§8.3). Shape: `cp [opts] SRC… DEST`, where the last path operand is the
+/// destination, or `-t DIR` / `--target-directory[=DIR]`, where DIR is the
+/// destination directory and each source lands at `DIR/<basename>`. Only the
+/// write side is modeled, so overwriting a protected file (the policy/settings
+/// file, a shell-rc, `.env`, an ssh file) denies; following the source reads is
+/// a documented non-goal (§9.2). The cross-check only ever raises to `deny`.
+fn cp_mv_writes_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> bool {
+    let mut target_dir: Option<&str> = None;
+    let mut positionals: Vec<&str> = Vec::new();
+    let mut end_opts = false;
+    let mut i = 0;
+    while i < operands.len() {
+        let op = operands[i];
+        i += 1;
+        if end_opts {
+            positionals.push(op);
+        } else if op == "--" {
+            end_opts = true;
+        } else if op == "-t" || op == "--target-directory" {
+            // The directory is the next operand.
+            if let Some(v) = operands.get(i) {
+                target_dir = Some(v);
+                i += 1;
+            }
+        } else if let Some(v) = op.strip_prefix("--target-directory=") {
+            target_dir = Some(v);
+        } else if let Some(v) = op.strip_prefix("-t").filter(|v| !v.is_empty()) {
+            target_dir = Some(v); // attached: -tDIR
+        } else if op.starts_with('-') && op.len() > 1 {
+            // Any other option flag; not a path operand.
+        } else {
+            positionals.push(op);
+        }
+    }
+
+    let hits = |p: &str| !p.is_empty() && engine::path_hits_deny(rs, &["Write", "Edit"], p, cwd);
+
+    if let Some(dir) = target_dir {
+        // `-t DIR SRC…`: DIR is the destination, and each source lands at
+        // `DIR/<basename>` — check both so `cp -t .claude settings.json` denies.
+        if hits(dir) {
+            return true;
+        }
+        let base = dir.trim_end_matches('/');
+        return positionals
+            .iter()
+            .any(|src| hits(&format!("{base}/{}", basename(src))));
+    }
+    // Plain form: the last path operand is the destination.
+    match positionals.split_last() {
+        Some((dest, _)) => hits(dest),
+        None => false,
+    }
 }
 
 /// The value of an option in `--flag val` or `--flag=val` form. Returns `None`

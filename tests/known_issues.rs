@@ -39,19 +39,31 @@ fn issue2_shell_operator_specifier_never_fires() {
 }
 
 #[test]
-fn issue3_rm_flag_variants_slip_through() {
-    // `rm -rf` / `rm -f` are denied, but `rm -fr` is not, so it hits `rm:*` ask.
+fn issue3_rm_short_flag_variants_are_now_denied() {
+    // §11.3 fixed for short flags: the leading short-flag bundle is split, so any
+    // force flag matches the `rm -f` deny regardless of clustering or order.
     assert_eq!(bash("rm -rf /tmp/x"), Tier::Deny);
-    assert_eq!(bash("rm -fr /tmp/x"), Tier::Ask);
+    assert_eq!(bash("rm -fr /tmp/x"), Tier::Deny);
+    assert_eq!(bash("rm -Rf /tmp/x"), Tier::Deny);
+    assert_eq!(bash("rm -r -f /tmp/x"), Tier::Deny);
+    // Recursive-only rm (no force) stays on the ask-tier `rm:*`.
+    assert_eq!(bash("rm -r /tmp/x"), Tier::Ask);
+    // Long-form flags are not normalized to their short equivalents, so this
+    // still slips to ask (documented gap).
+    assert_eq!(bash("rm --recursive --force /tmp/x"), Tier::Ask);
 }
 
 #[test]
-fn issue4_gcp_deny_matches_nothing_real() {
-    // `Bash(gcp:*)` denies a command named `gcp`, but the real CLI is `gcloud`,
-    // which no rule covers -> the `defaultMode: "ask"` fall-back (not the gcp
-    // deny). So the deny is real but never fires on the real CLI, which now asks.
+fn issue4_gcp_clis_are_now_denied() {
+    // §11.4 fixed: the dead `Bash(gcp:*)` rule is joined by denies for the real
+    // Google Cloud CLIs (`gcloud`, `gsutil`, `bq`), so a cloud mutation no longer
+    // slips to the `ask` fall-back.
     assert_eq!(bash("gcp compute instances list"), Tier::Deny);
-    assert_eq!(bash("gcloud compute instances list"), Tier::Ask);
+    assert_eq!(bash("gcloud compute instances list"), Tier::Deny);
+    assert_eq!(bash("gsutil rm gs://b/obj"), Tier::Deny);
+    assert_eq!(bash("bq rm -t dataset.table"), Tier::Deny);
+    // A path-qualified invocation is denied the same as the bare name.
+    assert_eq!(bash("/usr/bin/gcloud compute instances list"), Tier::Deny);
 }
 
 #[test]

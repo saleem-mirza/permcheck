@@ -68,6 +68,62 @@ fn wrapper_cannot_launder_a_denied_command() {
     assert_eq!(t("env"), Tier::Allow); // bare wrapper, nothing wrapped
 }
 
+// --- cp/mv destination write cross-check -------------------------------------
+
+#[test]
+fn cp_mv_destination_write_is_checked_source_is_not() {
+    // cp/mv are allowed here; only a Write/Edit-denied DESTINATION raises to deny.
+    let rs = RuleSet::load_str(
+        r#"{"allow":["Bash(cp:*)","Bash(mv:*)"],
+            "deny":["Read(/**/.env*)","Write(//**/.ssh/**)","Edit(//**/.ssh/**)"],
+            "defaultMode":"ask"}"#,
+    )
+    .unwrap();
+    let t = |c: &str| decide_bash(c, &rs, Some("/home/user")).tier;
+    // Destination overwrite of a Write-denied path denies (plain and -t forms).
+    assert_eq!(t("cp x /home/user/.ssh/authorized_keys"), Tier::Deny);
+    assert_eq!(t("mv x /home/user/.ssh/id_ed25519"), Tier::Deny);
+    assert_eq!(t("cp -t /home/user/.ssh key"), Tier::Deny);
+    // The source read side is a documented non-goal (§9.2): copying a Read-denied
+    // file OUT to a benign destination is not followed, so it stays allowed.
+    assert_eq!(t("cp /home/user/.env /tmp/x"), Tier::Allow);
+    // A benign copy is not over-denied.
+    assert_eq!(t("cp a b"), Tier::Allow);
+}
+
+// --- interpreter inline-exec normalization (policy stays in the rules) -------
+
+#[test]
+fn interpreter_inline_exec_follows_the_rules_not_a_hardcoded_deny() {
+    // The engine normalizes the inline-exec FORM; the ruleset + defaultMode decide
+    // the verdict. With no inline-exec deny, a broadly-allowed interpreter's inline
+    // code stays allowed and an un-listed interpreter falls to defaultMode.
+    let permissive =
+        RuleSet::load_str(r#"{"allow":["Bash(python3 *)"],"deny":[],"defaultMode":"ask"}"#).unwrap();
+    let a = |c: &str| decide_bash(c, &permissive, Some("/w")).tier;
+    assert_eq!(a("python3 -c 'x'"), Tier::Allow); // not invented as a deny
+    assert_eq!(a("python3 -cimport os"), Tier::Allow);
+    assert_eq!(a("bun -e 'x'"), Tier::Ask); // un-listed -> defaultMode
+    assert_eq!(a("bun --eval 'x'"), Tier::Ask);
+
+    // With the canonical inline form denied, every spelling denies (form-normalized),
+    // while a plain script run keeps the broad allow.
+    let strict = RuleSet::load_str(
+        r#"{"allow":["Bash(python3 *)"],"deny":["Bash(python3 -c:*)","Bash(bun -e:*)"],"defaultMode":"ask"}"#,
+    )
+    .unwrap();
+    let d = |c: &str| decide_bash(c, &strict, Some("/w")).tier;
+    assert_eq!(d("python3 -cimport os"), Tier::Deny);
+    assert_eq!(d("python3 -W ignore -c 'x'"), Tier::Deny);
+    assert_eq!(d("bun --eval 'x'"), Tier::Deny);
+    assert_eq!(d("python3 app.py"), Tier::Allow);
+
+    // defaultMode deny governs an un-listed interpreter through the fall-back, not
+    // a special engine rule.
+    let closed = RuleSet::load_str(r#"{"deny":[],"defaultMode":"deny"}"#).unwrap();
+    assert_eq!(decide_bash("bun -e 'x'", &closed, Some("/w")).tier, Tier::Deny);
+}
+
 // --- dd if=/of= cross-check (A1) ---------------------------------------------
 
 fn dd_rs() -> RuleSet {

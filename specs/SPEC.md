@@ -366,21 +366,46 @@ decomposes it and takes the **most restrictive** verdict.
    constructs are consumed to end of input.
 
 2. **Per unit**, strip leading `NAME=value` environment assignments, then decide
-   the trimmed unit string against the Bash matchers via §6.3. Additionally, if
-   the unit begins with a **wrapper command** (`env`, `sudo`, `timeout`, `nice`,
-   …), peel the wrapper and its options / assignments / numeric args and decide
-   the wrapped command too, taking the most restrictive of the two. This runs
-   the wrapped command's own rules, so `env aws …` cannot ride in on a broad
-   `Bash(env:*)` allow and bypass an `aws` deny. It only ever raises the verdict.
+   the trimmed unit string against the Bash matchers via §6.3. The unit is also
+   matched in normalized forms so a rule cannot be dodged by dressing up the
+   command line. Two kinds:
+
+   - **Identity** forms decide together with the raw command, so an allow can
+     still win: a **path-qualified** executable (`/usr/bin/aws …`) matches by
+     basename, and a **git** invocation with global options before the subcommand
+     (`git -c x config …`, `git -C /r push --force`) matches the subcommand-exposed
+     form.
+   - **Escalation** forms are each decided on their own and can only *raise* the
+     verdict, and only on a real rule match — so they respect `defaultMode` and
+     never invent a deny. A clustered/reordered/split **short-flag** set maps onto
+     its single-flag rule (`rm -Rf` / `rm -fr` / `rm -r -f` → `rm -f`), and an
+     **interpreter inline-code** invocation is canonicalized to `<interp> <flag>`
+     (`python3 -cimport` / `python3 -W ignore -c` / `perl -we` / `node --eval` /
+     `deno eval` → `python3 -c` / `perl -e` / `node -e` / `deno eval`) so every
+     spelling matches whatever the rules say about that interpreter. The
+     interpreter+flag vocabulary is an engine table (`python`, `perl`, `ruby`,
+     `node`, `deno`, `php`, `bun`, `lua`, `Rscript`, …); the policy stays in the
+     rules.
+
+   Additionally, if the unit begins with a **wrapper command** (`env`, `sudo`,
+   `timeout`, `nice`, `xargs`, …), peel the wrapper and its options / assignments
+   / numeric args and decide the wrapped command too, taking the most restrictive.
+   This runs the wrapped command's own rules, so `env aws …` cannot ride in on a
+   broad `Bash(env:*)` allow and bypass an `aws` deny.
 
 3. **File-access cross-check** (raises to `deny` only, never loosens): tokenize
-   the unit, peel wrapper commands (`sudo`, `env`, `timeout`, `nice`, …), then:
+   the unit, peel wrapper commands (`sudo`, `env`, `timeout`, `nice`, `xargs`,
+   …), then:
    - if the command is a known **reader** (`cat`, `grep`, `sed`, `head`, …),
      check each non-option operand against the `Read` **deny** rules
      (pattern-first readers like `grep`/`sed`/`awk` skip their first operand,
      which is a pattern, not a file).
    - if it is a known **writer** (`tee`, `truncate`), check operands against the
      `Write`/`Edit` deny rules.
+   - `cp`/`mv` overwrite their destination: the last path operand (or the
+     `-t <dir>` / `--target-directory=<dir>` target, with each source's landing
+     path) is checked against `Write`/`Edit` deny. The source reads are not
+     followed (§9.2).
    - `dd` names files by key-value operand: `if=<path>` is checked against `Read`
      deny, `of=<path>` against `Write`/`Edit` deny.
    - two exfil tools read files by argument: `curl` (`@file` on `-d`/`--data*`/
@@ -427,10 +452,15 @@ out of scope and left to the OS sandbox and enterprise denies:
   binaries ship.
 - File reads by tools outside the covered set (readers, `dd`, `curl`, `wget`):
   `scp`, `tar`, `git`, `rsync`, and editors reading a secret are not followed.
-- Interpreter inline-exec (`node -e`, `perl -e`, …) and the `curl`/`wget`
-  file-read forms are enumerated blocklists, so an unlisted interpreter or a
-  bundled flag can slip.
-- Commands assembled by `xargs` from stdin are not followed.
+- Interpreter inline-exec is form-normalized (§8 step 2): once an interpreter is
+  in the engine table, every spelling of its inline flag (clustered, attached,
+  reordered, long, spaced, path-qualified) maps onto the rule, so a bundled flag
+  no longer slips. The table is still an enumeration — an interpreter not in it
+  (`tclsh`, `groovy`, …) is not normalized, but it falls to `defaultMode` (ask),
+  never a silent allow. The `curl`/`wget` file-read options remain a blocklist.
+- `xargs` is peeled as a wrapper, so the command it runs (`xargs cat …`,
+  `xargs rm -rf …`) is decided and cross-checked. A separate-token replace string
+  (`xargs -I {} …`) still hides the command; the attached form (`-I{}`) does not.
 - `#` comments and heredoc bodies are not modeled (biases toward over-deny, the
   safe direction).
 - The glob-operand cross-check (§8.3) escalates only operands whose every path
@@ -490,22 +520,25 @@ The engine faithfully applies §5-§8. Each item below is a case where the rules
 do not express what an operator likely intends: cautionary patterns and a
 correction backlog for the reference file.
 
-1. **Arbitrary-execution / secret bypasses.** Interpreter inline-exec is now
-   guarded across the shipped interpreters: `Bash(python3 -c:*)`, `python -c`,
-   `python2 -c`, `.venv/bin/python -c`, `perl -e`/`-E`, `ruby -e`, `node -e`/
-   `-p`/`--eval`/`--print`, `deno eval`, and `php -r` deny while a plain script
-   run stays allowed. Under `Bash(gh:*)`, `gh auth token` is denied and `gh api`
-   is `ask`; the arbitrary-package runners under `yarn:*`/`pnpm:*`/`uv:*`
-   (`yarn dlx`, `pnpm dlx`, `pnpm exec`, `uv run`, `uvx`, `uv tool run`) are
-   denied. (`Bash(env:*)` is denied, and `env` is peeled as a wrapper so
-   `env <cmd>` re-decides `<cmd>`, §8.2.) Remaining open: `Bash(printenv:*)`
-   exposes environment secrets, `gh extension` installs runnable code, and
-   dependency installs (`npm install`, `pip install`, `gem install`, …) run
-   package build/lifecycle code by design, which a prefix deny cannot separate
-   from a safe install. *Pattern:* pair any broad interpreter/tool allow with
-   denies for its exec/secret subforms, or move it to `ask`; the install residual
-   is a sandbox concern, not a rule fix. The blocklists are enumerated (§9.2), so
-   an unlisted interpreter or bundled flag can slip.
+1. **Arbitrary-execution / secret bypasses.** Interpreter inline-exec is guarded
+   with one canonical deny per interpreter (`Bash(python3 -c:*)`, `python -c`,
+   `python2 -c`, `pypy -c`, `perl -e`/`-E`, `ruby -e`, `node -e`/`-p`, `deno eval`,
+   `php -r`, `bun -e`, `lua -e`, `Rscript -e`) while a plain script run stays
+   allowed. The engine normalizes every *form* onto these rules (§8 step 2), so a
+   clustered/attached/reordered/long/path-qualified spelling no longer slips, and
+   `.venv/bin/python -c` matches by basename — no per-form rules needed. Under
+   `Bash(gh:*)`, `gh auth token` is denied and `gh api` is `ask`; the
+   arbitrary-package runners under `yarn:*`/`pnpm:*`/`uv:*` (`yarn dlx`, `pnpm dlx`,
+   `pnpm exec`, `uv run`, `uvx`, `uv tool run`) are denied. (`Bash(env:*)` is
+   denied, and `env` is peeled as a wrapper so `env <cmd>` re-decides `<cmd>`,
+   §8.2.) Remaining open: `Bash(printenv:*)` exposes environment secrets,
+   `gh extension` installs runnable code, and dependency installs (`npm install`,
+   `pip install`, `gem install`, …) run package build/lifecycle code by design,
+   which a prefix deny cannot separate from a safe install. *Pattern:* pair any
+   broad interpreter/tool allow with denies for its exec/secret subforms, or move
+   it to `ask`; the install residual is a sandbox concern, not a rule fix. An
+   interpreter not in the engine table (§9.2) is not normalized, but it takes the
+   `defaultMode` fall-back, not a silent allow.
 
 2. **Dead / redundant under command-splitting.** *Pattern:* one rule per simple
    command, and never put shell operators in a specifier. A specifier like
@@ -521,16 +554,17 @@ correction backlog for the reference file.
    form above. The shipped reference set is clean under the check.
 
 3. **Coverage gaps / asymmetries.** `Bash(cp -R:*)` is allowed but plain
-   `cp a b` matches no rule and takes the `defaultMode: "ask"` fall-back.
-   `Bash(rm -rf:*)` / `Bash(rm -f:*)` miss `rm -fr`, `rm -Rf`, `rm --force`
-   (which then hit the `rm:*` **ask**). *Pattern:* match the base command, then
-   add explicit denies for every destructive flag spelling/variant.
+   `cp a b` matches no rule and takes the `defaultMode: "ask"` fall-back. Short
+   destructive-flag variants are now normalized onto their single-flag rule
+   (§8 step 2), so `rm -fr`, `rm -Rf`, `rm -r -f` all match `Bash(rm -f:*)` and
+   deny. Remaining open: the **long-form** flags (`rm --recursive --force`) are not
+   mapped to their short equivalents, so they still hit the `rm:*` **ask**.
+   *Pattern:* add explicit denies for the long-form spellings, or move `rm` to ask.
 
-4. **`gcp` vs `gcloud`.** `Bash(gcp:*)` denies a command named `gcp`, but the
-   real GCP CLI is `gcloud` (also `gsutil`, `bq`), so the deny matches nothing:
-   `gcloud …` matches no rule and takes the `ask` fall-back rather than being
-   denied. *Pattern:* `Bash(gcloud:*)` deny plus read-only allows
-   (`Bash(gcloud * list:*)`, `Bash(gcloud * describe:*)`), mirroring aws/kubectl.
+4. **`gcp` vs `gcloud`** (fixed). `Bash(gcp:*)` denied a command named `gcp`, but
+   the real GCP CLI is `gcloud` (also `gsutil`, `bq`). The reference now denies
+   `Bash(gcloud:*)`, `Bash(gsutil:*)`, `Bash(bq:*)` alongside the (harmless) `gcp`
+   rule, mirroring aws/kubectl/az.
 
 5. **Bare path-tool allows shift the default.** Bare `Read` / `Edit` / `Write`
    (specificity 0) are in `allow`, so those tools default to **allow** (minus
