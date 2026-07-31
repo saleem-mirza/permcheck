@@ -194,14 +194,7 @@ pub enum BashMatcher {
 impl BashMatcher {
     fn matches(&self, cmd: &str) -> bool {
         match self {
-            BashMatcher::Prefix(prefix) => {
-                if cmd == prefix {
-                    return true;
-                }
-                cmd.len() > prefix.len()
-                    && cmd.starts_with(prefix.as_str())
-                    && cmd.as_bytes()[prefix.len()].is_ascii_whitespace()
-            }
+            BashMatcher::Prefix(prefix) => prefix_covers(prefix, cmd),
             BashMatcher::Glob(pattern) => glob_star_match(cmd.as_bytes(), pattern.as_bytes()),
         }
     }
@@ -538,8 +531,9 @@ fn glob_to_tokens(bytes: &[u8]) -> Vec<PToken> {
 }
 
 /// True if command `cmd` is accepted by the trailing-`:*` prefix specifier `pre`
-/// (matches `pre` exactly, or `pre` followed by whitespace then anything). This is
-/// the same rule [`BashMatcher::Prefix`] applies, reused for prefix containment.
+/// (matches `pre` exactly, or `pre` followed by whitespace then anything). The
+/// single definition of prefix matching, used both by [`BashMatcher::matches`] and
+/// by the prefix-containment subset test.
 fn prefix_covers(pre: &str, cmd: &str) -> bool {
     cmd == pre
         || (cmd.len() > pre.len()

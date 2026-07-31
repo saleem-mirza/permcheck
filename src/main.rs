@@ -450,7 +450,7 @@ fn run_cli(args: &[String]) {
         }
     };
 
-    let json_mode = args.contains(&"--json".to_string());
+    let json_mode = args.iter().any(|a| a == "--json");
 
     // Collect positional args (not --rules, its value, or --json)
     let positional: Vec<&str> = {
