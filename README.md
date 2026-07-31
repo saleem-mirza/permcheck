@@ -282,6 +282,18 @@ A single `Bash` command often chains several commands, so it gets extra scrutiny
 
 The Bash analyzer is a best-effort scanner, not a full shell parser. When it cannot understand a construct, it errs toward `deny`. Documented non-goals (`eval`, aliases, `xargs`-assembled commands, adversarial glob patterns, …) are listed in SPEC §9.
 
+## Flag spellings are your responsibility
+
+permcheck enforces the rules you write; it does not author them. To keep an evasion from dodging a rule, the engine matches each command in normalized form as well as verbatim: it reduces a path-qualified binary to its basename (`/usr/bin/aws` → `aws`), exposes a git subcommand hidden behind global options (`git -c x=y config` → `git config`), splits and reorders clustered short flags (`rm -rf`, `rm -fr`, `rm -Rf` all reduce to `rm -f`), and canonicalizes interpreter inline-code flags (`perl -we` → `perl -e`, `node --eval` → `node -e`).
+
+It does **not** treat a long option and its short form as equivalent. `--force` and `-f` are not linked, because that pairing is not standardized: each program defines it in its own option table, the same short letter means different things across tools (`-f` is force for `rm`, a pattern file for `grep`), and BSD/macOS utilities often reject the GNU long forms. So you write rules in the flag forms the target utility supports. To block both spellings, write both:
+
+```json
+"deny": ["Bash(rm -f:*)", "Bash(rm --force:*)"]
+```
+
+The engine covers the clustering and ordering variants of the short flags you write. It never invents the long or short form you left out.
+
 ## Build
 
 Requires a recent Rust toolchain (edition 2024).

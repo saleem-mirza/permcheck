@@ -73,6 +73,10 @@
     text-rendering: optimizeLegibility;
   }
 
+  .nowrap {
+    white-space: nowrap;
+  }
+
   .wrap {
     max-width: 62rem;
     margin-inline: auto;
@@ -684,6 +688,7 @@ deny:  Bash(python3 -c:*)       <span class="tok-c"># holds: the allow is not a 
   <p>So <code>python3 -c</code> is denied out of the box, while <code>python3 script.py</code> stays allowed: the <code>-c</code> deny holds because the broad allow does not sit inside it. Containment protects you the other way across tiers too. A wide allow that only overlaps a deny no longer punches through it. <code>allow Read(/**/passwd)</code> reaches every <code>passwd</code> on the system, so it is <em>not</em> a subset of <code>deny Read(/etc/**)</code>; the two only overlap, and <code>/etc/passwd</code> is <strong>denied</strong>. To grant a real exception, make the allow a strict subset of the deny — a literal <code>allow Read(/etc/passwd)</code>, which sits entirely inside <code>/etc/**</code>, carves it out and is allowed.</p>
   <p>The reference set applies the same discipline to its other broad allows. The inline-code form of every shipped interpreter is denied (<code>perl -e</code>, <code>ruby -e</code>, <code>node -e</code>, <code>deno eval</code>, <code>php -r</code>, and <code>python</code>/<code>python2 -c</code>). Under <code>Bash(gh:*)</code>, <code>gh auth token</code> is denied and <code>gh api</code> is downgraded to <code>ask</code>. The arbitrary-package runners under <code>yarn:*</code>/<code>pnpm:*</code>/<code>uv:*</code> (<code>yarn dlx</code>, <code>pnpm dlx</code>, <code>pnpm exec</code>, <code>uv run</code>, <code>uvx</code>, <code>uv tool run</code>) are denied.</p>
   <p>One residual stays open by design: <code>npm install</code>, <code>pip install</code>, and their peers run each package's build and lifecycle code, which a prefix deny cannot separate from a safe install without breaking routine dependency installs. That is a sandbox concern, not a rule fix. When you author your own broad allow, pair it with denies for its dangerous subforms the same way. The CLI checker lints for an authoring mistake: a <code>cmd:*</code> rule whose <code>*</code> sits before the <code>:*</code>, which matches nothing.</p>
+  <p>The same responsibility extends to how a command spells its flags. The engine matches each command in normalized form so an evasion cannot slip past a rule you wrote: it splits and reorders clustered short flags (<code>rm -rf</code>, <code>rm -fr</code>, and <code>rm -Rf</code> all reduce to <code>rm -f</code>) and canonicalizes an interpreter's inline-code flag (<code>perl -we</code> to <code>perl -e</code>, <code>node --eval</code> to <code>node -e</code>). It does not treat a long option and its short form as the same, because that pairing is not standardized: each program defines it, the same letter means different things across tools (<code>-f</code> is force for <code>rm</code>, a file for <code>grep</code>), and BSD utilities often reject the GNU long forms. So <code>Bash(rm -f:*)</code> does not imply <code>rm --force</code>. Write the forms your utility supports, and to block both, write both.</p>
 
   <h2 id="what-it-costs">What it costs</h2>
   <p>permcheck runs before every tool call, on the critical path of everything the agent does. The design target: keep the decision cheap enough to disappear inside the cost of starting the process. It does, so the number to plan around is the process itself.</p>
@@ -793,7 +798,7 @@ deny:  Bash(python3 -c:*)       <span class="tok-c"># holds: the allow is not a 
   <p>Migrating from native rules follows the same rule. If a rule family lives in <code>settings.json</code> today, move the whole family into <code>permcheck.json</code> before you add exceptions. Take a native <code>deny Bash(aws:*)</code>: copy it into <code>permcheck.json</code>, then add the narrow <code>allow Bash(aws * describe-*)</code> beside it. Leave the <code>deny</code> in <code>settings.json</code> while the <code>allow</code> sits in <code>permcheck.json</code>, and every <code>aws</code> call stays blocked, because the native deny wins.</p>
 
   <h3>Who owns the policy</h3>
-  <p>permcheck decides against <code>permcheck.json</code>, so that file <em>is</em> the policy. Treat it as code. The plugin and <code>--install</code> place it next to your <code>settings.json</code> (<code>~/.claude/permcheck.json</code>, or <code>./.claude/permcheck.json</code> for a project), and permcheck re-reads it on every call. Check it into version control so a change lands in review, not on one laptop. Project policy belongs in version control; enterprise-managed policy ships through your organization's configuration management, the same channel as <code>managed-settings.json</code>, not the repo.</p>
+  <p>permcheck decides against <code>permcheck.json</code>, so that file <em>is</em> the policy. Treat it as code. The plugin and <code class="nowrap">--install</code> place it next to your <code>settings.json</code> (<code>~/.claude/permcheck.json</code>, or <code>./.claude/permcheck.json</code> for a project), and permcheck re-reads it on every call. Check it into version control so a change lands in review, not on one laptop. Project policy belongs in version control; enterprise-managed policy ships through your organization's configuration management, the same channel as <code>managed-settings.json</code>, not the repo.</p>
   <p>permcheck decides against its own rules file, so the policy protects it. The reference set allows <code>Edit</code> and <code>Write</code> broadly, which on its own would let the agent rewrite <code>permcheck.json</code>, and a permcheck <code>allow</code> auto-approves that edit. So the shipped set denies edits to its own config and to <code>settings.json</code>:</p>
   <pre><code>deny: Edit(//**/.claude/permcheck.json)
 deny: Write(//**/.claude/permcheck.json)
@@ -812,13 +817,12 @@ deny: Write(//**/.claude/settings.json)</code></pre>
 permcheck --install     <span class="tok-c"># seeds ~/.claude/permcheck.json, wires ~/.claude/settings.json</span></code></pre>
   <p><code>--install</code> is idempotent: re-running rewrites the same hook entry instead of duplicating it, and it never overwrites an existing rules file. To wire the hook by hand instead, add this under <code>hooks.PreToolUse</code> in <code>settings.json</code>, using absolute paths for both the binary and the rules file:</p>
   <pre><code>{
-  <span class="tok-k">"hooks"</span>: {
-    <span class="tok-k">"PreToolUse"</span>: [
+  "hooks": {
+    "PreToolUse": [
       {
-        <span class="tok-k">"matcher"</span>: <span class="tok-k">"*"</span>,
-        <span class="tok-k">"hooks"</span>: [
-          { <span class="tok-k">"type"</span>: <span class="tok-k">"command"</span>, <span class="tok-k">"command"</span>: <span class="tok-k">"/abs/path/to/permcheck --hook --rules /abs/path/to/permcheck.json"</span> }
-        ]
+        "name": "permcheck",
+        "command": "/path/to/permcheck",
+        "args": ["--rules", "/path/to/permcheck.json"]
       }
     ]
   }
