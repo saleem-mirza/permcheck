@@ -29,6 +29,17 @@ compound-Bash decision, and the fail-closed error posture.
 Out of scope: enforcing the decision (Claude Code does that), sandboxing,
 network policy, and any statically-undecidable shell construct (§9).
 
+Assumptions. permcheck only tightens the native decision; it never loosens it.
+A PreToolUse hook cannot open a native `deny`: Claude Code evaluates its own
+`deny` and `ask` rules [regardless of what the hook returns](https://code.claude.com/docs/en/permissions#extend-permissions-with-hooks),
+so a native `deny` or `ask` (user or enterprise `settings.json`, or
+`managed-settings.json`) still applies even when permcheck returns `allow`. The
+specificity precedence (§6) therefore holds only among the rules inside the
+rules file. permcheck assumes the `deny` section of the native `settings.json`
+is empty or does not conflict with the rules file, and that the operator is
+responsible for a correct, valid policy across all three sources (enterprise,
+user, and the rules file).
+
 ## 2. Interfaces
 
 The engine is one binary with two **decision** modes plus two **management**

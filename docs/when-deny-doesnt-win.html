@@ -1,6 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-W1ZPH7MEP0"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-W1ZPH7MEP0');
+</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>When Deny Doesn't Win: least-privilege permissions for Claude Code</title>
@@ -352,7 +361,7 @@
   <h1>When deny doesn't win</h1>
   <p class="subtitle">A permission engine for Claude Code that lets the narrowest rule win, in either direction.</p>
   <div class="rule-mark" aria-hidden="true"><i class="a"></i><i class="b"></i><i class="d"></i></div>
-  <p class="dek">Claude Code resolves permission conflicts with one fixed rule: a broad <code>deny</code> always wins. That single rule blocks the least-privilege policy most teams want.</p>
+  <p class="dek">Claude Code resolves permission conflicts with one fixed rule: a broad <code>deny</code> always wins. That single rule blocks the narrow-exception policies many teams need.</p>
   <div class="meta">
     <span class="tag">Security</span>
     <span class="tag">Claude Code</span>
@@ -481,10 +490,11 @@ allow: Bash(aws * describe-*)</code></pre>
 
   <div class="callout">
     <p class="label">The rule</p>
-    <p>permcheck drops "deny always wins". It gathers <strong>every</strong> matching rule across the tool's matchers, then selects the winner by the pair <code>(specificity, tier)</code>, compared lexicographically. Specificity dominates; tier only breaks ties.</p>
+    <p>permcheck drops "deny always wins". It gathers <strong>every</strong> matching rule across the tool's matchers, then selects the winner by the pair <code>(specificity, tier)</code>, compared lexicographically. Specificity dominates; tier only breaks ties. "Most specific" is the highest specificity score, a deterministic number defined next, not a semantic judgment.</p>
   </div>
 
   <p>Specificity is a number you compute by hand: count the literal, non-wildcard characters in the specifier, add 1000 if the specifier has no wildcard at all. Wildcards are <code>*</code> for every family, plus <code>?</code> for path globs. The <code>+1000</code> exact-match bonus guarantees a literal specifier outranks any wildcard specifier regardless of length.</p>
+  <p>Why count characters instead of measuring what each rule matches? There is no clean way to compare the match sets of a path glob, a URL host, and a Bash prefix; they are different shapes. A character count is one number that works across all of them, it is deterministic, and you read it straight off the rule. permcheck trades perfect semantic ordering for a score you predict and review. The same reasoning rules out a manual priority field: an explicit priority is one more value to assign, reconcile, and keep correct as the policy grows, and it drifts out of sync with the rules it ranks.</p>
   <p>Worked out on real rules (the <code>:*</code> suffix is a wildcard marker, so it earns no literal count and no bonus):</p>
 
   <div class="tbl-scroll">
@@ -517,6 +527,12 @@ allow: Bash(aws * describe-*)</code></pre>
 
   <p>These two <code>aws</code> rules are the policy you write, not the shipped default. The starter set denies <code>aws</code> wholesale, so add the <code>describe</code> allow yourself to reproduce the row above.</p>
   <p>The narrow allow punches through the broad deny. Flip it and a narrow deny punches through a broad allow the same way. That two-way override is the entire reason permcheck exists. One caveat: "narrow" is measured by character count, a proxy for a smaller match set that can diverge from it. <a href="#tune-your-rules-not-the-engine">Tune your rules</a> shows where the two part ways and how to author around it.</p>
+
+  <div class="callout">
+    <p class="label">Assumptions</p>
+    <p>This override runs among the rules in your <code>permcheck.json</code>, where permcheck resolves them into one verdict. It does not reach across into Claude's native permissions: permcheck tightens the native decision, it never loosens it. A native <code>deny</code> or <code>ask</code> in your enterprise or user <code>settings.json</code> still wins, even when permcheck returns <code>allow</code>. See <a href="#where-it-fits">Where it fits</a>.</p>
+    <p>So permcheck assumes the <code>deny</code> section of your enterprise and user <code>settings.json</code> is empty, or at least holds nothing that conflicts with <code>permcheck.json</code>. You own the policy across all three (enterprise, user, and <code>permcheck.json</code>): permcheck enforces what you write, it does not infer intent or repair a conflicting or overly permissive set.</p>
+  </div>
   <p>Ties resolve the way you expect: equal specificity falls back to <code>deny &gt; ask &gt; allow</code>, and a full tie takes the first rule in file order.</p>
   <p>Nothing matches? The rule set's <code>defaultMode</code> decides. With <code>defaultMode: deny</code> (the engine's default when the key is absent) an unlisted call fails closed; with <code>ask</code> it prompts. The shipped starter sets <code>ask</code>, so out of the box an unlisted call prompts. In a non-interactive setting (CI, a headless agent) where no one answers a prompt, set <code>deny</code> so calls fail closed rather than stall. This applies only to the no-rule-matched case: it never loosens a cross-check <code>deny</code> or the error posture, both of which stay <code>deny</code> regardless.</p>
 
@@ -657,7 +673,7 @@ cat .en?            <span class="tok-c"># glob over a literal name, could hit .e
     </table>
   </div>
 
-  <p>For the web rules, matching is full-string, never substring: a <code>WebFetch</code> rule for <code>example.com</code> matches <code>https://example.com/path</code> but not <code>example.com.evil.com</code>. Path, web, MCP, and notebook calls all run through the same engine, no gaps.</p>
+  <p>For the web rules, matching is full-string, never substring: a <code>WebFetch</code> rule for <code>example.com</code> matches <code>https://example.com/path</code> but not <code>example.com.evil.com</code>. Path, web, MCP, and notebook calls all run through the same engine; no tool skips it.</p>
 
   <h2 id="tune-your-rules-not-the-engine">Tune your rules, not the engine</h2>
   <p>Specificity counts literal characters, a proxy for how narrow a rule is, not a measure of its scope, so a loose rule grants more than you intend. Take the shipped <code>Bash(python3 *)</code> allow. On its own a bare interpreter allow swallows arbitrary code:</p>
@@ -690,8 +706,8 @@ deny:  Bash(python3 -c:*)       <span class="tok-c"># score 10  ◄─ wins on -
     </table>
   </div>
 
-  <p>The build is tuned for that cold-start reality, where startup dominates and there is no steady state to amortize. permcheck pulls in no <code>regex</code> and no <code>clap</code>; every matcher and the argument parser are hand-written, because compiling a regex set would cost milliseconds per launch with nothing to earn it back. Loading and compiling the whole reference set (50 allow, 18 ask, 166 deny rules) takes tens of microseconds, less than one regex compilation. The release binary is built with <code>opt-level = "z"</code>, LTO, and <code>strip</code>, because a smaller image pages in faster.</p>
-  <p>Numbers come from <code>cargo bench</code> (Criterion) against the reference rule set on a MacBook Pro (M3 Max), release profile. They are indicative; re-run <code>cargo bench</code> for your hardware.</p>
+  <p>The build is tuned for that cold-start reality, where startup dominates and there is no steady state to amortize. permcheck pulls in no <code>regex</code> and no <code>clap</code>; every matcher and the argument parser are hand-written, because compiling a regex set would cost milliseconds per launch with nothing to earn it back. Loading and compiling the whole reference set (50 allow, 18 ask, 176 deny rules) takes tens of microseconds, less than one regex compilation. The release binary is built with <code>opt-level = "z"</code>, LTO, and <code>strip</code>, because a smaller image pages in faster.</p>
+  <p>Numbers come from <code>cargo bench</code> (Criterion, which reports the median of 100 samples per case) against the reference rule set on a MacBook Pro (M3 Max), macOS 26.5, Rust 1.97, release profile. They are indicative; re-run <code>cargo bench</code> for your hardware.</p>
 
   <h2 id="what-it-doesn-t-stop">What it doesn't stop</h2>
   <p>The Bash analyzer reads the command as text. It is a scanner, not a shell, so it never performs the expansion, aliasing, and substitution a real shell does. When it meets a construct it does not resolve, it denies. That bias keeps it safe, and safe is not the same as complete. Static analysis has blind spots, and these are permcheck's:</p>
@@ -707,7 +723,24 @@ deny:  Bash(python3 -c:*)       <span class="tok-c"># score 10  ◄─ wins on -
   <p>Each gap lands on the safe side: an unresolved construct denies rather than slips through. Safe-by-default is a posture, not a proof, which is why permcheck needs a layer beneath it to catch what a text scanner cannot see.</p>
 
   <h2 id="where-it-fits">Where it fits</h2>
-  <p>permcheck is defense-in-depth, not a sandbox. Your OS sandbox and enterprise <code>managed-settings.json</code> stay the security boundary. permcheck layers on top to add the least-privilege rules the native model has no way to express. It merges with your existing PreToolUse hooks, and a <code>deny</code> from any of them still wins.</p>
+  <p>permcheck is defense-in-depth, not a sandbox. Your OS sandbox and enterprise <code>managed-settings.json</code> stay the security boundary. permcheck layers on top to express the narrow exceptions the native precedence model cannot. It merges with your existing PreToolUse hooks, and a <code>deny</code> from any of them still wins.</p>
+
+  <div class="callout">
+    <p class="label">Engine, not policy</p>
+    <p>permcheck makes the decision deterministic. The decision's <em>quality</em> is the policy you write.</p>
+    <p><strong>It guarantees:</strong></p>
+    <ul>
+      <li>Deterministic evaluation and explicit conflict resolution by score.</li>
+      <li>An explainable reason on every verdict.</li>
+      <li>Fail-closed behavior: any internal error resolves to <code>deny</code>.</li>
+    </ul>
+    <p><strong>It does not guarantee:</strong></p>
+    <ul>
+      <li>Least privilege, or a correct and complete policy.</li>
+      <li>Protection from a permissive rule you wrote.</li>
+    </ul>
+    <p>permcheck enforces the policy you write. It does not infer intent or repair an overly permissive one.</p>
+  </div>
 
   <figure class="fig">
     <svg class="narrow" viewBox="0 0 560 340" role="img" aria-label="Four stacked layers: prompt or agent intent, then the permcheck least-privilege overlay, then native Claude Code permissions, then the OS sandbox and managed-settings.json which is the real boundary.">
@@ -728,7 +761,7 @@ deny:  Bash(python3 -c:*)       <span class="tok-c"># score 10  ◄─ wins on -
   <p>Two payoffs stand out:</p>
   <ul>
     <li><strong>Teams and CI.</strong> Ship one <code>permcheck.json</code>. Every session enforces the same policy, and new rules land in code review instead of someone's laptop.</li>
-    <li><strong>Prompt-injection defense.</strong> When your rules deny the sensitive action, an injected command that reaches for it is blocked before it runs, as the walkthrough shows.</li>
+    <li><strong>Prompt-injection containment.</strong> When your rules deny the sensitive action, an injected command that reaches for it is blocked before it runs, as the walkthrough shows.</li>
   </ul>
 
   <h3>Why not native permissions, or a sandbox?</h3>
@@ -736,13 +769,37 @@ deny:  Bash(python3 -c:*)       <span class="tok-c"># score 10  ◄─ wins on -
   <ul>
     <li><strong>Native permissions alone.</strong> They are the fixed-precedence model this post opened on. A broad deny swallows a narrow allow, so the two-way override is impossible. permcheck adds that one axis and leaves the rest to the native model.</li>
     <li><strong>A full sandbox or container.</strong> Heavier to run, and it changes your workflow. It is also the boundary permcheck defers to, not a competitor. Different layer, different job.</li>
-    <li><strong>A hand-rolled deny-list hook.</strong> You rebuild compound splitting, wrapper peeling, and the file-access cross-check, the parts a one-line deny gets wrong. permcheck ships those tested.</li>
+    <li><strong>A hand-rolled deny-list hook.</strong> You rebuild compound splitting, wrapper peeling, and the file-access cross-check, the parts a one-line deny gets wrong. permcheck ships those with an integration suite of adversarial and evasion cases (see <a href="https://github.com/saleem-mirza/permcheck/tree/main/tests"><code>tests/</code></a>).</li>
+    <li><strong>A general policy engine like OPA/Rego.</strong> Built for structured request attributes, not shell strings. You still write the Bash decomposition, wrapper peeling, and file-access cross-check yourself, and you run a heavier engine on the per-call hot path. permcheck ships those built in and starts cold in single-digit milliseconds.</li>
   </ul>
 
   <h3>How it stacks with your settings.json</h3>
   <p>Two files, two jobs. Your <code>settings.json</code> wires the hook and holds any <em>native</em> Claude Code permissions; <code>permcheck.json</code> is the policy permcheck decides against. permcheck reads only that rules file, never your <code>settings.json</code> permissions.</p>
-  <p>Between the two systems the effect depends on the verdict. A permcheck <code>deny</code> blocks a call even when <code>settings.json</code> would allow it, so permcheck adds restrictions the native model cannot express. The other direction needs care: permcheck emits a hard <code>allow</code>, and a PreToolUse <code>allow</code> auto-approves the call, so a permcheck <code>allow</code> bypasses a native <code>settings.json</code> <code>deny</code>. Keep your permcheck denies aligned with your native denies; do not rely on a native <code>deny</code> surviving a permcheck <code>allow</code>.</p>
-  <p>One caveat about the specificity override: it applies only among rules <em>inside</em> <code>permcheck.json</code>. Do not split a broad <code>deny</code> and its narrow <code>allow</code> exception across the two files expecting the narrow rule to punch through, keep both in <code>permcheck.json</code>.</p>
+  <p>Between the two systems, precedence runs one way. A permcheck <code>deny</code> blocks a call even when <code>settings.json</code> would allow it, so permcheck adds restrictions the native model cannot express. The reverse does not hold. A PreToolUse <code>allow</code> does not bypass the native permission rules: <a href="https://code.claude.com/docs/en/permissions#extend-permissions-with-hooks">Claude Code evaluates its own <code>deny</code> and <code>ask</code> rules regardless of what the hook returns</a>, so a native <code>deny</code> (in your <code>settings.json</code> or in enterprise <code>managed-settings.json</code>) still blocks the call, and a native <code>ask</code> still prompts, even when permcheck returns <code>allow</code>. permcheck tightens a native decision; it never loosens one.</p>
+
+  <div class="tbl-scroll">
+    <table>
+      <thead><tr><th>Native <code>settings.json</code></th><th>permcheck</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td><span class="v deny">deny</span></td><td><span class="v allow">allow</span></td><td><span class="v deny">deny</span> (native deny is terminal)</td></tr>
+        <tr><td><span class="v deny">deny</span></td><td><span class="v deny">deny</span></td><td><span class="v deny">deny</span></td></tr>
+        <tr><td><span class="v ask">ask</span></td><td><span class="v allow">allow</span></td><td><span class="v ask">ask</span> (native ask still prompts)</td></tr>
+        <tr><td>allow / no rule</td><td><span class="v allow">allow</span></td><td><span class="v allow">allow</span></td></tr>
+        <tr><td>allow / no rule</td><td><span class="v deny">deny</span></td><td><span class="v deny">deny</span> (permcheck adds a restriction)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>This is why the specificity override applies only among rules <em>inside</em> <code>permcheck.json</code>. Do not split a broad <code>deny</code> and its narrow <code>allow</code> exception across the two files expecting the narrow rule to punch through: the native <code>deny</code> wins and the exception never fires. Keep both rules in <code>permcheck.json</code>, where permcheck resolves them into one verdict.</p>
+  <p>Migrating from native rules follows the same rule. If a rule family lives in <code>settings.json</code> today, move the whole family into <code>permcheck.json</code> before you add exceptions. Take a native <code>deny Bash(aws:*)</code>: copy it into <code>permcheck.json</code>, then add the narrow <code>allow Bash(aws * describe-*)</code> beside it. Leave the <code>deny</code> in <code>settings.json</code> while the <code>allow</code> sits in <code>permcheck.json</code>, and every <code>aws</code> call stays blocked, because the native deny wins.</p>
+
+  <h3>Who owns the policy</h3>
+  <p>permcheck decides against <code>permcheck.json</code>, so that file <em>is</em> the policy. Treat it as code. The plugin and <code>--install</code> place it next to your <code>settings.json</code> (<code>~/.claude/permcheck.json</code>, or <code>./.claude/permcheck.json</code> for a project), and permcheck re-reads it on every call. Check it into version control so a change lands in review, not on one laptop. Project policy belongs in version control; enterprise-managed policy ships through your organization's configuration management, the same channel as <code>managed-settings.json</code>, not the repo.</p>
+  <p>permcheck decides against its own rules file, so the policy protects it. The reference set allows <code>Edit</code> and <code>Write</code> broadly, which on its own would let the agent rewrite <code>permcheck.json</code>, and a permcheck <code>allow</code> auto-approves that edit. So the shipped set denies edits to its own config and to <code>settings.json</code>:</p>
+  <pre><code>deny: Edit(//**/.claude/permcheck.json)
+deny: Write(//**/.claude/permcheck.json)
+deny: Edit(//**/.claude/settings.json)
+deny: Write(//**/.claude/settings.json)</code></pre>
+  <p>This raises the bar without sealing it. permcheck does not guarantee the integrity of the file it reads: an edit made out of band, or through a tool permcheck does not model, sits outside its view. For a hard guarantee, put the authoritative rules in enterprise <code>managed-settings.json</code> or enforce them in the OS sandbox, the layers above the hook that the agent has no path to.</p>
 
   <h2 id="start-in-two-lines">Start in two lines</h2>
   <p>The plugin ships prebuilt binaries for macOS, Linux, and Windows and wires the hook without touching your <code>settings.json</code>:</p>
@@ -770,7 +827,7 @@ permcheck --install     <span class="tok-c"># seeds ~/.claude/permcheck.json, wi
   <pre><code>permcheck Bash <span class="tok-k">"cat notes.txt"</span>          --rules permcheck.json   <span class="tok-c"># exit 0  allow</span>
 permcheck Bash <span class="tok-k">"gcloud compute ..."</span>     --rules permcheck.json   <span class="tok-c"># exit 1  ask</span>
 permcheck Read <span class="tok-k">"/home/user/.ssh/id_rsa"</span> --rules permcheck.json   <span class="tok-c"># exit 2  deny</span></code></pre>
-  <p>The native model asks you to trust the agent all the way or not at all. permcheck adds one axis, specificity, and that axis is enough to write least-privilege rules the fixed-precedence model has no way to express.</p>
+  <p>The native model asks you to trust the agent all the way or not at all. permcheck adds one axis, specificity, and that axis makes many least-privilege policies expressible that the fixed-precedence model cannot.</p>
 
 </main>
 </body>

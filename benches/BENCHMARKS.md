@@ -1,7 +1,7 @@
 # Benchmarks
 
 Measured with `cargo bench` (Criterion) against `rules/permcheck.json`, the
-canonical reference rule set, on a **MacBook Pro (Apple M3 Max)**, macOS 26,
+canonical reference rule set, on a **MacBook Pro (Apple M3 Max)**, macOS 26.5,
 release profile (`opt-level=z`, LTO, `strip`). Numbers are indicative. Re-run
 locally for your hardware.
 
@@ -12,7 +12,7 @@ Benchmarks are grouped by matcher family, plus the one-time rule-set load. Run
 
 | Case | What | Time |
 |---|---|---|
-| `load/reference_set` | parse + compile the whole reference set (51 allow · 17 ask · 142 deny) | ~50 µs |
+| `load/reference_set` | parse + compile the whole reference set (50 allow · 18 ask · 176 deny) | ~50 µs |
 
 ### `bash`: winner selection, cross-check, wrapper re-decision, compound split (§6.3, §8)
 

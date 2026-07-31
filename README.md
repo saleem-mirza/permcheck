@@ -8,7 +8,9 @@ The behavioral source of truth is [`specs/SPEC.md`](specs/SPEC.md). The implemen
 
 permcheck is **defense-in-depth, not a sandbox**: the OS sandbox and enterprise `managed-settings.json` remain the security boundary. It exists to express the least-privilege rules the native permission model cannot.
 
-Claude Code's native model resolves rule conflicts with a fixed precedence: a `deny` always wins over an `allow`, no matter how broad. So you cannot deny a whole tool *and* carve out a narrow safe exception, because the broad deny swallows it (tracked upstream in [anthropics/claude-code#79759](https://github.com/anthropics/claude-code/issues/79759)). permcheck fills that gap: as a PreToolUse hook it gathers *every* matching rule and lets the **most specific one win**, so a narrow rule overrides a broad one in *either* direction: a targeted `allow` punches through a broad `deny`, and a targeted `deny` through a broad `allow`.
+Claude Code's native model resolves rule conflicts with a fixed precedence: a `deny` always wins over an `allow`, no matter how broad. So you cannot deny a whole tool *and* carve out a narrow safe exception, because the broad deny swallows it (tracked upstream in [anthropics/claude-code#79759](https://github.com/anthropics/claude-code/issues/79759)). permcheck fills that gap: as a PreToolUse hook it gathers *every* matching rule and lets the **most specific one win**, so a narrow rule overrides a broad one in *either* direction: a targeted `allow` punches through a broad `deny`, and a targeted `deny` through a broad `allow`. This two-way override applies only among the rules *inside* `permcheck.json`.
+
+> **Assumptions.** permcheck only ever *tightens*. It does not open any `deny` in Claude's native permission model, at the enterprise or the user level: a native `deny` or `ask` is [enforced regardless of what the hook returns](https://code.claude.com/docs/en/permissions#extend-permissions-with-hooks). So permcheck assumes the `deny` section of your enterprise and user `settings.json` is empty, or at least holds nothing that conflicts with `permcheck.json`. You own the policy across all three files (enterprise, user, and `permcheck.json`): permcheck enforces what you write, it does not infer intent or repair a conflicting or overly permissive set. A correct, valid policy is your responsibility.
 
 **Highlights**
 
@@ -57,7 +59,7 @@ The plugin is served from [`saleem-mirza/marketplace`](https://github.com/saleem
 
 - The hook runs on **every** tool call the moment the plugin is enabled, deciding `allow` / `ask` / `deny` before the call executes.
 - **Your `settings.json` is not modified.** Claude Code only records the plugin under `enabledPlugins`. The hook lives in the plugin and appears in `/hooks` with source `Plugin`.
-- It **merges with** (doesn't replace) any existing PreToolUse hooks, and a `deny` wins across them, so permcheck is an authoritative least-privilege overlay on the native permission model.
+- It **merges with** (doesn't replace) any existing PreToolUse hooks, and a `deny` wins across them, so permcheck is a least-privilege layer on top of the native permission model. It only ever *tightens*: a native `deny` or `ask` in `settings.json` (or enterprise `managed-settings.json`) is [enforced regardless of what the hook returns](https://code.claude.com/docs/en/permissions#extend-permissions-with-hooks), so a permcheck `allow` never loosens a native `deny`.
 - To turn it off, disable or uninstall the plugin via `/plugin`. There's nothing to unpick from `settings.json`.
 
 The plugin decides against its bundled [`rules/permcheck.json`](rules/permcheck.json). See [`plugin/README.md`](plugin/README.md) for per-project rule overrides, local development (`--plugin-dir`), and platform notes.
