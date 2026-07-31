@@ -477,6 +477,260 @@ fn tokens_share_char(a: PToken, b: PToken) -> bool {
     }
 }
 
+// --- Containment / carve-out subset test (§6.3) ------------------------------
+
+/// True when every payload `a` matches is also matched by `d`, i.e.
+/// `L(a) ⊆ L(d)`. Used by the engine to decide whether an allow/ask rule is a
+/// genuine *carve-out* of a deny (a strict refinement) and so overrides it; on
+/// any other overlap the deny wins (§6.3).
+///
+/// The test is **sound but deliberately incomplete**: it returns `true` only when
+/// containment is proven, and falls back to `false` otherwise. A false negative
+/// keeps the deny, biasing toward `deny`, which matches the fail-closed posture
+/// (§9.2). A false positive would neutralize a deny that should hold, so the
+/// procedure never guesses.
+pub(crate) fn matcher_subset(a: &Matcher, d: &Matcher) -> bool {
+    match (a, d) {
+        // A bare deny matches everything, so any allow is a subset of it.
+        (_, Matcher::Bare) => true,
+        // A bare allow (matches everything) refines only a universal deny.
+        (Matcher::Bare, _) => is_universal(d),
+        (Matcher::Path(pa), Matcher::Path(pd)) => tokens_subset(&pa.0, &pd.0),
+        (Matcher::Generic(ga), Matcher::Generic(gd)) => {
+            tokens_subset(&glob_to_tokens(ga.0.as_bytes()), &glob_to_tokens(gd.0.as_bytes()))
+        }
+        (Matcher::Bash(ba), Matcher::Bash(bd)) => bash_subset(ba, bd),
+        // Cross-family rules never share a tool, so this is unreachable in
+        // practice; conservatively not a subset.
+        _ => false,
+    }
+}
+
+/// Does this matcher accept every possible payload?
+fn is_universal(m: &Matcher) -> bool {
+    match m {
+        Matcher::Bare => true,
+        Matcher::Path(p) => matches!(p.0.as_slice(), [PToken::DStar]),
+        Matcher::Generic(g) => g.0 == "*",
+        Matcher::Bash(BashMatcher::Glob(s)) => s == "*",
+        Matcher::Bash(BashMatcher::Prefix(_)) => false,
+    }
+}
+
+/// Compile a `*`-only glob (Bash `Glob`, Generic) into path tokens: `*` becomes
+/// `**` (it spans separators in these families) and every other byte is literal.
+fn glob_to_tokens(bytes: &[u8]) -> Vec<PToken> {
+    let mut t = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'*' {
+            t.push(PToken::DStar);
+            i += 1;
+            while i < bytes.len() && bytes[i] == b'*' {
+                i += 1;
+            }
+        } else {
+            t.push(PToken::Lit(bytes[i]));
+            i += 1;
+        }
+    }
+    t
+}
+
+/// True if command `cmd` is accepted by the trailing-`:*` prefix specifier `pre`
+/// (matches `pre` exactly, or `pre` followed by whitespace then anything). This is
+/// the same rule [`BashMatcher::Prefix`] applies, reused for prefix containment.
+fn prefix_covers(pre: &str, cmd: &str) -> bool {
+    cmd == pre
+        || (cmd.len() > pre.len()
+            && cmd.starts_with(pre)
+            && cmd.as_bytes()[pre.len()].is_ascii_whitespace())
+}
+
+/// Subset test between two Bash specifiers.
+fn bash_subset(a: &BashMatcher, d: &BashMatcher) -> bool {
+    match (a, d) {
+        // `L(a-prefix) ⊆ L(d-prefix)` when `d` commits before `a` varies, i.e. `a`
+        // (the shortest string `a` accepts) is itself accepted by `d`.
+        (BashMatcher::Prefix(pa), BashMatcher::Prefix(pd)) => prefix_covers(pd, pa),
+        // A glob whose fixed leading literal already clears `d`'s prefix boundary
+        // is contained in the prefix (`aws * describe-* ⊆ aws:*`).
+        (BashMatcher::Glob(ga), BashMatcher::Prefix(pd)) => {
+            let lit = ga.split('*').next().unwrap_or(ga);
+            if !ga.contains('*') {
+                return prefix_covers(pd, ga);
+            }
+            lit.len() > pd.len()
+                && lit.starts_with(pd)
+                && lit.as_bytes()[pd.len()].is_ascii_whitespace()
+        }
+        (BashMatcher::Glob(ga), BashMatcher::Glob(gd)) => {
+            tokens_subset(&glob_to_tokens(ga.as_bytes()), &glob_to_tokens(gd.as_bytes()))
+        }
+        // A prefix's language is `pre` or `pre` + whitespace + anything. Over-
+        // approximate it as `pre` + `**` (more strings, so proving subset stays
+        // sound) and test against the glob.
+        (BashMatcher::Prefix(pa), BashMatcher::Glob(gd)) => {
+            let mut toks = glob_to_tokens(pa.as_bytes());
+            toks.push(PToken::DStar);
+            tokens_subset(&toks, &glob_to_tokens(gd.as_bytes()))
+        }
+    }
+}
+
+/// Sound, incomplete decision of `L(a) ⊆ L(d)` over path-glob tokens.
+///
+/// `d` is treated as a DFA via on-the-fly subset construction (`dstate` is the set
+/// of live `d` positions), so the deny side is deterministic and `dstate`'s
+/// accepting test is exact. `a` is then walked with its wildcards universally
+/// quantified over representative characters; containment holds only when every
+/// branch keeps `d` alive and accepting. Revisiting a `(position, dstate)` pair is
+/// treated as success (greatest-fixpoint over the safety property). Returns `false`
+/// for oversized or budget-exceeding inputs — always the safe direction.
+fn tokens_subset(a: &[PToken], d: &[PToken]) -> bool {
+    // `dstate` is a bitset over positions `0..=d.len()`, so `d.len()` must index
+    // into a u128. Oversized patterns (never real rules) fail closed.
+    if d.len() >= 127 || a.len() >= 127 {
+        return false;
+    }
+    let lits = d_literals(d);
+    let fresh = fresh_byte(&lits);
+    // Representative characters an `a`-wildcard adversary may pick. `/` is kept
+    // separate because `?`/`*` reject it while `**` accepts it.
+    let mut reps_nonsep: Vec<u8> = lits.iter().copied().filter(|&b| b != b'/').collect();
+    reps_nonsep.push(fresh);
+    let mut reps_all = reps_nonsep.clone();
+    reps_all.push(b'/');
+
+    let start = closure_d(d, 1u128);
+    let mut ctx = InclCtx {
+        d,
+        reps_nonsep: &reps_nonsep,
+        reps_all: &reps_all,
+        seen: std::collections::HashSet::new(),
+        budget: 100_000,
+    };
+    incl(a, 0, start, &mut ctx)
+}
+
+struct InclCtx<'a> {
+    d: &'a [PToken],
+    reps_nonsep: &'a [u8],
+    reps_all: &'a [u8],
+    seen: std::collections::HashSet<(usize, u128)>,
+    budget: usize,
+}
+
+fn incl(a: &[PToken], i: usize, dstate: u128, ctx: &mut InclCtx) -> bool {
+    // `d` has died: a string `a` produces is rejected by `d`, so not a subset.
+    if dstate == 0 {
+        return false;
+    }
+    if ctx.budget == 0 {
+        return false; // ran out of exploration budget: fail closed.
+    }
+    if !ctx.seen.insert((i, dstate)) {
+        return true; // already under evaluation: no new violation on this cycle.
+    }
+    ctx.budget -= 1;
+    let accepting = dstate & (1u128 << ctx.d.len()) != 0;
+    if i == a.len() {
+        return accepting; // `a` ends; `d` must accept the empty continuation.
+    }
+    match a[i] {
+        PToken::Lit(c) => {
+            let ns = step_d(ctx.d, dstate, c);
+            incl(a, i + 1, ns, ctx)
+        }
+        // A single non-`/` char: advance past `?`, requiring every representative.
+        PToken::Ques => all_reps(a, i + 1, dstate, ctx.reps_nonsep.to_vec(), ctx),
+        // Star ends now (advance), or consumes one non-`/` char and stays at `i`.
+        PToken::Star => {
+            incl(a, i + 1, dstate, ctx) && all_reps(a, i, dstate, ctx.reps_nonsep.to_vec(), ctx)
+        }
+        // `**` ends now, or consumes any char (separators included) and stays.
+        PToken::DStar => {
+            incl(a, i + 1, dstate, ctx) && all_reps(a, i, dstate, ctx.reps_all.to_vec(), ctx)
+        }
+    }
+}
+
+/// Require containment for every representative character, stepping `d` on each
+/// and continuing `a` from `next_i` (the caller passes `i` to stay on a spanning
+/// wildcard, or `i + 1` to advance past a single-character one).
+fn all_reps(a: &[PToken], next_i: usize, dstate: u128, reps: Vec<u8>, ctx: &mut InclCtx) -> bool {
+    reps.iter().all(|&ch| {
+        let ns = step_d(ctx.d, dstate, ch);
+        incl(a, next_i, ns, ctx)
+    })
+}
+
+/// Distinct literal bytes appearing in `d`.
+fn d_literals(d: &[PToken]) -> Vec<u8> {
+    let mut v: Vec<u8> = d
+        .iter()
+        .filter_map(|t| if let PToken::Lit(c) = t { Some(*c) } else { None })
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// A byte that is neither `/` nor any of `d`'s literals — one representative for
+/// "every other character", which all of `d`'s tokens treat identically.
+fn fresh_byte(lits: &[u8]) -> u8 {
+    (1u8..=255).find(|b| *b != b'/' && !lits.contains(b)).unwrap_or(0)
+}
+
+/// Epsilon-closure of a `d` state: nullable tokens (`*`, `**`) let a live position
+/// advance without consuming a character.
+fn closure_d(d: &[PToken], mut bits: u128) -> u128 {
+    loop {
+        let mut nb = bits;
+        for (j, tok) in d.iter().enumerate() {
+            if bits & (1u128 << j) != 0 && matches!(tok, PToken::Star | PToken::DStar) {
+                nb |= 1u128 << (j + 1);
+            }
+        }
+        if nb == bits {
+            return bits;
+        }
+        bits = nb;
+    }
+}
+
+/// Transition of a (closed) `d` state on one concrete character.
+fn step_d(d: &[PToken], bits: u128, ch: u8) -> u128 {
+    let sep = ch == b'/';
+    let mut nb = 0u128;
+    for (j, tok) in d.iter().enumerate() {
+        if bits & (1u128 << j) == 0 {
+            continue;
+        }
+        match *tok {
+            PToken::Lit(c) => {
+                if ch == c {
+                    nb |= 1u128 << (j + 1);
+                }
+            }
+            PToken::Ques => {
+                if !sep {
+                    nb |= 1u128 << (j + 1);
+                }
+            }
+            PToken::Star => {
+                if !sep {
+                    nb |= 1u128 << j; // stay inside the star; ending is a closure move
+                }
+            }
+            PToken::DStar => {
+                nb |= 1u128 << j; // spans any character, separators included
+            }
+        }
+    }
+    closure_d(d, nb)
+}
+
 /// Anchored, full-string glob match with `/`-aware wildcards (§6.5).
 ///
 /// Plain recursive backtracking. Path specifiers come from the operator-authored
@@ -525,5 +779,70 @@ fn path_match(pat: &[PToken], text: &[u8]) -> bool {
         Some(PToken::Lit(c)) => {
             !text.is_empty() && text[0] == *c && path_match(&pat[1..], &text[1..])
         }
+    }
+}
+
+#[cfg(test)]
+mod subset_tests {
+    use super::*;
+    use crate::types::Family;
+
+    fn m(family: Family, spec: &str) -> Matcher {
+        compile(family, spec).unwrap().0
+    }
+
+    fn path_subset(a: &str, d: &str) -> bool {
+        matcher_subset(&m(Family::Path, a), &m(Family::Path, d))
+    }
+
+    #[test]
+    fn literal_is_subset_of_covering_glob() {
+        assert!(path_subset("/etc/passwd", "/etc/**"));
+        assert!(path_subset("/etc/passwd", "/etc/*"));
+        assert!(path_subset("/a/b/c", "/**/c"));
+    }
+
+    #[test]
+    fn overlapping_but_uncontained_globs_are_not_subsets() {
+        // The `/etc/passwd` case: neither refines the other.
+        assert!(!path_subset("/**/passwd", "/etc/**"));
+        // Incomparable: `*.conf` vs `secret*`.
+        assert!(!path_subset("/etc/*.conf", "/etc/secret*"));
+        assert!(!path_subset("/etc/secret*", "/etc/*.conf"));
+    }
+
+    #[test]
+    fn star_and_dstar_separator_semantics() {
+        // `*` stays within one segment, so it is contained in `**`.
+        assert!(path_subset("/a/*", "/a/**"));
+        // `**` crosses separators, so it is not contained in a single-segment `*`.
+        assert!(!path_subset("/a/**", "/a/*"));
+        // `**` matches everything.
+        assert!(path_subset("/etc/passwd", "**"));
+    }
+
+    #[test]
+    fn equal_patterns_are_mutual_subsets() {
+        // Used by the engine's strict-carve-out test: equal match-sets are subsets
+        // both ways, so an identical allow never carves out a deny.
+        assert!(path_subset("/etc/**", "/etc/**"));
+    }
+
+    #[test]
+    fn bash_glob_is_subset_of_prefix() {
+        let a = m(Family::Bash, "aws * describe-*");
+        let d = m(Family::Bash, "aws:*");
+        assert!(matcher_subset(&a, &d));
+        // The prefix is not a subset of the narrower glob.
+        assert!(!matcher_subset(&d, &a));
+    }
+
+    #[test]
+    fn anything_is_subset_of_bare_only_universal_covers_bare() {
+        let narrow = m(Family::Path, "/etc/passwd");
+        assert!(matcher_subset(&narrow, &Matcher::Bare));
+        // A bare allow refines only a universal deny, not a narrow one.
+        assert!(!matcher_subset(&Matcher::Bare, &narrow));
+        assert!(matcher_subset(&Matcher::Bare, &m(Family::Path, "**")));
     }
 }

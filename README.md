@@ -8,13 +8,13 @@ The behavioral source of truth is [`specs/SPEC.md`](specs/SPEC.md). The implemen
 
 permcheck is **defense-in-depth, not a sandbox**: the OS sandbox and enterprise `managed-settings.json` remain the security boundary. It exists to express the least-privilege rules the native permission model cannot.
 
-Claude Code's native model resolves rule conflicts with a fixed precedence: a `deny` always wins over an `allow`, no matter how broad. So you cannot deny a whole tool *and* carve out a narrow safe exception, because the broad deny swallows it (tracked upstream in [anthropics/claude-code#79759](https://github.com/anthropics/claude-code/issues/79759)). permcheck fills that gap: as a PreToolUse hook it gathers *every* matching rule and lets the **most specific one win**, so a narrow rule overrides a broad one in *either* direction: a targeted `allow` punches through a broad `deny`, and a targeted `deny` through a broad `allow`. This two-way override applies only among the rules *inside* `permcheck.json`.
+Claude Code's native model resolves rule conflicts with a fixed precedence: a `deny` always wins over an `allow`, no matter how broad. So you cannot deny a whole tool *and* carve out a narrow safe exception, because the broad deny swallows it (tracked upstream in [anthropics/claude-code#79759](https://github.com/anthropics/claude-code/issues/79759)). permcheck fills that gap: as a PreToolUse hook it gathers *every* matching rule and lets a **narrower rule carve out a broader one**, in *either* direction: a targeted `allow` that sits inside a broad `deny` punches through it, and a targeted `deny` inside a broad `allow` does the same. The carve-out fires only when one rule's match-set is a strict subset of the other, and applies only among the rules *inside* `permcheck.json`.
 
 > **Assumptions.** permcheck only ever *tightens*. It does not open any `deny` in Claude's native permission model, at the enterprise or the user level: a native `deny` or `ask` is [enforced regardless of what the hook returns](https://code.claude.com/docs/en/permissions#extend-permissions-with-hooks). So permcheck assumes the `deny` section of your enterprise and user `settings.json` is empty, or at least holds nothing that conflicts with `permcheck.json`. You own the policy across all three files (enterprise, user, and `permcheck.json`): permcheck enforces what you write, it does not infer intent or repair a conflicting or overly permissive set. A correct, valid policy is your responsibility.
 
 **Highlights**
 
-- **Specificity-aware**: most specific rule wins, then most restrictive tier, not the native "deny always wins" model. See [How it decides](#how-it-decides-most-specific-rule-wins).
+- **Carve-out precedence**: a narrower rule (a strict subset) overrides a broader one across tiers, not the native "deny always wins" model. See [How it decides](#how-it-decides-most-specific-rule-wins).
 - **Bash compound safety**: splits `&&`/`|`/`$(…)` chains, cross-checks file reads/writes against `Read`/`Write`/`Edit` deny rules, and re-decides through wrappers like `env`/`sudo`, so `cat .env` or `env aws …` cannot launder past a broad allow.
 - **Fail-closed**: any error (bad input, unreadable rules, unknown tool, panic) resolves to `deny`. The hook never crashes a tool call open.
 - **Zero-config install**: the [plugin](#installation) ships prebuilt binaries for macOS/Linux/Windows and wires the hook without touching your `settings.json`.
@@ -147,27 +147,27 @@ This invokes the hook interface documented under [Usage](#usage). Use **absolute
 
 ## How it decides: most specific rule wins
 
-Every rule carries a **specificity** score. For a given tool call, permcheck gathers *every* matching rule and picks the winner by `(specificity, tier)`:
+For a given tool call, permcheck gathers *every* matching rule. A matching `deny` holds unless a matching `allow`/`ask` is a genuine narrower exception, then it decides:
 
-1. **Most specific rule wins.** Specificity = the count of literal, non-wildcard characters in the specifier, `+1000` if it has no wildcard at all. A bare rule (e.g. `Read`) scores `0`. This dominates the decision.
-2. **On equal specificity, the most restrictive tier wins:** `deny > ask > allow`.
-3. **On a full tie** (equal specificity *and* tier), the first rule in file order wins, for determinism only.
+1. **A carve-out overrides a deny.** An `allow`/`ask` carves out a matching `deny` only when its match-set is a **strict subset** of that deny (`allow ⊆ deny` and `deny ⊄ allow`). An identical specifier in a lower tier is not a carve-out, so `deny > ask > allow` still holds for the same specifier.
+2. **Any un-carved deny wins.** If a matching deny is not carved out by some matching allow/ask, the call is `deny`.
+3. **Otherwise the winner is the allow/ask with the highest `(specificity, tier)`.** Specificity = the count of literal, non-wildcard characters in the specifier, `+1000` if it has no wildcard at all; a bare rule (e.g. `Read`) scores `0`. Equal specificity takes the more restrictive tier (`ask` over `allow`); a full tie takes the first rule in file order.
 4. **If nothing matches, the `defaultMode` fall-back applies:** `deny` by default (fail-closed), or set `"defaultMode": "ask"` in the rules file to prompt on unlisted calls instead. The Bash file-access cross-check and error paths always `deny` regardless.
 
 The consequence, and the whole reason permcheck exists, is that a narrow rule beats a broad one **in either direction**:
 
 | Tool call | Decision | Why |
 |---|---|---|
-| `aws ec2 describe-instances` | **allow** | `Bash(aws * describe-*)` (specificity 14) beats broad `Bash(aws:*)` deny (3) |
+| `aws ec2 describe-instances` | **allow** | `Bash(aws * describe-*)` is a strict subset carve-out of `Bash(aws:*)` deny |
 | `aws ec2 terminate-instances` | **deny** | only `Bash(aws:*)` deny matches |
-| `kubectl get pods` | **allow** | `Bash(kubectl get:*)` beats `Bash(kubectl:*)` deny |
-| `git push --force origin` | **deny** | narrow `Bash(git push --force:*)` deny (16) beats `Bash(git push:*)` ask (8) |
+| `kubectl get pods` | **allow** | `Bash(kubectl get:*)` carves out `Bash(kubectl:*)` deny |
+| `git push --force origin` | **deny** | `Bash(git push --force:*)` deny holds; the broader `Bash(git push:*)` ask does not carve it out |
 
-> This is *not* the native "deny always wins" model, and permcheck layers specificity on top of it.
+> This is *not* the native "deny always wins" model: permcheck adds the one carve-out exception on top of it.
 
 > **These rows illustrate the mechanism with example rules.** The shipped `rules/permcheck.json` sets `"defaultMode": "ask"` (so a call matching no rule prompts rather than blocks) and does **not** itself carry the narrow `aws`/`kubectl` read-only allows. Add them, as above, to opt into read-only cloud access.
 
-> **Specificity is a character count, not a scope measure.** Where a longer specifier is actually broader, the count inverts: `allow Read(/**/passwd)` (8) outscores `deny Read(/etc/**)` (5), so `/etc/passwd` is allowed even though the allow is not a subset of the deny. The engine trusts the score; it does not verify containment. Make a deny out-score the allow it must beat, or keep the allow a strict subset of the deny.
+> **A carve-out needs true containment, not a higher score.** A wide allow that only *overlaps* a deny does not override it: `allow Read(/**/passwd)` reaches every `passwd` on the system, so it is not a subset of `deny Read(/etc/**)`, and `/etc/passwd` is **denied**. To grant an exception, keep the allow a strict subset of the deny (e.g. a literal `allow Read(/etc/passwd)`). The subset test is conservative: when containment cannot be proven, the deny holds.
 
 ## Use cases
 

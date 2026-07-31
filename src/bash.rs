@@ -47,10 +47,7 @@ pub fn decide_bash(command: &str, rs: &RuleSet, cwd: Option<&str>) -> Decision {
 /// matchers, taking the rule set's `defaultMode` fall-back when nothing matches
 /// (§6.3, §6.4).
 fn unit_tier(rs: &RuleSet, cmd: &str) -> Tier {
-    match engine::best_match(rs, "Bash", &[cmd]) {
-        Some(rule) => rule.tier,
-        None => rs.default_tier,
-    }
+    engine::decide_tier(rs, "Bash", &[cmd]).unwrap_or(rs.default_tier)
 }
 
 // --- Splitter (§8.1) ---------------------------------------------------------

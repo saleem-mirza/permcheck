@@ -23,7 +23,7 @@ Given a single tool call (tool name + input payload) and a set of rules,
 permcheck returns exactly one decision: `allow`, `ask`, or `deny`, with a
 human-readable reason. It never executes the tool call and never mutates state.
 
-In scope: rule loading, rule matching, specificity-based precedence, the
+In scope: rule loading, rule matching, carve-out (containment) precedence, the
 compound-Bash decision, and the fail-closed error posture.
 
 Out of scope: enforcing the decision (Claude Code does that), sandboxing,
@@ -34,7 +34,7 @@ A PreToolUse hook cannot open a native `deny`: Claude Code evaluates its own
 `deny` and `ask` rules [regardless of what the hook returns](https://code.claude.com/docs/en/permissions#extend-permissions-with-hooks),
 so a native `deny` or `ask` (user or enterprise `settings.json`, or
 `managed-settings.json`) still applies even when permcheck returns `allow`. The
-specificity precedence (§6) therefore holds only among the rules inside the
+carve-out precedence (§6) therefore holds only among the rules inside the
 rules file. permcheck assumes the `deny` section of the native `settings.json`
 is empty or does not conflict with the rules file, and that the operator is
 responsible for a correct, valid policy across all three sources (enterprise,
@@ -234,13 +234,14 @@ specificity = (count of literal, non-wildcard characters in the specifier)
 - A **bare rule** has specificity `0`.
 - The `+1000` exact-match bonus guarantees a literal specifier outranks any
   wildcard specifier, regardless of length.
-- Specificity is a **character count**, a proxy for narrowness, not a measure of
-  match-set scope. Where a longer specifier matches a broader set, §6.3 lets it
-  override a shorter rule it does not refine. `allow Read(/**/passwd)` (8) beats
-  `deny Read(/etc/**)` (5), so `/etc/passwd` is allowed even though the allow is
-  not a subset of the deny. The engine trusts the score and does not verify
-  containment. Authoring rule: make a deny out-score the allow it must beat, or
-  keep the allow a strict subset of the deny. The only automatic check is the
+- Specificity is a **character count**, a proxy for narrowness. It orders rules
+  of the same effect (which allow/ask wins, and the stable tie-break in §6.3), but
+  it does **not** decide allow-versus-deny across tiers. Cross-tier precedence
+  uses containment (§6.3): an allow/ask overrides a deny only when its match-set
+  is a strict subset of that deny. So `allow Read(/**/passwd)` does **not**
+  override `deny Read(/etc/**)` — the two overlap without one refining the other —
+  and `/etc/passwd` is denied. A literal `allow Read(/etc/passwd)`, a strict
+  subset of the deny, does override it. The only load-time check is the
   dead-`cmd:*` lint (§11.2).
 
 ### 6.2 Tier ordering
@@ -251,15 +252,23 @@ highest rank, and this ordering is the tie-break in §6.3.
 ### 6.3 Winner selection (single unit)
 
 For a given payload, gather **every** matching rule across the tool's matchers
-(including any bare rule at specificity `0`). Each hit contributes
-`(specificity, tier)`. The winner is the rule with the maximal `(specificity,
-tier)` pair, compared lexicographically:
+(including any bare rule at specificity `0`), split into denies and allow/ask
+rules.
 
-1. Higher **specificity** wins.
-2. On equal specificity, higher **tier** wins, so `deny` beats `ask` beats
-   `allow` (most-restrictive-wins).
-3. On a full tie (equal specificity and tier), the **first rule in file order**
-   is reported, for a stable, deterministic decision.
+1. **Carve-out test.** An allow/ask rule *carves out* a matching deny when its
+   match-set is a **strict subset** of that deny's (`allow ⊆ deny` and
+   `deny ⊄ allow`), a genuine narrower exception. An identical specifier in a
+   lower tier is not a carve-out (equal sets), so it never overrides the deny.
+2. **Deny survives.** If any matching deny is not carved out by some matching
+   allow/ask, the decision is `deny`.
+3. **Otherwise pick the winner** among the matching allow/ask rules by
+   `(specificity, tier)`, maximal lexicographically: higher specificity, then
+   higher tier (`ask` over `allow`), then the first rule in file order for a
+   stable, deterministic decision.
+
+The subset test is **sound but conservative**: it reports a carve-out only when
+containment is proven, and otherwise keeps the deny, so an unprovable case fails
+toward `deny` (§9.2).
 
 This selection is the **entire** decision for Path and Generic tools (Read,
 Write, Edit, Glob, Grep, NotebookEdit, WebFetch, WebSearch, MCP, …). Only `Bash`
@@ -310,17 +319,19 @@ are always `deny`, independent of `defaultMode`.
 
 ### 6.6 Precedence in plain terms
 
-The three tiers interact by specificity first, then tier:
+Denies hold unless an allow/ask carves them out:
 
 - A pattern that appears in **no** list falls back to the `defaultMode` tier:
   `deny` by default, or `ask` when configured (§6.4).
 - The **same** specifier in several tiers → the **most restrictive** tier wins.
-  `Bash(aws:*)` in `allow`, `ask`, and `deny` (all specificity 3) → `deny`.
-- A **more specific** rule beats a broader one across tiers, in either
-  direction: a narrow `allow`/`ask` overrides a broad `deny`, and a narrow
-  `deny` overrides a broad `allow`. With `Bash(aws:*)` (deny, 3) and
-  `Bash(aws * describe-*)` (allow, 14), the `describe-*` calls are **allowed**
-  and every other `aws …` call is **denied**.
+  `Bash(aws:*)` in `allow`, `ask`, and `deny` → `deny` (an equal set is not a
+  carve-out).
+- A **carve-out** — an allow/ask whose match-set is a strict subset of a deny —
+  overrides that deny; any other overlap leaves the deny in force. With
+  `Bash(aws:*)` (deny) and `Bash(aws * describe-*)` (allow, a strict subset), the
+  `describe-*` calls are **allowed** and every other `aws …` call is **denied**.
+  But `allow Read(/**/passwd)` and `deny Read(/etc/**)` only overlap, so
+  `/etc/passwd` is **denied**.
 
 ## 7. Evaluation details
 
@@ -456,16 +467,16 @@ allows, so those commands are governed by the broad deny. Git read commands
 | `Bash(kubectl get pods)` | deny | only `kubectl:*` deny matches |
 | `Bash(kubectl delete pod x)` | deny | only `kubectl:*` deny matches |
 | `Bash(git push origin main)` | ask | `git push:*` is in `ask` |
-| `Bash(git push --force origin)` | deny | `git push --force:*` (16) beats `git push:*` ask (8) |
+| `Bash(git push --force origin)` | deny | `git push --force:*` deny holds; the broader `git push:*` ask does not carve it out |
 | `Bash(git status)` | ask | no rule matches → `defaultMode: "ask"` fall-back (§6.4) |
 | `Bash(cat .env)` | deny | file-access cross-check hits a `Read` `.env` deny even though `cat:*` is allowed (§8) |
 | `Read(/tmp/notes.txt)` | allow | bare `Read` (allow, specificity 0), no secret-path deny matches |
-| `WebFetch(https://x.io)` | deny | bare `WebFetch` deny matches, nothing more specific allows |
+| `WebFetch(https://x.io)` | deny | bare `WebFetch` deny matches, no allow carves it out |
 | `WebSearch(anything)` | deny | bare `WebSearch` deny matches (non-Bash tools are evaluated too) |
 | `mcp__db__query(SELECT …)` | ask | Generic family, no rule names this MCP tool → ask fall-back |
 | `NotebookEdit(/repo/nb.ipynb)` | ask | Path family, but no `NotebookEdit` rule and bare `Edit` does not cover it → ask fall-back |
 | `Bash(some-tool foo)` | ask | no Bash rule matches → ask fall-back |
-| `Bash(python3 -c "import os")` | deny | `python3 -c:*` (10) beats the broad `python3 *` allow (8) |
+| `Bash(python3 -c "import os")` | deny | `python3 -c:*` deny holds; the broad `python3 *` allow does not carve it out |
 | `Bash(python3 script.py)` | allow | broad `python3 *` allow, no narrower deny matches |
 
 Two rows show both directions of the design: an active protection (`cat .env`)
