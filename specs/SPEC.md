@@ -110,8 +110,8 @@ unrelated settings or other hooks.
   for `--local`), and bakes that absolute path into the injected command
   `permcheck --hook --rules "<abs>"`. With `--rules <path>` the given file is
   absolutized and validated (it must load), then **copied** into the canonical
-  location. With no `--rules` a secure starter (the canonical deny list,
-`defaultMode: "ask"`, empty `allow`/`ask`) is written there. `--rules` **requires
+  location. With no `--rules` a minimal safe starter (a small `deny` list, not the
+  full reference set, plus `defaultMode: "ask"` and empty `allow`/`ask`) is written there. `--rules` **requires
   a value**: a bare `--rules` (no path, or one followed by a flag) is a usage
   error (exit `3`), never a silent auto-seed. An
   existing canonical rules file is **never overwritten**: copy mode refuses (exit

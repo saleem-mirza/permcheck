@@ -162,7 +162,7 @@ fn install_without_rules_seeds_starter() {
         &home.join(".claude").join("settings.json")
     )));
 
-    // The seeded starter loads and enforces the canonical deny list.
+    // The seeded starter loads and enforces its minimal safe deny list.
     let event = r#"{"tool_name":"Bash","tool_input":{"command":"sudo rm -rf /"}}"#;
     cmd(home, home)
         .args(["--hook", "--rules"])

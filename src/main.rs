@@ -315,7 +315,7 @@ fn install_seed_rules(dest: &Path) {
     println!("Wrote starter rules → {}", dest.display());
 }
 
-/// Write a secure starter rules file: the canonical `deny` list, `defaultMode`
+/// Write a starter rules file: the minimal safe `deny` list, `defaultMode`
 /// `ask`, and empty `allow`/`ask`. Refuses to overwrite an existing file.
 fn run_init_rules(args: &[String]) {
     // The path is optional; default to `permcheck.json` in the current directory.
@@ -551,7 +551,7 @@ fn print_help() {
   {cyan}--rules{reset} <path>   Permissions JSON file {bold}(required){reset}. Reference: rules/permcheck.json
   {cyan}--json{reset}           {red}(CLI mode only){reset} Print the hook-format JSON decision instead of using the exit code.
   {cyan}--hook{reset}           Read a PreToolUse event on stdin, write decision JSON, always exit 0.
-  {cyan}--init-rules{reset} [path]  Write a secure starter rules file (path defaults to permcheck.json) — canonical deny list, empty allow/ask, defaultMode ask. Refuses to overwrite.
+  {cyan}--init-rules{reset} [path]  Write a starter rules file (path defaults to permcheck.json): a minimal safe deny list (sudo, rm -rf, secret reads, force-push) plus self-protection, empty allow/ask, defaultMode ask. Refuses to overwrite.
   {cyan}--install{reset}        Wire the PreToolUse hook into settings.json. With {cyan}--rules{reset} <path>, copies that file to the canonical location under .claude/; without it, writes a starter there. Never overwrites an existing rules file, and refuses to re-point a hook that already targets a different rules path (uninstall first).
   {cyan}--uninstall{reset}      Idempotently remove the permcheck PreToolUse hook from settings.json.
   {cyan}-h, --help{reset}       Show this help.

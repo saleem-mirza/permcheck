@@ -22,9 +22,12 @@ binary. Decision pipeline: `rules` → `matcher` → `engine`.
 
 Tests live in `tests/` (separate crates, never linked into the binary).
 
-`src/rules.rs` embeds the canonical `rules/permcheck.json` via `include_str!`, which is
-the source of the deny list `starter_rules()` writes for `permcheck --init-rules` and is
-**not** a decision-time default (the hook always requires an explicit `--rules`).
+`src/rules.rs` holds two separate things. `starter_rules()` writes a small, self-contained
+safe `deny` list (`STARTER_DENY`) for `permcheck --init-rules`, the minimal policy a user
+grows. The canonical `rules/permcheck.json` is the full **reference set** for the spec and
+tests; `src/rules.rs` embeds it via `include_str!` only in test builds (`#[cfg(test)]`) to
+assert it loads and lints clean. Neither is a decision-time default: the hook always
+requires an explicit `--rules`.
 
 ## Building the plugin binaries
 

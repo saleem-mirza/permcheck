@@ -177,27 +177,40 @@ impl RuleSet {
     }
 }
 
-/// The canonical secure rule set, embedded at build time. It is the single
-/// source of truth for the `deny` list that [`starter_rules`] seeds a fresh file
-/// with. It is **not** a decision-time default: the hook and CLI always require
-/// an explicit `--rules` path.
+/// The canonical reference rule set (`rules/permcheck.json`), embedded only in
+/// test builds so the suite can assert it loads and lints clean. It is **not** a
+/// decision-time default (the hook and CLI always require an explicit `--rules`),
+/// and it is **not** the `--init-rules` seed: that is [`starter_rules`], a
+/// minimal list. The full set stays the reference fixture for the spec and tests.
+#[cfg(test)]
 const DEFAULT_RULES: &str = include_str!("../rules/permcheck.json");
 
-/// A starter rules value for `permcheck --init-rules`: the canonical `deny` list,
-/// `defaultMode: "ask"`, and empty `allow`/`ask` for the user to grow.
+/// The minimal but functional `deny` list `permcheck --init-rules` seeds. It is a
+/// safe default the user grows, not the full reference set: privilege escalation,
+/// destructive removes, secret reads (which also gate shell readers through the
+/// file-access cross-check), history-rewriting push, and edits to permcheck's own
+/// policy and its wiring.
+const STARTER_DENY: &[&str] = &[
+    "Bash(sudo:*)",
+    "Bash(rm -f:*)",
+    "Bash(git push --force:*)",
+    "Read(//**/.env*)",
+    "Read(//**/id_rsa*)",
+    "Read(//**/.ssh/**)",
+    "Edit(//**/.claude/permcheck.json)",
+    "Write(//**/.claude/permcheck.json)",
+    "Edit(//**/.claude/settings.json)",
+    "Write(//**/.claude/settings.json)",
+];
+
+/// A starter rules value for `permcheck --init-rules`: the minimal safe [`STARTER_DENY`]
+/// list, `defaultMode: "ask"`, and empty `allow`/`ask` for the user to grow.
 pub fn starter_rules() -> Value {
-    let canonical: Value =
-        serde_json::from_str(DEFAULT_RULES).expect("embedded rules/permcheck.json is valid JSON");
-    let deny = canonical
-        .get("permissions")
-        .and_then(|p| p.get("deny"))
-        .cloned()
-        .unwrap_or_else(|| Value::Array(Vec::new()));
     serde_json::json!({
         "permissions": {
             "allow": [],
             "ask": [],
-            "deny": deny,
+            "deny": STARTER_DENY,
             "defaultMode": "ask",
         }
     })
@@ -247,16 +260,25 @@ mod starter_tests {
         assert!(perms["ask"].as_array().unwrap().is_empty());
         assert_eq!(perms["defaultMode"], "ask");
 
-        // deny is copied verbatim from the canonical set (non-empty, same length).
-        let canonical: Value = serde_json::from_str(DEFAULT_RULES).unwrap();
-        let canon_deny = canonical["permissions"]["deny"].as_array().unwrap().len();
-        assert!(canon_deny > 0, "canonical deny list must be non-empty");
-        assert_eq!(perms["deny"].as_array().unwrap().len(), canon_deny);
+        // A minimal but non-empty deny list covering the safe-default categories.
+        let deny = perms["deny"].as_array().unwrap();
+        assert!(!deny.is_empty(), "starter deny list must be non-empty");
+        for needle in ["Bash(sudo:*)", "Bash(rm -f:*)", "Bash(git push --force:*)"] {
+            assert!(
+                deny.iter().any(|r| r == needle),
+                "starter deny missing {needle}"
+            );
+        }
 
-        // The written form loads and falls back to ask.
+        // The written form loads, lints clean, and falls back to ask.
         let text = serde_json::to_string(&v).unwrap();
         let rs = RuleSet::load_str(&text).unwrap();
         assert_eq!(rs.default_tier, Tier::Ask);
+        assert!(
+            rs.lint_warnings().is_empty(),
+            "starter has lint warnings: {:?}",
+            rs.lint_warnings()
+        );
     }
 }
 

@@ -84,7 +84,7 @@ brew install saleem-mirza/tap/permcheck
 
 Or [build](#build) it yourself. Either way, permcheck then wires its own `PreToolUse` hook into a Claude Code `settings.json`, **idempotently** (safe to re-run, never touches your other settings or hooks).
 
-**A rules file.** `--install` seeds one for you if you don't pass `--rules` (see below), so you skip straight to wiring. To create one explicitly, required for [method 3](#3-by-hand-in-settingsjson), generate a secure starter: the canonical deny list (blocks `sudo`, `rm -rf`, secret reads, force-push, …), `defaultMode: ask`, and empty `allow`/`ask` you grow yourself:
+**A rules file.** `--install` seeds one for you if you don't pass `--rules` (see below), so you skip straight to wiring. To create one explicitly, required for [method 3](#3-by-hand-in-settingsjson), generate a starter: a minimal safe deny list (blocks `sudo`, `rm -rf`, secret reads, force-push) plus self-protection for permcheck's own policy, `defaultMode: ask`, and empty `allow`/`ask` you grow yourself:
 
 ```sh
 permcheck --init-rules ~/.claude/permcheck.json   # refuses to overwrite an existing file
@@ -244,7 +244,7 @@ permcheck Read "/home/user/.ssh/id_rsa" --rules rules/permcheck.json   # exit 2 
 
 ## Rules
 
-Rules are passed explicitly via `--rules <path>`. There is no decision-time default: the hook and CLI always require `--rules`. The canonical reference set ships at [`rules/permcheck.json`](rules/permcheck.json). It is also embedded in the binary purely as the seed for `permcheck --init-rules` (which emits its deny list into a fresh starter file), never as a silent fallback.
+Rules are passed explicitly via `--rules <path>`. There is no decision-time default: the hook and CLI always require `--rules`. The canonical reference set ships at [`rules/permcheck.json`](rules/permcheck.json) as the fixture for the spec and tests. `permcheck --init-rules` writes a **separate** minimal starter (a small safe deny list you grow), not the reference set, so a fresh install starts lean rather than with the full deny catalog.
 
 Both of these shapes parse identically. `defaultMode` sets the fall-back for calls that match no rule (`"ask"` → ask, otherwise deny). Any other keys are ignored, so the file doubles as a Claude Code settings file:
 
