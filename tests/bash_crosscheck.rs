@@ -99,7 +99,8 @@ fn interpreter_inline_exec_follows_the_rules_not_a_hardcoded_deny() {
     // the verdict. With no inline-exec deny, a broadly-allowed interpreter's inline
     // code stays allowed and an un-listed interpreter falls to defaultMode.
     let permissive =
-        RuleSet::load_str(r#"{"allow":["Bash(python3 *)"],"deny":[],"defaultMode":"ask"}"#).unwrap();
+        RuleSet::load_str(r#"{"allow":["Bash(python3 *)"],"deny":[],"defaultMode":"ask"}"#)
+            .unwrap();
     let a = |c: &str| decide_bash(c, &permissive, Some("/w")).tier;
     assert_eq!(a("python3 -c 'x'"), Tier::Allow); // not invented as a deny
     assert_eq!(a("python3 -cimport os"), Tier::Allow);
@@ -121,7 +122,10 @@ fn interpreter_inline_exec_follows_the_rules_not_a_hardcoded_deny() {
     // defaultMode deny governs an un-listed interpreter through the fall-back, not
     // a special engine rule.
     let closed = RuleSet::load_str(r#"{"deny":[],"defaultMode":"deny"}"#).unwrap();
-    assert_eq!(decide_bash("bun -e 'x'", &closed, Some("/w")).tier, Tier::Deny);
+    assert_eq!(
+        decide_bash("bun -e 'x'", &closed, Some("/w")).tier,
+        Tier::Deny
+    );
 }
 
 // --- dd if=/of= cross-check (A1) ---------------------------------------------

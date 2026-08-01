@@ -489,9 +489,10 @@ pub(crate) fn matcher_subset(a: &Matcher, d: &Matcher) -> bool {
         // A bare allow (matches everything) refines only a universal deny.
         (Matcher::Bare, _) => is_universal(d),
         (Matcher::Path(pa), Matcher::Path(pd)) => tokens_subset(&pa.0, &pd.0),
-        (Matcher::Generic(ga), Matcher::Generic(gd)) => {
-            tokens_subset(&glob_to_tokens(ga.0.as_bytes()), &glob_to_tokens(gd.0.as_bytes()))
-        }
+        (Matcher::Generic(ga), Matcher::Generic(gd)) => tokens_subset(
+            &glob_to_tokens(ga.0.as_bytes()),
+            &glob_to_tokens(gd.0.as_bytes()),
+        ),
         (Matcher::Bash(ba), Matcher::Bash(bd)) => bash_subset(ba, bd),
         // Cross-family rules never share a tool, so this is unreachable in
         // practice; conservatively not a subset.
@@ -558,9 +559,10 @@ fn bash_subset(a: &BashMatcher, d: &BashMatcher) -> bool {
                 && lit.starts_with(pd)
                 && lit.as_bytes()[pd.len()].is_ascii_whitespace()
         }
-        (BashMatcher::Glob(ga), BashMatcher::Glob(gd)) => {
-            tokens_subset(&glob_to_tokens(ga.as_bytes()), &glob_to_tokens(gd.as_bytes()))
-        }
+        (BashMatcher::Glob(ga), BashMatcher::Glob(gd)) => tokens_subset(
+            &glob_to_tokens(ga.as_bytes()),
+            &glob_to_tokens(gd.as_bytes()),
+        ),
         // A prefix's language is `pre` or `pre` + whitespace + anything. Over-
         // approximate it as `pre` + `**` (more strings, so proving subset stays
         // sound) and test against the glob.
@@ -663,7 +665,13 @@ fn all_reps(a: &[PToken], next_i: usize, dstate: u128, reps: Vec<u8>, ctx: &mut 
 fn d_literals(d: &[PToken]) -> Vec<u8> {
     let mut v: Vec<u8> = d
         .iter()
-        .filter_map(|t| if let PToken::Lit(c) = t { Some(*c) } else { None })
+        .filter_map(|t| {
+            if let PToken::Lit(c) = t {
+                Some(*c)
+            } else {
+                None
+            }
+        })
         .collect();
     v.sort_unstable();
     v.dedup();
@@ -673,7 +681,9 @@ fn d_literals(d: &[PToken]) -> Vec<u8> {
 /// A byte that is neither `/` nor any of `d`'s literals — one representative for
 /// "every other character", which all of `d`'s tokens treat identically.
 fn fresh_byte(lits: &[u8]) -> u8 {
-    (1u8..=255).find(|b| *b != b'/' && !lits.contains(b)).unwrap_or(0)
+    (1u8..=255)
+        .find(|b| *b != b'/' && !lits.contains(b))
+        .unwrap_or(0)
 }
 
 /// Epsilon-closure of a `d` state: nullable tokens (`*`, `**`) let a live position

@@ -144,22 +144,102 @@ struct Interp {
 }
 
 const INTERPRETERS: &[Interp] = &[
-    Interp { name: "python", short: b"c", long: &[], subcommand: &[] },
-    Interp { name: "python2", short: b"c", long: &[], subcommand: &[] },
-    Interp { name: "python3", short: b"c", long: &[], subcommand: &[] },
-    Interp { name: "pypy", short: b"c", long: &[], subcommand: &[] },
-    Interp { name: "pypy3", short: b"c", long: &[], subcommand: &[] },
-    Interp { name: "perl", short: b"eE", long: &[], subcommand: &[] },
-    Interp { name: "perl5", short: b"eE", long: &[], subcommand: &[] },
-    Interp { name: "ruby", short: b"e", long: &[], subcommand: &[] },
-    Interp { name: "node", short: b"ep", long: &[("--eval", "-e"), ("--print", "-p")], subcommand: &[] },
-    Interp { name: "nodejs", short: b"ep", long: &[("--eval", "-e"), ("--print", "-p")], subcommand: &[] },
-    Interp { name: "bun", short: b"e", long: &[("--eval", "-e")], subcommand: &[] },
-    Interp { name: "deno", short: b"", long: &[], subcommand: &["eval"] },
-    Interp { name: "php", short: b"r", long: &[], subcommand: &[] },
-    Interp { name: "lua", short: b"e", long: &[], subcommand: &[] },
-    Interp { name: "luajit", short: b"e", long: &[], subcommand: &[] },
-    Interp { name: "Rscript", short: b"e", long: &[], subcommand: &[] },
+    Interp {
+        name: "python",
+        short: b"c",
+        long: &[],
+        subcommand: &[],
+    },
+    Interp {
+        name: "python2",
+        short: b"c",
+        long: &[],
+        subcommand: &[],
+    },
+    Interp {
+        name: "python3",
+        short: b"c",
+        long: &[],
+        subcommand: &[],
+    },
+    Interp {
+        name: "pypy",
+        short: b"c",
+        long: &[],
+        subcommand: &[],
+    },
+    Interp {
+        name: "pypy3",
+        short: b"c",
+        long: &[],
+        subcommand: &[],
+    },
+    Interp {
+        name: "perl",
+        short: b"eE",
+        long: &[],
+        subcommand: &[],
+    },
+    Interp {
+        name: "perl5",
+        short: b"eE",
+        long: &[],
+        subcommand: &[],
+    },
+    Interp {
+        name: "ruby",
+        short: b"e",
+        long: &[],
+        subcommand: &[],
+    },
+    Interp {
+        name: "node",
+        short: b"ep",
+        long: &[("--eval", "-e"), ("--print", "-p")],
+        subcommand: &[],
+    },
+    Interp {
+        name: "nodejs",
+        short: b"ep",
+        long: &[("--eval", "-e"), ("--print", "-p")],
+        subcommand: &[],
+    },
+    Interp {
+        name: "bun",
+        short: b"e",
+        long: &[("--eval", "-e")],
+        subcommand: &[],
+    },
+    Interp {
+        name: "deno",
+        short: b"",
+        long: &[],
+        subcommand: &["eval"],
+    },
+    Interp {
+        name: "php",
+        short: b"r",
+        long: &[],
+        subcommand: &[],
+    },
+    Interp {
+        name: "lua",
+        short: b"e",
+        long: &[],
+        subcommand: &[],
+    },
+    Interp {
+        name: "luajit",
+        short: b"e",
+        long: &[],
+        subcommand: &[],
+    },
+    Interp {
+        name: "Rscript",
+        short: b"e",
+        long: &[],
+        subcommand: &[],
+    },
 ];
 
 /// If `cmd` invokes a known interpreter with an inline-code option in any form
@@ -719,9 +799,8 @@ fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> bool {
                 return true;
             }
         }
-    } else if (name == "cp" || name == "mv") && cp_mv_writes_denied(rs, operands, cwd) {
-        return true;
-    } else if (name == "curl" && curl_reads_denied(rs, operands, cwd))
+    } else if ((name == "cp" || name == "mv") && cp_mv_writes_denied(rs, operands, cwd))
+        || (name == "curl" && curl_reads_denied(rs, operands, cwd))
         || (name == "wget" && wget_reads_denied(rs, operands, cwd))
     {
         return true;

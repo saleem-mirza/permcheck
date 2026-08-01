@@ -78,13 +78,7 @@ pub(crate) fn decide_tier(rs: &RuleSet, tool: &str, candidates: &[&str]) -> Opti
     // identical specifier in a lower tier never overrides the deny (§6.6). This
     // double loop runs over the recorded hits only, doing no further matching.
     let total = n + spill.len();
-    let get = |i: usize| -> &CompiledRule {
-        if i < n {
-            buf[i].unwrap()
-        } else {
-            spill[i - n]
-        }
-    };
+    let get = |i: usize| -> &CompiledRule { if i < n { buf[i].unwrap() } else { spill[i - n] } };
     let all_carved = (0..total).all(|i| {
         let d = get(i);
         if d.tier != Tier::Deny {
