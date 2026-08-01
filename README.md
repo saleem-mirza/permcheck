@@ -14,7 +14,7 @@ Claude Code's native model resolves rule conflicts with a fixed precedence: a `d
 
 **Highlights**
 
-- **Carve-out precedence**: a narrower rule (a strict subset) overrides a broader one across tiers, not the native "deny always wins" model. See [How it decides](#how-it-decides-most-specific-rule-wins).
+- **Carve-out precedence**: a narrower rule (a strict subset) overrides a broader one across tiers, not the native "deny always wins" model. See [How it decides](#how-it-decides-a-narrower-rule-carves-out-a-broader-one).
 - **Bash compound safety**: splits `&&`/`|`/`$(…)` chains, cross-checks file reads/writes against `Read`/`Write`/`Edit` deny rules, and re-decides through wrappers like `env`/`sudo`, so `cat .env` or `env aws …` cannot launder past a broad allow.
 - **Fail-closed**: any error (bad input, unreadable rules, unknown tool, panic) resolves to `deny`. The hook never crashes a tool call open.
 - **Zero-config install**: the [plugin](#installation) ships prebuilt binaries for macOS/Linux/Windows and wires the hook without touching your `settings.json`.
@@ -30,6 +30,16 @@ Claude Code's native model resolves rule conflicts with a fixed precedence: a `d
 | **Language** | Rust (edition 2024) |
 | **Role** | defense-in-depth overlay, *not* a sandbox or security boundary |
 | **License** | [Apache-2.0](LICENSE) |
+
+### Engine vs. ruleset: who does what
+
+permcheck splits into two parts, and the split decides where responsibility sits.
+
+**The engine** takes one tool call plus your rules and returns one verdict (`allow`, `ask`, or `deny`) with a reason. It is deterministic and stateless. It resolves conflicts by carve-out precedence, normalizes command forms so an evasion cannot dodge a rule you wrote, and fails closed on any error. It never executes the call, never mutates state, and never authors, infers, or repairs a rule.
+
+**The ruleset** (`permcheck.json`, alongside your enterprise and user `settings.json`) holds all policy. Every verdict is a function of the rules you wrote. A command, path, or tool that no rule covers is a gap the engine has nothing to enforce against.
+
+**You maintain the ruleset.** Closing a coverage gap is a rule you add, not an engine change. To stop `sed -i` or `perl -i` from writing a protected file, deny it: `Bash(sed -i:*)`, `Bash(perl -i:*)`. The engine does not grow tool-specific policy to cover a rule you left out. The only thing a rule cannot express, so the engine owns it, is path canonicalization: the engine resolves `~`, absolutizes a relative path against the call's cwd, and collapses `.`/`..`, so your path rules match the real target rather than a spelling of it.
 
 ## Installation
 
@@ -145,13 +155,13 @@ Or add the hook yourself under `hooks.PreToolUse`, pointing `--rules` at your ru
 
 This invokes the hook interface documented under [Usage](#usage). Use **absolute paths** for both the binary and `--rules`. After editing, confirm the file is valid JSON (`jq . ~/.claude/settings.json`) and that Claude Code loaded it with `/hooks`. A malformed file is silently ignored. If unsure of the exact shape, run `--install` once (method 2) and copy the block it generates.
 
-## How it decides: most specific rule wins
+## How it decides: a narrower rule carves out a broader one
 
 For a given tool call, permcheck gathers *every* matching rule. A matching `deny` holds unless a matching `allow`/`ask` is a genuine narrower exception, then it decides:
 
 1. **A carve-out overrides a deny.** An `allow`/`ask` carves out a matching `deny` only when its match-set is a **strict subset** of that deny (`allow ⊆ deny` and `deny ⊄ allow`). An identical specifier in a lower tier is not a carve-out, so `deny > ask > allow` still holds for the same specifier.
 2. **Any un-carved deny wins.** If a matching deny is not carved out by some matching allow/ask, the call is `deny`.
-3. **Otherwise the winner is the allow/ask with the highest `(specificity, tier)`.** Specificity = the count of literal, non-wildcard characters in the specifier, `+1000` if it has no wildcard at all; a bare rule (e.g. `Read`) scores `0`. Equal specificity takes the more restrictive tier (`ask` over `allow`); a full tie takes the first rule in file order.
+3. **Otherwise the winner is the allow/ask with the highest `(specificity, tier)`.** Specificity = the count of literal, non-wildcard characters in the specifier, `+1000` if it has no wildcard at all; a bare rule (e.g. `Read`) scores `0`. Equal specificity takes the more restrictive tier (`ask` over `allow`); a full tie takes the first rule in file order. At *unequal* specificity, a more-specific `allow` beats a broader `ask` and drops the prompt, so keep a guard `ask` clear of any narrower `allow` that overlaps it.
 4. **If nothing matches, the `defaultMode` fall-back applies:** `deny` by default (fail-closed), or set `"defaultMode": "ask"` in the rules file to prompt on unlisted calls instead. The Bash file-access cross-check and error paths always `deny` regardless.
 
 The consequence, and the whole reason permcheck exists, is that a narrow rule beats a broad one **in either direction**:
@@ -271,6 +281,8 @@ Each tool routes to one of three matcher families, which determines both the pay
 | **Bash** | `Bash` | `command` | anchored command pattern, trailing `cmd:*` matches `cmd` + args, `*` spans any run |
 | **Path** | `Read` `Write` `Edit` `Glob` `Grep` `NotebookEdit` | `file_path` / `notebook_path` / `path` | glob: `*` (non-`/`), `?`, `**` (crosses `/`), `//` root marker, `~` expands via `$HOME` |
 | **Generic** | `WebFetch` `WebSearch`, every `mcp__*`, and all others | `url` / `query`, else first string field | anchored domain/URL glob, `*` only wildcard, `domain:` prefix stripped |
+
+A leading `//` in a Path specifier is a root marker: permcheck normalizes it to a single leading slash, so `Read(//**/id_rsa*)` is the absolute-rooted glob `/**/id_rsa*` and matches an `id_rsa` file anywhere. The doubled slash in the reference set is intentional, not a typo.
 
 ## Bash compound safety
 
