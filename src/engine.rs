@@ -148,7 +148,56 @@ pub(crate) fn path_candidates(payload: &str, cwd: Option<&str>) -> Vec<String> {
         let rel = payload.strip_prefix("./").unwrap_or(payload);
         push_unique(&mut v, format!("{}/{}", dir.trim_end_matches('/'), rel));
     }
+
+    // Lexically collapse `.`/`..` in each candidate so a traversal spelling cannot
+    // route around a directory-anchored deny (`/tmp/../etc/shadow` -> `/etc/shadow`
+    // still hits `Read(/etc/**)`, §7.2). Resolution is purely lexical: no symlink
+    // following, which stays a non-goal (§9.2). Additive — a new candidate only
+    // ever adds a match, preserving the fail-closed bias. The bound is the length
+    // captured before the loop, so the pushes below are not re-scanned.
+    for i in 0..v.len() {
+        if let Some(norm) = lexical_normalize(&v[i]) {
+            push_unique(&mut v, norm);
+        }
+    }
     v
+}
+
+/// Lexically resolve `.` and `..` segments of `path` without touching the
+/// filesystem (no symlink following, §9.2). Returns the collapsed form only when
+/// it differs from `path`; `None` when there is nothing to collapse. An absolute
+/// path stays rooted and a `..` at the root is dropped; a relative path keeps a
+/// leading `..` it cannot cancel.
+fn lexical_normalize(path: &str) -> Option<String> {
+    if !path.split('/').any(|s| s == "." || s == "..") {
+        return None;
+    }
+    let absolute = path.starts_with('/');
+    let mut out: Vec<&str> = Vec::new();
+    for seg in path.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => match out.last() {
+                Some(&s) if s != ".." => {
+                    out.pop();
+                }
+                // A relative path keeps a leading `..` it cannot cancel; an
+                // absolute path drops a `..` at the root.
+                _ if !absolute => out.push(".."),
+                _ => {}
+            },
+            s => out.push(s),
+        }
+    }
+    let joined = out.join("/");
+    let result = if absolute {
+        format!("/{joined}")
+    } else if joined.is_empty() {
+        ".".to_string()
+    } else {
+        joined
+    };
+    (result != path).then_some(result)
 }
 
 /// Candidate forms for a Generic payload: raw, the extracted host, and its

@@ -19,6 +19,7 @@ const RULES: &str = r#"{
   "deny": [
     "Read(/**/.env*)",
     "Read(//**/.ssh/**)",
+    "Read(/etc/**)",
     "Write(//**/.ssh/**)",
     "Edit(//**/.ssh/**)",
     "Bash(git push --force:*)",
@@ -102,6 +103,17 @@ fn path_traversal_and_forms_resolve_to_deny() {
     assert_eq!(read("../../.env"), Tier::Deny); // traversal segments
     assert_eq!(read("/home/user/.ssh/id_rsa"), Tier::Deny);
     assert_eq!(write("/home/user/.ssh/authorized_keys"), Tier::Deny);
+}
+
+#[test]
+fn parent_traversal_evades_directory_anchored_deny() {
+    // A `..` segment routes an absolute path out of and back into a denied
+    // directory. `path_candidates` collapses `.`/`..` lexically, so
+    // `/tmp/../etc/shadow` resolves to `/etc/shadow` and hits `Read(/etc/**)`.
+    // Filename-anchored denies (`.env*`) are immune anyway because `**` catches
+    // any suffix; directory-prefix denies rely on this collapse.
+    assert_eq!(read("/tmp/../etc/shadow"), Tier::Deny);
+    assert_eq!(bash("cat /tmp/../etc/shadow"), Tier::Deny);
 }
 
 #[test]
