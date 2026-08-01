@@ -417,12 +417,22 @@
       <li><a href="#walkthrough-a-prompt-injection-blocked">Walkthrough: an injected exfiltration, blocked by a rule</a></li>
       <li><a href="#every-tool-not-just-bash">Every tool, Bash and beyond</a></li>
       <li><a href="#tune-your-rules-not-the-engine">Tune your rules, not the engine</a></li>
-      <li><a href="#what-it-costs">What it costs</a></li>
       <li><a href="#what-it-doesn-t-stop">What it doesn't stop</a></li>
       <li><a href="#where-it-fits">Where it fits</a></li>
       <li><a href="#start-in-two-lines">Start in two lines</a></li>
+      <li><a href="#appendix-sample-policy">Appendix: a policy that reproduces this post</a></li>
     </ol>
   </nav>
+
+  <div class="callout">
+    <p class="label">Key ideas</p>
+    <ul>
+      <li>Native precedence always favors <code>deny</code>, however broad the rule.</li>
+      <li>Least privilege needs scoped exceptions a blunt deny cannot express.</li>
+      <li>permcheck lets a strictly narrower rule carve out a broader one, in either direction.</li>
+      <li>Everything else stays fail-closed: any error resolves to <code>deny</code>.</li>
+    </ul>
+  </div>
 
   <h2 id="one-rule-breaks-everything">One rule breaks everything</h2>
   <p>When two rules match a call, Claude Code's precedence is fixed: <code>deny</code> beats <code>ask</code>, <code>ask</code> beats <code>allow</code>. A <code>deny</code> wins no matter how broad it is.</p>
@@ -477,6 +487,8 @@ allow: Bash(aws * describe-*)</code></pre>
   </ol>
   <p>The same wall blocks read-only <code>kubectl</code>, git-without-force-push, and "secret files locked, their folders browsable". The native model offers allow-everything or deny-everything, when the policy needs a narrow exception. Anthropic tracks the limitation in <a href="https://github.com/anthropics/claude-code/issues/79759">claude-code#79759</a>.</p>
 
+  <p>Why does a permission model reach for "deny always wins" at all? It is the safe default: when two rules collide and no human is there to arbitrate, the restrictive one is the choice that never leaks. The cost lands on precision. Least privilege is built from exceptions, read but not write, this subcommand but not that one, this file locked while its folder stays open, and a blunt deny has no way to admit one. A model that only tightens or only loosens leaves those policies unwritable. What you want is narrower: a deny that yields to a genuinely more specific rule, and to nothing else. That is the rule permcheck changes.</p>
+
   <h2 id="the-fix-most-specific-rule-wins">The fix: a narrower rule carves out a broader one</h2>
   <p>permcheck is a permission engine that runs as a PreToolUse hook. Before a call executes, permcheck reads it, scores it against your rules, and returns one verdict with a reason. It never runs the command. It never touches state.</p>
   <p>It speaks the PreToolUse contract: read the event as JSON on stdin, write the verdict as JSON on stdout, always exit 0.</p>
@@ -498,7 +510,7 @@ allow: Bash(aws * describe-*)</code></pre>
   </div>
 
   <p>Specificity is a number you compute by hand: count the literal, non-wildcard characters in the specifier, add 1000 if the specifier has no wildcard at all. Wildcards are <code>*</code> for every family, plus <code>?</code> for path globs. The <code>+1000</code> exact-match bonus guarantees a literal specifier outranks any wildcard specifier regardless of length.</p>
-  <p>Specificity no longer decides <code>allow</code> versus <code>deny</code>; containment does. The score only orders rules pulling the same direction (which allow/ask wins when several match) and gives a stable, reviewable tie-break. Cross-tier precedence asks a sharper question: does the allow sit <em>inside</em> the deny? A longer specifier that merely overlaps a deny no longer punches through it. The same reasoning rules out a manual priority field: an explicit priority is one more value to assign, reconcile, and keep correct as the policy grows, and it drifts out of sync with the rules it ranks.</p>
+  <p>Specificity no longer decides <code>allow</code> versus <code>deny</code>; containment does. The score only orders rules pulling the same direction (which allow/ask wins when several match) and gives a stable, reviewable tie-break. Cross-tier precedence asks a sharper question: does the allow sit <em>inside</em> the deny? A longer specifier that merely overlaps a deny no longer punches through it. The same reasoning rules out a manual priority field: an explicit priority is one more value to assign, reconcile, and keep correct as the policy grows, and it drifts out of sync with the rules it ranks. Structural metrics such as path depth or a parse-tree score need a ranking scheme the reader learns before a rule's precedence is legible; a literal-character count is computable on sight, and the score only orders, since containment decides <code>allow</code> against <code>deny</code>.</p>
   <p>Worked out on real rules (the <code>:*</code> suffix is a wildcard marker, so it earns no literal count and no bonus):</p>
 
   <div class="tbl-scroll">
@@ -526,7 +538,7 @@ allow: Bash(aws * describe-*)</code></pre>
     </table>
   </div>
 
-  <p>These two <code>aws</code> rules are the policy you write, not the shipped default. The starter set denies <code>aws</code> wholesale, so add the <code>describe</code> allow yourself to reproduce the row above.</p>
+  <p>These two <code>aws</code> rules are the policy you write, not a default. To reproduce the row above, put <em>both</em> in your rules file, the broad <code>deny</code> and the narrower <code>allow</code> beside it, since the carve-out needs the deny present for the allow to punch through. Then check a call with the CLI, which exit-codes the verdict (<a href="#start-in-two-lines">Start in two lines</a>).</p>
   <p>The narrow allow punches through the broad deny. Flip it and a narrow deny punches through a broad allow the same way. That two-way override is the entire reason permcheck exists. "Narrow" now means a genuine subset: the allow must sit inside the deny for the carve-out to fire. <a href="#tune-your-rules-not-the-engine">Tune your rules</a> shows how to shape an allow so it lands inside the deny it must beat.</p>
 
   <div class="callout">
@@ -611,7 +623,7 @@ allow: Bash(aws * describe-*)</code></pre>
   <h3>Wrappers get peeled</h3>
   <p>A denied command tries to ride in behind a wrapper the deny does not name:</p>
   <pre><code>timeout 5 aws ec2 terminate-instances   <span class="tok-c"># peels to the aws call → DENIED</span></code></pre>
-  <p>Without peeling, <code>timeout 5 aws …</code> matches no rule and takes the <code>defaultMode</code> fall-back, laundering the <code>aws</code> deny down to <code>ask</code>. So permcheck strips the leading wrapper (<code>timeout</code>, <code>sudo</code>, <code>env</code>, <code>nice</code>, <code>doas</code>, and their options, assignments, and numeric args) and re-decides the command behind it. The <code>aws</code> deny then lands. Nested wrappers peel too, so <code>sudo env aws …</code> is caught. In the shipped set <code>sudo</code> and <code>env</code> are also denied outright, so they are blocked whether or not a command follows. The peel only ever <em>raises</em> a verdict, so wrapping an allowed command does not carry its allow through: under the shipped <code>ask</code> default, <code>timeout 5 ls</code> resolves to <code>ask</code>, not <code>allow</code>.</p>
+  <p>Without peeling, <code>timeout 5 aws …</code> matches no rule and takes the <code>defaultMode</code> fall-back, laundering the <code>aws</code> deny down to <code>ask</code>. So permcheck strips the leading wrapper (<code>timeout</code>, <code>sudo</code>, <code>env</code>, <code>nice</code>, <code>doas</code>, and their options, assignments, and numeric args) and re-decides the command behind it. The <code>aws</code> deny then lands. Nested wrappers peel too, so <code>sudo env aws …</code> is caught. In the reference set <code>sudo</code> and <code>env</code> are also denied outright, so they are blocked whether or not a command follows. The peel only ever <em>raises</em> a verdict, so wrapping an allowed command does not carry its allow through: under the shipped <code>ask</code> default, <code>timeout 5 ls</code> resolves to <code>ask</code>, not <code>allow</code>.</p>
 
   <h3>File reads and writes get cross-checked against path rules</h3>
   <p>You deny <code>Read(/**/.env*)</code> to protect secrets. The agent reaches for the shell instead:</p>
@@ -677,39 +689,15 @@ cat .en?            <span class="tok-c"># glob over a literal name, could hit .e
 
   <h2 id="tune-your-rules-not-the-engine">Tune your rules, not the engine</h2>
   <p>permcheck has two parts, and knowing which is which tells you where a change belongs. <strong>The engine</strong> takes one tool call plus your rules and returns one verdict, <code>allow</code>, <code>ask</code>, or <code>deny</code>, with a reason. It is deterministic and stateless: it resolves conflicts by containment, normalizes command forms so an evasion cannot dodge a rule you wrote, and fails closed on any error. It never runs the call, never mutates state, and never authors, infers, or repairs a rule. <strong>The ruleset</strong> holds all policy, so every verdict is a function of the rules you wrote, and a command, path, or tool no rule covers is a gap the engine has nothing to enforce against. That makes rule maintenance yours: you close a gap by adding a rule, not by asking the engine to special-case a tool. To stop <code>sed -i</code> or <code>perl -i</code> from writing a protected file, deny it (<code>Bash(sed -i:*)</code>, <code>Bash(perl -i:*)</code>). The one thing no rule can express, so the engine owns it, is path canonicalization: it resolves <code>~</code>, absolutizes a relative path against the call's cwd, and collapses <code>.</code>/<code>..</code>, so your path rules match the real target rather than a spelling of it.</p>
-  <p>Specificity counts literal characters, a proxy for how narrow a rule is, not a measure of its scope, so a loose rule grants more than you intend. Take the shipped <code>Bash(python3 *)</code> allow. On its own a bare interpreter allow swallows arbitrary code:</p>
+  <p>Specificity counts literal characters, a proxy for how narrow a rule is, not a measure of its scope, so a loose rule grants more than you intend. Take the reference set's <code>Bash(python3 *)</code> allow. On its own a bare interpreter allow swallows arbitrary code:</p>
   <pre><code>python3 -c "import os; os.system('rm -rf /')"</code></pre>
-  <p>The engine did its job; the rule was too wide. The fix is a paired deny for the dangerous subform, and the reference set now ships exactly that:</p>
+  <p>The engine did its job; the rule was too wide. The fix is a paired deny for the dangerous subform, and the reference set demonstrates the pairing:</p>
   <pre><code>allow: Bash(python3 *)          <span class="tok-c"># broad allow</span>
 deny:  Bash(python3 -c:*)       <span class="tok-c"># holds: the allow is not a subset of it</span></code></pre>
-  <p>So <code>python3 -c</code> is denied out of the box, while <code>python3 script.py</code> stays allowed: the <code>-c</code> deny holds because the broad allow does not sit inside it. Containment protects you the other way across tiers too. A wide allow that only overlaps a deny no longer punches through it. <code>allow Read(/**/passwd)</code> reaches every <code>passwd</code> on the system, so it is <em>not</em> a subset of <code>deny Read(/etc/**)</code>; the two only overlap, and <code>/etc/passwd</code> is <strong>denied</strong>. To grant a real exception, make the allow a strict subset of the deny — a literal <code>allow Read(/etc/passwd)</code>, which sits entirely inside <code>/etc/**</code>, carves it out and is allowed.</p>
-  <p>The reference set applies the same discipline to its other broad allows. The inline-code form of every shipped interpreter is denied (<code>perl -e</code>, <code>ruby -e</code>, <code>node -e</code>, <code>deno eval</code>, <code>php -r</code>, and <code>python</code>/<code>python2 -c</code>). Under <code>Bash(gh:*)</code>, <code>gh auth token</code> is denied and <code>gh api</code> is downgraded to <code>ask</code>. The arbitrary-package runners under <code>yarn:*</code>/<code>pnpm:*</code>/<code>uv:*</code> (<code>yarn dlx</code>, <code>pnpm dlx</code>, <code>pnpm exec</code>, <code>uv run</code>, <code>uvx</code>, <code>uv tool run</code>) are denied.</p>
+  <p>So <code>python3 -c</code> is denied in the reference set, while <code>python3 script.py</code> stays allowed: the <code>-c</code> deny holds because the broad allow does not sit inside it. Containment protects you the other way across tiers too. A wide allow that only overlaps a deny no longer punches through it. <code>allow Read(/**/passwd)</code> reaches every <code>passwd</code> on the system, so it is <em>not</em> a subset of <code>deny Read(/etc/**)</code>; the two only overlap, and <code>/etc/passwd</code> is <strong>denied</strong>. To grant a real exception, make the allow a strict subset of the deny — a literal <code>allow Read(/etc/passwd)</code>, which sits entirely inside <code>/etc/**</code>, carves it out and is allowed.</p>
+  <p>These are illustrations from the reference set, not policy you must keep: the same discipline runs through its other broad allows. The inline-code form of every bundled interpreter is denied (<code>perl -e</code>, <code>ruby -e</code>, <code>node -e</code>, <code>deno eval</code>, <code>php -r</code>, and <code>python</code>/<code>python2 -c</code>). Under <code>Bash(gh:*)</code>, <code>gh auth token</code> is denied and <code>gh api</code> is downgraded to <code>ask</code>. The arbitrary-package runners under <code>yarn:*</code>/<code>pnpm:*</code>/<code>uv:*</code> (<code>yarn dlx</code>, <code>pnpm dlx</code>, <code>pnpm exec</code>, <code>uv run</code>, <code>uvx</code>, <code>uv tool run</code>) are denied.</p>
   <p>One residual stays open by design: <code>npm install</code>, <code>pip install</code>, and their peers run each package's build and lifecycle code, which a prefix deny cannot separate from a safe install without breaking routine dependency installs. That is a sandbox concern, not a rule fix. When you author your own broad allow, pair it with denies for its dangerous subforms the same way. The CLI checker lints for an authoring mistake: a <code>cmd:*</code> rule whose <code>*</code> sits before the <code>:*</code>, which matches nothing.</p>
   <p>The same responsibility extends to how a command spells its flags. The engine matches each command in normalized form so an evasion cannot slip past a rule you wrote: it splits and reorders clustered short flags (<code>rm -rf</code>, <code>rm -fr</code>, and <code>rm -Rf</code> all reduce to <code>rm -f</code>) and canonicalizes an interpreter's inline-code flag (<code>perl -we</code> to <code>perl -e</code>, <code>node --eval</code> to <code>node -e</code>). It does not treat a long option and its short form as the same, because that pairing is not standardized: each program defines it, the same letter means different things across tools (<code>-f</code> is force for <code>rm</code>, a file for <code>grep</code>), and BSD utilities often reject the GNU long forms. So <code>Bash(rm -f:*)</code> does not imply <code>rm --force</code>. Write the forms your utility supports, and to block both, write both.</p>
-
-  <h2 id="what-it-costs">What it costs</h2>
-  <p>permcheck runs before every tool call, on the critical path of everything the agent does. The design target: keep the decision cheap enough to disappear inside the cost of starting the process. It does, so the number to plan around is the process itself.</p>
-
-  <div class="callout">
-    <p class="label">The number that matters</p>
-    <p>A full cold invocation, process spawn plus rule load plus decide plus exit, measures <strong>~2.9 ms</strong>, almost all of it OS process-creation overhead. The hook spawns once per tool call, so a session of a few hundred calls adds a few hundred times 2.9 ms, under a second in total, and none of it is the engine.</p>
-  </div>
-
-  <p>The engine's own slice is invisible against that spawn. It decides in single-digit microseconds, and the cost tracks the <em>work</em> a call demands, not its verdict: a bare URL check is a rounding error, while a piped command that splits into units and cross-checks each file operand is the expensive end, and even that stays under 7 µs.</p>
-
-  <div class="tbl-scroll">
-    <table>
-      <thead><tr><th>Call</th><th>What permcheck does</th><th>Time</th></tr></thead>
-      <tbody>
-        <tr><td><code>WebSearch(rust async)</code></td><td>extract query, test two bare denies (cheap end)</td><td class="num">~0.22 µs</td></tr>
-        <tr><td><code>aws ec2 describe-instances</code></td><td>score every Bash rule, pick the winner (typical)</td><td class="num">~1.5 µs</td></tr>
-        <tr><td><code>cat file.txt | grep something</code></td><td>split into two units, cross-check each (expensive end)</td><td class="num">~6.2 µs</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <p>The build is tuned for that cold-start reality, where startup dominates and there is no steady state to amortize. permcheck pulls in no <code>regex</code> and no <code>clap</code>; every matcher and the argument parser are hand-written, because compiling a regex set would cost milliseconds per launch with nothing to earn it back. Loading and compiling the whole reference set (50 allow, 18 ask, 176 deny rules) takes tens of microseconds, less than one regex compilation. The release binary is built with <code>opt-level = "z"</code>, LTO, and <code>strip</code>, because a smaller image pages in faster.</p>
-  <p>Numbers come from <code>cargo bench</code> (Criterion, which reports the median of 100 samples per case) against the reference rule set on a MacBook Pro (M3 Max), macOS 26.5, Rust 1.97, release profile. They are indicative; re-run <code>cargo bench</code> for your hardware.</p>
 
   <h2 id="what-it-doesn-t-stop">What it doesn't stop</h2>
   <p>The Bash analyzer reads the command as text. It is a scanner, not a shell, so it never performs the expansion, aliasing, and substitution a real shell does. When it meets a construct it does not resolve, it denies. That bias keeps it safe, and safe is not the same as complete. Static analysis has blind spots, and these are permcheck's:</p>
@@ -725,7 +713,7 @@ deny:  Bash(python3 -c:*)       <span class="tok-c"># holds: the allow is not a 
   <p>Each gap lands on the safe side: an unresolved construct denies rather than slips through. Safe-by-default is a posture, not a proof, which is why permcheck needs a layer beneath it to catch what a text scanner cannot see.</p>
 
   <h2 id="where-it-fits">Where it fits</h2>
-  <p>permcheck is defense-in-depth, not a sandbox. Your OS sandbox and enterprise <code>managed-settings.json</code> stay the security boundary. permcheck layers on top to express the narrow exceptions the native precedence model cannot. It merges with your existing PreToolUse hooks, and a <code>deny</code> from any of them still wins.</p>
+  <p>permcheck is defense-in-depth, not a sandbox. Your OS sandbox and enterprise <code>managed-settings.json</code> stay the security boundary. permcheck layers on top to express the narrow exceptions the native precedence model cannot. It merges with your existing PreToolUse hooks, and a <code>deny</code> from any of them still wins. As a hook it is a short-lived process per tool call, a few milliseconds dominated by process spawn, negligible across a session.</p>
 
   <div class="callout">
     <p class="label">Engine, not policy</p>
@@ -774,6 +762,19 @@ deny:  Bash(python3 -c:*)       <span class="tok-c"># holds: the allow is not a 
     <li><strong>A hand-rolled deny-list hook.</strong> It makes you rebuild compound splitting, wrapper peeling, and the file-access cross-check, the parts a one-line deny gets wrong, which permcheck already ships tested.</li>
     <li><strong>A general policy engine like OPA/Rego.</strong> Built for structured request attributes, not shell strings, so you still write the shell decomposition yourself and run a heavier engine on the per-call hot path.</li>
   </ul>
+  <p>Step back and the pattern is clear. The authorization models most engineers know each resolve a conflict a different way, and none by structural narrowness:</p>
+  <div class="tbl-scroll">
+    <table>
+      <thead><tr><th>System</th><th>Conflict resolution</th></tr></thead>
+      <tbody>
+        <tr><td>AWS IAM</td><td>explicit <code>deny</code> wins</td></tr>
+        <tr><td>Kubernetes RBAC</td><td>union of allows (no deny)</td></tr>
+        <tr><td>Firewall ACL</td><td>first matching rule</td></tr>
+        <tr><td>permcheck</td><td>narrower subset carve-out</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>That containment axis is the one permcheck adds.</p>
 
   <h3>How it stacks with your settings.json</h3>
   <p>Two files, two jobs. Your <code>settings.json</code> wires the hook and holds any <em>native</em> Claude Code permissions; <code>permcheck.json</code> is the policy permcheck decides against. permcheck reads only that rules file, never your <code>settings.json</code> permissions.</p>
@@ -808,9 +809,9 @@ deny: Write(//**/.claude/settings.json)</code></pre>
   <p>The plugin ships prebuilt binaries for macOS, Linux, and Windows and wires the hook without touching your <code>settings.json</code>:</p>
   <pre><code>/plugin marketplace add saleem-mirza/marketplace
 /plugin install permcheck@zethian</code></pre>
-  <p>It decides against a bundled starter policy out of the box: a deny list that blocks <code>sudo</code>, <code>rm -rf</code>, secret reads, and force-push, with <code>defaultMode: ask</code> so unlisted calls prompt instead of blocking. You grow the <code>allow</code> and <code>ask</code> lists from there.</p>
+  <p>It decides against the bundled reference set out of the box: a deny list that blocks <code>sudo</code>, <code>rm -rf</code>, secret reads, force-push, and more, with <code>defaultMode: ask</code> so unlisted calls prompt instead of blocking. You grow the <code>allow</code> and <code>ask</code> lists from there. (The standalone <code>--init-rules</code> path below seeds a smaller, minimal starter instead.)</p>
 
-  <p>Prefer to wire it yourself? Install the standalone CLI with Homebrew, then let it seed a starter policy and add the hook to your <code>settings.json</code>:</p>
+  <p>Prefer to wire it yourself? Install the standalone CLI with Homebrew, then let it seed the minimal starter and add the hook to your <code>settings.json</code>:</p>
   <pre><code>brew install saleem-mirza/tap/permcheck
 permcheck --install     <span class="tok-c"># seeds ~/.claude/permcheck.json, wires ~/.claude/settings.json</span></code></pre>
   <p><code>--install</code> is idempotent: re-running rewrites the same hook entry instead of duplicating it, and it never overwrites an existing rules file. To wire the hook by hand instead, add this under <code>hooks.PreToolUse</code> in <code>settings.json</code>, using absolute paths for both the binary and the rules file:</p>
@@ -825,11 +826,53 @@ permcheck --install     <span class="tok-c"># seeds ~/.claude/permcheck.json, wi
     ]
   }
 }</code></pre>
-  <p>Seed the rules file with <code>permcheck --init-rules ~/.claude/permcheck.json</code>, which writes the canonical deny list with <code>defaultMode: ask</code>. Before you ship a rule, test it with the CLI checker, which exit-codes the verdict (<code>0</code> allow, <code>1</code> ask, <code>2</code> deny):</p>
+  <p>Seed the rules file with <code>permcheck --init-rules ~/.claude/permcheck.json</code>, which writes a minimal safe deny list with <code>defaultMode: ask</code>. Before you ship a rule, test it with the CLI checker, which exit-codes the verdict (<code>0</code> allow, <code>1</code> ask, <code>2</code> deny):</p>
   <pre><code>permcheck Bash <span class="tok-k">"cat notes.txt"</span>          --rules permcheck.json   <span class="tok-c"># exit 0  allow</span>
 permcheck Bash <span class="tok-k">"gcloud compute ..."</span>     --rules permcheck.json   <span class="tok-c"># exit 1  ask</span>
 permcheck Read <span class="tok-k">"/home/user/.ssh/id_rsa"</span> --rules permcheck.json   <span class="tok-c"># exit 2  deny</span></code></pre>
-  <p>The native model asks you to trust the agent all the way or not at all. permcheck adds one axis, specificity, and that axis makes many least-privilege policies expressible that the fixed-precedence model cannot.</p>
+  <p>The native model asks you to trust the agent all the way or not at all. permcheck adds the one axis the fixed-precedence model lacks: a narrower rule carves out a broader one. That containment test, not a larger score, makes many least-privilege policies expressible; specificity only orders the rules that pull the same way.</p>
+  <p>permcheck is not another policy language. It is a different conflict-resolution strategy, one that expresses the least-privilege policies a deny-first model cannot represent cleanly, while everything outside that one carve-out stays fail-closed.</p>
+
+  <h2 id="appendix-sample-policy">Appendix: a policy that reproduces this post</h2>
+  <p>Every verdict shown above comes from one small rules file. Save it as <code>permcheck.json</code>, then check any example with <code>permcheck &lt;Tool&gt; "&lt;payload&gt;" --rules permcheck.json</code> (exit <code>0</code> allow, <code>1</code> ask, <code>2</code> deny). It is a teaching policy, not a starter to ship: it carries permissive allows (<code>Read</code>, <code>Bash(python3 *)</code>) only so the carve-out and cross-check examples have something to override. Download the exact file: <a href="blog-assets/sample-policy.json">sample-policy.json</a>.</p>
+  <pre><code>{
+  "permissions": {
+    "defaultMode": "ask",
+    "allow": [
+      "Read",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(grep:*)",
+      "Bash(python3 *)",
+      "Bash(aws * describe-*)",
+      "Read(/etc/passwd)",
+      "WebFetch(domain:docs.internal.co)"
+    ],
+    "ask": [
+      "Bash(git push:*)"
+    ],
+    "deny": [
+      "Bash(sudo:*)",
+      "Bash(rm -f:*)",
+      "Bash(aws:*)",
+      "Bash(python3 -c:*)",
+      "Bash(git push --force:*)",
+      "Read(/etc/**)",
+      "Read(//**/.env*)",
+      "Read(//**/id_rsa*)",
+      "WebFetch",
+      "Edit(//**/.claude/permcheck.json)",
+      "Write(//**/.claude/permcheck.json)",
+      "Edit(//**/.claude/settings.json)",
+      "Write(//**/.claude/settings.json)"
+    ]
+  }
+}</code></pre>
+  <p>A few checks and what each shows:</p>
+  <pre><code>permcheck Bash <span class="tok-k">"aws ec2 describe-instances"</span>  --rules permcheck.json   <span class="tok-c"># 0 allow  narrow allow carves the aws deny</span>
+permcheck Bash <span class="tok-k">"aws ec2 terminate-instances"</span> --rules permcheck.json   <span class="tok-c"># 2 deny   only the broad aws deny matches</span>
+permcheck Bash <span class="tok-k">"cat .env"</span>                     --rules permcheck.json   <span class="tok-c"># 2 deny   cross-check, though Bash(cat:*) is allowed</span>
+permcheck Bash <span class="tok-k">"python3 -c 'import os'"</span>       --rules permcheck.json   <span class="tok-c"># 2 deny   subform deny holds under the python3 allow</span></code></pre>
 
 </main>
 </body>

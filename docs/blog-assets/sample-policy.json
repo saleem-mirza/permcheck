@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "defaultMode": "ask",
+    "allow": [
+      "Read",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(grep:*)",
+      "Bash(python3 *)",
+      "Bash(aws * describe-*)",
+      "Read(/etc/passwd)",
+      "WebFetch(domain:docs.internal.co)"
+    ],
+    "ask": [
+      "Bash(git push:*)"
+    ],
+    "deny": [
+      "Bash(sudo:*)",
+      "Bash(rm -f:*)",
+      "Bash(aws:*)",
+      "Bash(python3 -c:*)",
+      "Bash(git push --force:*)",
+      "Read(/etc/**)",
+      "Read(//**/.env*)",
+      "Read(//**/id_rsa*)",
+      "WebFetch",
+      "Edit(//**/.claude/permcheck.json)",
+      "Write(//**/.claude/permcheck.json)",
+      "Edit(//**/.claude/settings.json)",
+      "Write(//**/.claude/settings.json)"
+    ]
+  }
+}
