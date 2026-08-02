@@ -109,3 +109,28 @@ fn bare_allow_does_not_override_narrow_deny() {
         Tier::Allow
     );
 }
+
+#[test]
+fn every_matching_deny_must_be_carved() {
+    // `/etc/*` refines `/etc/**`, but it does not refine `/**/passwd`. The engine
+    // may resolve denies incrementally, but it must continue past a carved deny
+    // and reject as soon as it reaches the uncarved one.
+    let rs = RuleSet::load_str(
+        r#"{"allow":["Read(/etc/*)"],"deny":["Read(/etc/**)","Read(/**/passwd)"]}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        decide_payload(&rs, "Read", "/etc/passwd", None).tier,
+        Tier::Deny
+    );
+
+    // A literal exception is a strict subset of both denies, so it survives.
+    let rs = RuleSet::load_str(
+        r#"{"allow":["Read(/etc/passwd)"],"deny":["Read(/etc/**)","Read(/**/passwd)"]}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        decide_payload(&rs, "Read", "/etc/passwd", None).tier,
+        Tier::Allow
+    );
+}

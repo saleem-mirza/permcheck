@@ -16,7 +16,7 @@ Claude Code's native model resolves rule conflicts with a fixed precedence: a `d
 
 - **Carve-out precedence**: a narrower rule (a strict subset) overrides a broader one across tiers, not the native "deny always wins" model. See [How it decides](#how-it-decides-a-narrower-rule-carves-out-a-broader-one).
 - **Bash compound safety**: splits `&&`/`|`/`$(…)` chains, cross-checks file reads/writes against `Read`/`Write`/`Edit` deny rules, and re-decides through wrappers like `env`/`sudo`, so `cat .env` or `env aws …` cannot launder past a broad allow.
-- **Fail-closed**: any error (bad input, unreadable rules, unknown tool, panic) resolves to `deny`. The hook never crashes a tool call open.
+- **Fail-closed**: any error (bad input, unreadable rules, missing tool name, panic) resolves to `deny`. Unrecognized tool names are still evaluated as Generic against matching rules and then the configured fall-back. The hook never crashes a tool call open.
 - **Zero-config install**: the [plugin](#installation) ships prebuilt binaries for macOS/Linux/Windows and wires the hook without touching your `settings.json`.
 - **Fast & dependency-light**: a short-lived Rust process per call, only `serde`/`serde_json`, no `regex` or `clap`, optimized for cold start.
 
@@ -212,7 +212,7 @@ It reads the Claude Code PreToolUse event as JSON on **stdin** and writes the de
 }
 ```
 
-**Fail-closed:** any error yields `deny` (still exit `0`): unparseable stdin, an unreadable or invalid rules file, an unknown tool, or an internal panic. The hook never crashes a tool call open.
+**Fail-closed:** any error yields `deny` (still exit `0`): unparseable stdin, an unreadable or invalid rules file, a missing/empty `tool_name`, or an internal panic. An unrecognized non-empty tool name is not an error: it routes to the Generic family and takes its matching result or the `defaultMode` fall-back. The hook never crashes a tool call open.
 
 ### As a CLI (for testing and manual checks)
 
@@ -292,7 +292,7 @@ A single `Bash` command often chains several commands, so it gets extra scrutiny
 - **File-access cross-check**: readers (`cat`, `grep`, …), writers (`tee`, `truncate`), `dd` (`if=`/`of=`), the `curl`/`wget` file-read forms (`curl --data-binary @/repo/.env`, `wget --post-file`), and redirection targets are checked against `Read`/`Write`/`Edit` **deny** rules. This catches `cat .env` even though `Bash(cat:*)` is allowed. It only ever *raises* a verdict to `deny`. Tools outside this fixed set (`scp`, `tar`, `git`) are not followed.
 - **Wrapper re-decision**: a leading wrapper (`env`, `sudo`, `timeout`, `nice`, …) runs the command after it, so the wrapped command's rules apply too. This stops `env aws …` from laundering a denied command through a broad `Bash(env:*)` allow.
 
-The Bash analyzer is a best-effort scanner, not a full shell parser. When it cannot understand a construct, it errs toward `deny`. Documented non-goals (`eval`, aliases, `xargs`-assembled commands, adversarial glob patterns, …) are listed in SPEC §9.
+The Bash analyzer is a best-effort scanner, not a full shell parser. Unsupported constructs receive no special interpretation beyond the forms the analyzer can extract, so they remain governed by literal rule matching and `defaultMode`; some are documented coverage gaps. Non-goals (`eval`, aliases, `xargs`-assembled commands, adversarial glob patterns, …) are listed in SPEC §9.
 
 ## Flag spellings are your responsibility
 

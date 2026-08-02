@@ -32,9 +32,15 @@ pub fn load_rules_str(text: &str) -> Result<RuleSet, RuleLoadError> {
 /// (§5) and routed by family: Bash runs the compound pipeline (§8), Path and
 /// Generic run single-pass winner selection (§6.3).
 pub fn evaluate(rules: &RuleSet, tool: &str, tool_input: &Value, cwd: Option<&str>) -> Decision {
-    let payload = types::extract_payload(tool, tool_input);
+    let payload = types::extract_payload_ref(tool, tool_input);
+    evaluate_payload(rules, tool, payload, cwd)
+}
+
+/// Decide a call whose family-specific payload has already been extracted. This
+/// avoids constructing a temporary `tool_input` object in manual CLI mode.
+pub fn evaluate_payload(rules: &RuleSet, tool: &str, payload: &str, cwd: Option<&str>) -> Decision {
     match Family::from_tool(tool) {
-        Family::Bash => bash::decide_bash(&payload, rules, cwd),
-        Family::Path | Family::Generic => engine::decide_payload(rules, tool, &payload, cwd),
+        Family::Bash => bash::decide_bash(payload, rules, cwd),
+        Family::Path | Family::Generic => engine::decide_payload(rules, tool, payload, cwd),
     }
 }

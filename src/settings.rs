@@ -77,7 +77,7 @@ pub fn install(settings: &Value, command: &str) -> Value {
         else {
             continue;
         };
-        inner.retain(|h| {
+        inner.retain_mut(|h| {
             let is_ours = h
                 .get("command")
                 .and_then(Value::as_str)
@@ -89,21 +89,9 @@ pub fn install(settings: &Value, command: &str) -> Value {
                 return false; // drop duplicate permcheck entries
             }
             seen = true;
+            h["command"] = json!(command);
             true
         });
-        if seen {
-            // Rewrite the surviving permcheck entry's command.
-            for h in inner.iter_mut() {
-                let matches = h
-                    .get("command")
-                    .and_then(Value::as_str)
-                    .is_some_and(is_permcheck_hook);
-                if matches {
-                    h["command"] = json!(command);
-                    break;
-                }
-            }
-        }
     }
 
     if !seen {

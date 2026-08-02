@@ -14,10 +14,10 @@ binary. Decision pipeline: `rules` → `matcher` → `engine`.
 | `src/rules.rs` | grammar, loading, compiled `RuleSet`, `starter_rules()` |
 | `src/matcher.rs` | per-family matchers + specificity scoring |
 | `src/engine.rs` | winner selection + candidate forms |
-| `src/bash.rs` | compound-command splitter, tokenizer, file-access cross-check |
+| `src/bash/` | Bash decision pipeline: orchestration, compound splitting, tokenizer, form normalization, file-access cross-check |
 | `src/types.rs` | `Tier`, `Decision`, `Family`, payload extraction |
 | `src/settings.rs` | `--install` / `--uninstall` JSON transforms |
-| `src/lib.rs` | crate root: `evaluate()`, loaders, re-exports |
+| `src/lib.rs` | crate root: `evaluate()` for hook JSON, `evaluate_payload()` for an already-extracted payload, loaders, re-exports |
 | `src/main.rs` | arg parsing, hook / CLI / install / init-rules dispatch |
 
 Tests live in `tests/` (separate crates, never linked into the binary).
@@ -62,7 +62,7 @@ publishes them to a GitHub Release:
 Cut a release by pushing a tag:
 
 ```sh
-git tag v0.1.6 && git push origin v0.1.6
+git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
 Each release attaches the five raw binaries **and** a ready-to-use

@@ -112,6 +112,12 @@ impl Family {
 /// takes no string payload (e.g. `TodoWrite`), in which case only a bare rule
 /// can match it.
 pub fn extract_payload(tool: &str, input: &Value) -> String {
+    extract_payload_ref(tool, input).to_owned()
+}
+
+/// Borrow the primary payload directly from `tool_input` for the evaluation hot
+/// path. [`extract_payload`] remains the owned public compatibility wrapper.
+pub(crate) fn extract_payload_ref<'a>(tool: &str, input: &'a Value) -> &'a str {
     let field = |key: &str| input.get(key).and_then(Value::as_str);
 
     let extracted: Option<&str> = match tool {
@@ -132,5 +138,5 @@ pub fn extract_payload(tool: &str, input: &Value) -> String {
         }),
     };
 
-    extracted.unwrap_or("").to_string()
+    extracted.unwrap_or("")
 }

@@ -80,7 +80,9 @@ pub struct RuleSet {
 }
 
 impl RuleSet {
-    /// Indices of the rules whose tool name equals `tool`, in file order.
+    /// Indices of the rules whose tool name equals `tool`, ordered by tier
+    /// (`Allow`, `Ask`, `Deny`) and then file order within the tier. Winner
+    /// selection relies on every possible carve-out preceding the denies.
     pub fn rules_for(&self, tool: &str) -> &[usize] {
         self.index.get(tool).map(Vec::as_slice).unwrap_or(&[])
     }
@@ -131,6 +133,7 @@ impl RuleSet {
         };
 
         let mut rules = Vec::new();
+        let mut index: HashMap<String, Vec<usize>> = HashMap::new();
         // Fixed tier order gives a deterministic file order for tie-breaking,
         // independent of JSON object key ordering.
         for (key, tier) in [
@@ -142,10 +145,12 @@ impl RuleSet {
                 continue; // missing array is treated as empty
             };
             let arr = entry.as_array().ok_or(LoadError::NotObject)?;
+            rules.reserve(arr.len());
             for item in arr {
                 let s = item.as_str().ok_or(LoadError::RuleNotString)?;
                 let (tool, m, specificity) = parse_rule(s)?;
                 let order_index = rules.len();
+                index.entry(tool.clone()).or_default().push(order_index);
                 rules.push(CompiledRule {
                     tool,
                     matcher: m,
@@ -163,11 +168,6 @@ impl RuleSet {
             Some("ask") => Tier::Ask,
             _ => Tier::Deny,
         };
-
-        let mut index: HashMap<String, Vec<usize>> = HashMap::new();
-        for (idx, rule) in rules.iter().enumerate() {
-            index.entry(rule.tool.clone()).or_default().push(idx);
-        }
 
         Ok(RuleSet {
             rules,

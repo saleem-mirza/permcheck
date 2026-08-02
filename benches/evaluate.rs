@@ -71,6 +71,7 @@ fn bench_bash(c: &mut Criterion) {
             ("ask_unknown", "Bash", cmd("some-tool --flag")),
             // File-access cross-check and wrapper re-decision (§8).
             ("crosscheck_cat_env", "Bash", cmd("cat .env")),
+            ("crosscheck_cat_glob", "Bash", cmd("cat .en?")),
             (
                 "crosscheck_redirect",
                 "Bash",
@@ -121,6 +122,11 @@ fn bench_path(c: &mut Criterion) {
                 json!({ "file_path": "/home/user/.env" }),
             ),
             ("read_relative_env", "Read", json!({ "file_path": ".env" })), // cwd-absolutized
+            (
+                "read_traversal_env",
+                "Read",
+                json!({ "file_path": "/tmp/../repo/.env" }),
+            ),
             (
                 "write_deny_bashrc",
                 "Write",

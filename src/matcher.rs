@@ -394,17 +394,32 @@ fn compile_operand_glob(s: &str) -> Vec<PToken> {
 /// monotone: it only ever adds a hit, and only for glob operands whose every
 /// segment begins with a literal (see [`has_segment_leading_wildcard`]), so
 /// ordinary reads and non-glob operands keep their exact behavior.
-pub(crate) fn path_glob_hits(m: &Matcher, candidate: &str) -> bool {
-    if m.matches(candidate) {
-        return true;
+/// A path candidate prepared once for matching against several deny rules. A
+/// shell-glob operand is tokenized at most once instead of once per rule.
+pub(crate) struct PathProbe<'a> {
+    raw: &'a str,
+    operand_glob: Option<Vec<PToken>>,
+}
+
+impl<'a> PathProbe<'a> {
+    pub(crate) fn needs_preparation(raw: &str) -> bool {
+        has_glob_meta(raw) && !has_segment_leading_wildcard(raw)
     }
-    if !has_glob_meta(candidate) || has_segment_leading_wildcard(candidate) {
-        return false;
+
+    pub(crate) fn new(raw: &'a str) -> Self {
+        let operand_glob = Self::needs_preparation(raw).then(|| compile_operand_glob(raw));
+        Self { raw, operand_glob }
     }
-    match m {
-        Matcher::Path(pm) => globs_can_intersect(&pm.0, &compile_operand_glob(candidate)),
-        Matcher::Bare => true,
-        _ => false,
+
+    pub(crate) fn hits(&self, matcher: &Matcher) -> bool {
+        if matcher.matches(self.raw) {
+            return true;
+        }
+        match (matcher, self.operand_glob.as_deref()) {
+            (Matcher::Path(path), Some(operand)) => globs_can_intersect(&path.0, operand),
+            (Matcher::Bare, Some(_)) => true,
+            _ => false,
+        }
     }
 }
 
@@ -639,23 +654,36 @@ fn incl(a: &[PToken], i: usize, dstate: u128, ctx: &mut InclCtx) -> bool {
             incl(a, i + 1, ns, ctx)
         }
         // A single non-`/` char: advance past `?`, requiring every representative.
-        PToken::Ques => all_reps(a, i + 1, dstate, ctx.reps_nonsep.to_vec(), ctx),
+        PToken::Ques => all_reps(a, i + 1, dstate, RepSet::NonSeparator, ctx),
         // Star ends now (advance), or consumes one non-`/` char and stays at `i`.
         PToken::Star => {
-            incl(a, i + 1, dstate, ctx) && all_reps(a, i, dstate, ctx.reps_nonsep.to_vec(), ctx)
+            incl(a, i + 1, dstate, ctx) && all_reps(a, i, dstate, RepSet::NonSeparator, ctx)
         }
         // `**` ends now, or consumes any char (separators included) and stays.
-        PToken::DStar => {
-            incl(a, i + 1, dstate, ctx) && all_reps(a, i, dstate, ctx.reps_all.to_vec(), ctx)
-        }
+        PToken::DStar => incl(a, i + 1, dstate, ctx) && all_reps(a, i, dstate, RepSet::All, ctx),
     }
 }
 
 /// Require containment for every representative character, stepping `d` on each
 /// and continuing `a` from `next_i` (the caller passes `i` to stay on a spanning
 /// wildcard, or `i + 1` to advance past a single-character one).
-fn all_reps(a: &[PToken], next_i: usize, dstate: u128, reps: Vec<u8>, ctx: &mut InclCtx) -> bool {
-    reps.iter().all(|&ch| {
+#[derive(Clone, Copy)]
+enum RepSet {
+    NonSeparator,
+    All,
+}
+
+fn all_reps(a: &[PToken], next_i: usize, dstate: u128, reps: RepSet, ctx: &mut InclCtx) -> bool {
+    let len = match reps {
+        RepSet::NonSeparator => ctx.reps_nonsep.len(),
+        RepSet::All => ctx.reps_all.len(),
+    };
+    (0..len).all(|index| {
+        // Copy the byte before recursively borrowing `ctx` mutably.
+        let ch = match reps {
+            RepSet::NonSeparator => ctx.reps_nonsep[index],
+            RepSet::All => ctx.reps_all[index],
+        };
         let ns = step_d(ctx.d, dstate, ch);
         incl(a, next_i, ns, ctx)
     })

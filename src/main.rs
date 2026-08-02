@@ -4,12 +4,9 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use permcheck::types::{Decision, Tier};
-use permcheck::{evaluate, load_rules, settings};
+use permcheck::{evaluate, evaluate_payload, load_rules, settings};
 
 fn main() {
-    // Silence backtraces in hook mode
-    panic::set_hook(Box::new(|_| {}));
-
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if args.iter().any(|a| a == "-V" || a == "--version") {
@@ -43,6 +40,8 @@ fn main() {
     } else if args.iter().any(|a| a == "--hook") {
         // --json is CLI-only; in hook mode it is silently ignored
         // (hook mode always emits JSON and always exits 0).
+        // Silence panic output; `run_hook` converts the panic itself to deny.
+        panic::set_hook(Box::new(|_| {}));
         run_hook(&args);
     } else {
         run_cli(&args);
@@ -497,10 +496,7 @@ fn run_cli(args: &[String]) {
     let cwd = std::env::current_dir().ok();
     let cwd_str = cwd.as_deref().and_then(|p| p.to_str());
 
-    // Build a minimal tool_input for the payload
-    let tool_input = build_tool_input(tool, payload);
-    // `evaluate` already builds the canonical §2.1 reason.
-    let decision = evaluate(&rule_set, tool, &tool_input, cwd_str);
+    let decision = evaluate_payload(&rule_set, tool, payload, cwd_str);
 
     if json_mode {
         println!("{}", decision.to_hook_json_pretty());
@@ -614,26 +610,5 @@ fn flag_value(args: &[String], flag: &str) -> Option<PathBuf> {
 fn print_lint_warnings(rs: &permcheck::RuleSet) {
     for w in rs.lint_warnings() {
         eprintln!("warning: {w}");
-    }
-}
-
-fn build_tool_input(tool: &str, payload: &str) -> serde_json::Value {
-    use serde_json::json;
-    match tool {
-        "Bash" => json!({"command": payload}),
-        "Read" | "Write" | "Edit" => json!({"file_path": payload}),
-        "NotebookEdit" => json!({"notebook_path": payload}),
-        "Glob" | "Grep" => json!({"path": payload}),
-        "WebFetch" => json!({"url": payload}),
-        "WebSearch" => json!({"query": payload}),
-        "SlashCommand" => json!({"command": payload}),
-        _ => {
-            // Generic: put payload as first field
-            if payload.is_empty() {
-                json!({})
-            } else {
-                json!({"input": payload})
-            }
-        }
     }
 }

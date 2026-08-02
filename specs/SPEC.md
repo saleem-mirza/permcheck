@@ -78,9 +78,11 @@ Invoked as `permcheck --hook --rules <path>`. Wired into Claude Code
   input (command, path, URL, query), or the tool name when the tool takes no
   payload. Error decisions (below) use a descriptive reason instead.
 
-- **Fail-closed**: any error (unparseable stdin, unreadable/invalid rules file,
-  unknown tool, or an internal panic) yields `deny` (still exit 0). The hook
-  never crashes the tool call open.
+- **Fail-closed**: any error (unparseable stdin, unreadable/invalid rules file, a
+  missing or empty `tool_name`, or an internal panic) yields `deny` (still exit
+  0). An unrecognized non-empty tool name is not an error: it routes to Generic
+  (§5) and uses its matching result or the `defaultMode` fall-back (§6.4). The
+  hook never crashes the tool call open.
 
 ### 2.2 CLI: direct check
 
@@ -282,8 +284,8 @@ by `defaultMode`: `"ask"` makes an unlisted call **ask**, and otherwise (`"deny"
 missing, or any other value) it is **deny** (fail-closed default). This fall-back
 governs only the *no rule matched* case. It does **not** loosen the Bash
 file-access cross-check (§8), which still raises to `deny` on a hit, nor the
-error posture (§9.1): bad rules, unparseable input, an unknown tool, or a panic
-are always `deny`, independent of `defaultMode`.
+error posture (§9.1): bad rules, unparseable input, a missing/empty tool name, or
+a panic are always `deny`, independent of `defaultMode`.
 
 ### 6.5 Matching semantics per family
 
@@ -437,8 +439,9 @@ decomposes it and takes the **most restrictive** verdict.
 - Every fallible load step returns a result, and invalid rules fail at **load →
   deny**. No evaluation-path code panics on runtime input.
 - Hook mode wraps evaluation so that any unexpected panic becomes `deny`.
-- Unreadable/invalid rules file, unparseable stdin, or an unknown/unmapped tool
-  → `deny` (hook) or exit `3` (CLI, config errors only).
+- Unreadable/invalid rules file, unparseable stdin, or a missing/empty tool name
+  → `deny` (hook) or exit `3` (CLI, config errors only). An unrecognized
+  non-empty tool name routes to Generic and is not an error (§5).
 
 ### 9.2 Non-goals (documented limitations)
 
@@ -477,7 +480,9 @@ out of scope and left to the OS sandbox and enterprise denies:
   bounded and realistic rules use at most a few wildcards, so matching stays in
   microseconds.
 
-When the analyzer cannot understand a construct, it errs toward `deny`.
+Unsupported constructs receive no special interpretation beyond whatever units
+and forms the analyzer can extract. They remain governed by literal rule
+matching and `defaultMode`; the gaps above may therefore under- or over-deny.
 
 ## 10. Worked examples
 
