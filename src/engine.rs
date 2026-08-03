@@ -15,11 +15,10 @@ use std::borrow::Cow;
 /// Decide the tier for `tool` given the payload's candidate forms (§6.3).
 ///
 /// A matching deny holds unless some matching allow/ask rule is a **carve-out** of
-/// it, i.e. its match-set is a subset of that deny ([`matcher_subset`]). If any
-/// matching deny is left un-carved, the decision is `deny`. Otherwise the winner
-/// is chosen among the matching allow/ask rules, maximizing `(specificity, tier)`
-/// lexicographically with a full tie broken by the lowest `order_index` (first in
-/// file order).
+/// it, i.e. its match-set is a strict subset of that deny
+/// ([`crate::matcher::is_strict_carve_out`]). If any matching deny is left
+/// un-carved, the decision is `deny`. Otherwise the winner is chosen among the
+/// matching allow/ask rules by [`selection_key`].
 ///
 /// Returns `None` when nothing matches (caller applies the `defaultMode`
 /// fall-back, §6.4).
@@ -31,6 +30,8 @@ pub(crate) fn decide_tier<S: AsRef<str>>(
     // Loaded rule indices are tier-ordered Allow -> Ask -> Deny. Record only the
     // matching non-denies; when a deny matches, every possible carve-out has
     // already been seen, so an uncarved deny can terminate immediately.
+    // The inline array plus a lazy spill keeps the common case off the heap:
+    // `Vec::new` allocates nothing until the first push.
     const CAP: usize = 8;
     let mut buf: [Option<&CompiledRule>; CAP] = [None; CAP];
     let mut n = 0usize;
@@ -56,10 +57,7 @@ pub(crate) fn decide_tier<S: AsRef<str>>(
                 .flatten()
                 .copied()
                 .chain(spill.iter().copied())
-                .any(|carve| {
-                    crate::matcher::matcher_subset(&carve.matcher, &rule.matcher)
-                        && !crate::matcher::matcher_subset(&rule.matcher, &carve.matcher)
-                });
+                .any(|carve| crate::matcher::is_strict_carve_out(&carve.matcher, &rule.matcher));
             if !carved {
                 return Some(Tier::Deny);
             }
@@ -73,20 +71,22 @@ pub(crate) fn decide_tier<S: AsRef<str>>(
         }
         best_carve = Some(match best_carve {
             None => rule,
-            Some(current) => {
-                let current_key = (current.specificity, current.tier);
-                let new_key = (rule.specificity, rule.tier);
-                if new_key > current_key
-                    || (new_key == current_key && rule.order_index < current.order_index)
-                {
-                    rule
-                } else {
-                    current
-                }
-            }
+            Some(current) if selection_key(rule) > selection_key(current) => rule,
+            Some(current) => current,
         });
     }
     best_carve.map(|rule| rule.tier)
+}
+
+/// Winner-selection ordering (§6.3): maximize specificity, then tier (`ask` over
+/// `allow`), then earliest in file order — `Reverse` puts that last field in the
+/// same maximize direction.
+fn selection_key(rule: &CompiledRule) -> (u32, Tier, std::cmp::Reverse<usize>) {
+    (
+        rule.specificity,
+        rule.tier,
+        std::cmp::Reverse(rule.order_index),
+    )
 }
 
 /// The complete decision for a Path or Generic tool (§6.3, §7).
@@ -224,39 +224,21 @@ fn url_host_ref(s: &str) -> Option<&str> {
 
 /// True if any **deny**-tier rule for one of `tools` matches `path` (§8). Used by
 /// the Bash file-access cross-check, which only ever raises to `deny`.
+///
+/// Candidates are prepared once into [`PathProbe`]s and reused across rules; a
+/// candidate with no glob metacharacter reduces to a plain matcher test.
 pub(crate) fn path_hits_deny(rs: &RuleSet, tools: &[&str], path: &str, cwd: Option<&str>) -> bool {
     let candidates = path_candidates(path, cwd);
-    if !candidates
-        .iter()
-        .any(|candidate| crate::matcher::PathProbe::needs_preparation(candidate.as_ref()))
-    {
-        for &tool in tools {
-            for &idx in rs.rules_for(tool) {
-                let rule = &rs.rules[idx];
-                if rule.tier == Tier::Deny
-                    && candidates
-                        .iter()
-                        .any(|candidate| rule.matcher.matches(candidate.as_ref()))
-                {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
     let probes: Vec<_> = candidates
         .iter()
         .map(|candidate| crate::matcher::PathProbe::new(candidate.as_ref()))
         .collect();
-    for &tool in tools {
-        for &idx in rs.rules_for(tool) {
+    tools.iter().any(|&tool| {
+        rs.rules_for(tool).iter().any(|&idx| {
             let rule = &rs.rules[idx];
-            if rule.tier == Tier::Deny && probes.iter().any(|probe| probe.hits(&rule.matcher)) {
-                return true;
-            }
-        }
-    }
-    false
+            rule.tier == Tier::Deny && probes.iter().any(|probe| probe.hits(&rule.matcher))
+        })
+    })
 }
 
 fn push_unique<'a>(v: &mut Vec<Cow<'a, str>>, s: Cow<'a, str>) {

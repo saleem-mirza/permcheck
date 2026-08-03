@@ -18,24 +18,18 @@ pub(crate) fn home_dir() -> &'static str {
     HOME.get_or_init(|| normalize_root(&raw_home().unwrap_or_default()))
 }
 
-/// The user's home directory exactly as the environment reports it, before any
-/// normalization.
+/// The home directory as the environment reports it, before normalization.
 ///
-/// Single source of truth: `~` expansion in Path rules ([`home_dir`]) and the
-/// binary's `--install` path resolution both read this, so they cannot disagree
-/// about where home is. A disagreement would not be cosmetic — `--install` would
-/// write the policy under one directory while a `~/…` deny *inside* that policy
-/// expanded to another, silently uncovering the file it names.
-///
-/// POSIX (Linux and macOS alike) has only `$HOME`; the Windows chain is below.
+/// Single source of truth: `~` expansion ([`home_dir`]) and the binary's
+/// `--install` path resolution both read this, so they cannot resolve to
+/// different directories. POSIX (Linux and macOS) has only `$HOME`.
 #[cfg(not(windows))]
 pub fn raw_home() -> Option<String> {
     std::env::var("HOME").ok().filter(|s| !s.is_empty())
 }
 
-/// Native Windows shells set `%USERPROFILE%`, older ones only
-/// `%HOMEDRIVE%%HOMEPATH%`, and MSYS/Git-Bash sets `$HOME`. Try them in that
-/// order so every shell that can launch the hook resolves the same directory.
+/// MSYS/Git-Bash sets `$HOME`, native shells `%USERPROFILE%`, older ones only
+/// `%HOMEDRIVE%%HOMEPATH%`.
 #[cfg(windows)]
 pub fn raw_home() -> Option<String> {
     if let Some(home) = std::env::var("HOME").ok().filter(|s| !s.is_empty()) {
@@ -488,13 +482,12 @@ fn compile_operand_glob(s: &str) -> Vec<PToken> {
     t
 }
 
-/// True if a `Read`/`Write` deny rule matches `candidate`, extended to catch a
-/// glob operand that could expand onto a denied path (§8.3). Escalation is
-/// monotone: it only ever adds a hit, and only for glob operands whose every
-/// segment begins with a literal (see [`has_segment_leading_wildcard`]), so
-/// ordinary reads and non-glob operands keep their exact behavior.
-/// A path candidate prepared once for matching against several deny rules. A
-/// shell-glob operand is tokenized at most once instead of once per rule.
+/// A path candidate prepared once for matching against several deny rules, so a
+/// shell-glob operand is tokenized once rather than per rule (§8.3).
+///
+/// [`PathProbe::hits`] is monotone: it only adds hits over a plain matcher test,
+/// and only for operands whose every segment begins with a literal (see
+/// [`has_segment_leading_wildcard`]).
 pub(crate) struct PathProbe<'a> {
     raw: &'a str,
     operand_glob: Option<Vec<PToken>>,
@@ -613,6 +606,16 @@ pub(crate) fn matcher_subset(a: &Matcher, d: &Matcher) -> bool {
         // practice; conservatively not a subset.
         _ => false,
     }
+}
+
+/// True when `a` is a strict carve-out of `d`: `L(a) ⊆ L(d)` and not the reverse
+/// (§6.3). Equal specifiers are not carve-outs, which keeps `deny > ask > allow`
+/// for the same specifier.
+///
+/// Shared by winner selection and the author-time lint, so a warning cannot
+/// disagree with the decision it describes.
+pub(crate) fn is_strict_carve_out(a: &Matcher, d: &Matcher) -> bool {
+    matcher_subset(a, d) && !matcher_subset(d, a)
 }
 
 /// Does this matcher accept every possible payload?
