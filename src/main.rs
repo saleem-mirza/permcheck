@@ -73,19 +73,14 @@ fn scope_from_args(args: &[String]) -> Scope {
     }
 }
 
-/// The user's home directory, portable across Linux/macOS (`$HOME`, also Git-Bash
-/// on Windows) and native Windows (`%USERPROFILE%`, then `%HOMEDRIVE%%HOMEPATH%`).
+/// The user's home directory.
+///
+/// Resolution is platform-specific and lives in the library
+/// ([`permcheck::matcher::raw_home`]), so the directory `--install` writes the
+/// policy into and the directory a `~/…` rule *inside* that policy expands to are
+/// resolved by one chain and cannot drift apart.
 fn home_dir() -> Option<PathBuf> {
-    if let Some(h) = std::env::var("HOME").ok().filter(|s| !s.is_empty()) {
-        return Some(PathBuf::from(h));
-    }
-    if let Some(up) = std::env::var("USERPROFILE").ok().filter(|s| !s.is_empty()) {
-        return Some(PathBuf::from(up));
-    }
-    match (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
-        (Ok(d), Ok(p)) if !d.is_empty() && !p.is_empty() => Some(PathBuf::from(format!("{d}{p}"))),
-        _ => None,
-    }
+    permcheck::matcher::raw_home().map(PathBuf::from)
 }
 
 /// The `settings.json` path for a scope. `.claude/` is joined with `PathBuf` so

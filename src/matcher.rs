@@ -15,24 +15,41 @@ pub const EXACT_MATCH_BONUS: u32 = 1000;
 /// POSIX-anchored form (see [`normalize_root`]).
 pub(crate) fn home_dir() -> &'static str {
     static HOME: OnceLock<String> = OnceLock::new();
-    HOME.get_or_init(|| normalize_root(&raw_home()))
+    HOME.get_or_init(|| normalize_root(&raw_home().unwrap_or_default()))
 }
 
-/// The raw home directory from the environment, before normalization.
+/// The user's home directory exactly as the environment reports it, before any
+/// normalization.
+///
+/// Single source of truth: `~` expansion in Path rules ([`home_dir`]) and the
+/// binary's `--install` path resolution both read this, so they cannot disagree
+/// about where home is. A disagreement would not be cosmetic — `--install` would
+/// write the policy under one directory while a `~/…` deny *inside* that policy
+/// expanded to another, silently uncovering the file it names.
+///
+/// POSIX (Linux and macOS alike) has only `$HOME`; the Windows chain is below.
 #[cfg(not(windows))]
-fn raw_home() -> String {
-    std::env::var("HOME").unwrap_or_default()
+pub fn raw_home() -> Option<String> {
+    std::env::var("HOME").ok().filter(|s| !s.is_empty())
 }
 
-/// On Windows, fall back to `%USERPROFILE%` when `$HOME` is unset (native,
-/// non-MSYS shells set only the former).
+/// Native Windows shells set `%USERPROFILE%`, older ones only
+/// `%HOMEDRIVE%%HOMEPATH%`, and MSYS/Git-Bash sets `$HOME`. Try them in that
+/// order so every shell that can launch the hook resolves the same directory.
 #[cfg(windows)]
-fn raw_home() -> String {
-    std::env::var("HOME")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| std::env::var("USERPROFILE").ok())
-        .unwrap_or_default()
+pub fn raw_home() -> Option<String> {
+    if let Some(home) = std::env::var("HOME").ok().filter(|s| !s.is_empty()) {
+        return Some(home);
+    }
+    if let Some(profile) = std::env::var("USERPROFILE").ok().filter(|s| !s.is_empty()) {
+        return Some(profile);
+    }
+    match (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
+        (Ok(drive), Ok(path)) if !drive.is_empty() && !path.is_empty() => {
+            Some(format!("{drive}{path}"))
+        }
+        _ => None,
+    }
 }
 
 /// Normalize an absolute base path (a CWD or home dir) into a POSIX-anchored form
