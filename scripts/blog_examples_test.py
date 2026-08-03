@@ -38,6 +38,11 @@ CASES: list[tuple[str, dict, str, str]] = [
     ("Bash", {"command": "aws ec2 describe-instances"}, "allow", "aws describe carves the aws:* deny"),
     ("Bash", {"command": "aws ec2 terminate-instances"}, "deny", "only the broad aws:* deny matches"),
     ("Bash", {"command": "aws s3api list-buckets"}, "deny", "only the broad aws:* deny matches"),
+    ("Bash", {"command": "aws iam delete-user --user-name describe-me"}, "deny", "the * service slot is one token, so describe-* lands on the operation"),
+    # Overlap is not containment: the longer allow reaches outside the deny.
+    ("Bash", {"command": "kubectl get secret db --namespace dev"}, "deny", "the namespace allow overlaps the secret deny without nesting in it"),
+    ("Bash", {"command": "kubectl get pods --namespace dev"}, "allow", "same allow, and no deny matches"),
+    ("Bash", {"command": "timeout 5 ls"}, "ask", "peeling only raises a verdict, so no allow rides through the wrapper"),
     # "Every tool, Bash and beyond".
     ("Read", {"file_path": "/home/user/.ssh/id_rsa"}, "deny", "secret-path deny, bare Read allow does not carve"),
     ("Bash", {"command": "git push --force origin"}, "deny", "git push --force:* beats git push:* ask"),

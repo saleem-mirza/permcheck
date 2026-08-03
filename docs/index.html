@@ -1,14 +1,204 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-W1ZPH7MEP0"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-W1ZPH7MEP0');
+</script>
 <meta charset="UTF-8">
-<meta http-equiv="refresh" content="0; url=/when-deny-doesnt-win">
-<link rel="canonical" href="https://blogs.zethian.com/when-deny-doesnt-win">
-<meta name="robots" content="noindex">
-<title>Redirecting…</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zethian: permission engineering for coding agents</title>
+<meta name="description" content="Writing on permission models, least privilege, and security boundaries for coding agents such as Claude Code.">
+<link rel="canonical" href="https://blogs.zethian.com/">
+<link rel="alternate" type="application/rss+xml" title="Zethian" href="/feed.xml">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Zethian">
+<meta property="og:title" content="Zethian: permission engineering for coding agents">
+<meta property="og:description" content="Writing on permission models, least privilege, and security boundaries for coding agents such as Claude Code.">
+<meta property="og:url" content="https://blogs.zethian.com/">
+<style>
+  :root {
+    --bg: #fbfcfe;
+    --panel: #f1f5fb;
+    --panel-line: #e2e8f2;
+    --ink: #131b2b;
+    --ink-soft: #2b3550;
+    --muted: #55627a;
+    --faint: #8a94a8;
+    --hairline: #e4e9f2;
+    --accent: #1a56db;
+    --allow: #1a7f37;
+    --ask: #9a6700;
+    --deny: #cf222e;
+    --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 19px;
+    line-height: 1.78;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 44rem;
+    margin-inline: auto;
+    padding: clamp(2.4rem, 5vw, 5rem) clamp(1.2rem, 4vw, 2.6rem) 5rem;
+  }
+
+  .eyebrow {
+    font-family: var(--sans);
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 1.1rem;
+  }
+
+  h1 {
+    font-family: var(--sans);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    font-size: clamp(1.8rem, 4.4vw, 2.4rem);
+    margin: 0 0 0.7rem;
+  }
+
+  .tagline {
+    font-size: 1.15rem;
+    line-height: 1.5;
+    color: var(--ink-soft);
+    margin: 0 0 1.6rem;
+    text-wrap: pretty;
+  }
+
+  .rule-mark {
+    display: flex;
+    width: 140px;
+    height: 4px;
+    border-radius: 3px;
+    overflow: hidden;
+    margin: 1.4rem 0 2.4rem;
+  }
+  .rule-mark i { flex: 1; }
+  .rule-mark .a { background: var(--allow); }
+  .rule-mark .b { background: var(--ask); }
+  .rule-mark .d { background: var(--deny); }
+
+  h2 {
+    font-family: var(--sans);
+    font-weight: 750;
+    font-size: 1.05rem;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 3.2rem 0 1.2rem;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid #eaf0fd; }
+  a:hover { border-bottom-color: var(--accent); }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+  article.post { margin: 0 0 2.4rem; }
+  article.post h3 {
+    font-family: var(--sans);
+    font-size: 1.3rem;
+    font-weight: 750;
+    line-height: 1.25;
+    margin: 0 0 0.45rem;
+  }
+  article.post h3 a { color: var(--ink); border-bottom: none; }
+  article.post h3 a:hover { color: var(--accent); }
+  article.post p { margin: 0 0 0.5rem; color: var(--ink-soft); font-size: 1.02rem; line-height: 1.6; }
+  .post-meta {
+    font-family: var(--sans);
+    font-size: 0.8rem;
+    color: var(--muted);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.7rem;
+    align-items: center;
+    margin-bottom: 0.6rem;
+  }
+  .post-meta .tag {
+    background: var(--panel);
+    border: 1px solid var(--panel-line);
+    color: var(--ink-soft);
+    padding: 0.1rem 0.55rem;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+  .post-meta .dot { color: var(--faint); }
+
+  footer {
+    margin-top: 3.4rem;
+    padding-top: 1.4rem;
+    border-top: 1px solid var(--hairline);
+    font-family: var(--sans);
+    font-size: 0.84rem;
+    color: var(--muted);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.1rem;
+  }
+
+  @media (max-width: 640px) { body { font-size: 18px; } }
+</style>
 </head>
 <body>
-<p>Redirecting to <a href="/when-deny-doesnt-win">When deny doesn't win</a>…</p>
-<script>location.replace("/when-deny-doesnt-win");</script>
+<main class="wrap">
+
+  <p class="eyebrow">Zethian</p>
+  <h1>Permission engineering for coding agents</h1>
+  <p class="tagline">Permission models, least privilege, and where the real security boundary sits when an agent runs commands for you.</p>
+  <div class="rule-mark" aria-hidden="true"><i class="a"></i><i class="b"></i><i class="d"></i></div>
+
+  <h2>Writing</h2>
+
+  <article class="post">
+    <h3><a href="/when-deny-doesnt-win">When deny doesn't win</a></h3>
+    <div class="post-meta">
+      <span class="tag">Security</span>
+      <span class="tag">Claude Code</span>
+      <span class="tag">Least privilege</span>
+      <span class="dot">·</span>
+      <span>30 July 2026</span>
+      <span class="dot">·</span>
+      <span>22 min read</span>
+    </div>
+    <p>Claude Code resolves permission conflicts with a fixed rule: deny always wins. That makes a read-only cloud policy impossible to express. permcheck runs as a PreToolUse hook and lets a rule override a conflicting one when it is a strict subset of it, so a narrow allow carves out a broad deny. For people who run Claude Code, and for the people who answer for what it runs.</p>
+  </article>
+
+  <!--
+    Discussion channel goes here. With a private source repo, GitHub Discussions
+    is unavailable; pick one of:
+      <p>Discuss this post on <a href="https://news.ycombinator.com/item?id=...">Hacker News</a>.</p>
+      <p>Questions: <a href="mailto:you@example.com">you@example.com</a>.</p>
+      <p>Discussions on the public <a href="https://github.com/saleem-mirza/marketplace/discussions">marketplace repo</a>.</p>
+  -->
+
+  <footer>
+    <span><a href="/feed.xml">RSS</a></span>
+    <span class="dot">·</span>
+    <span>© 2026 Saleem Mirza</span>
+  </footer>
+
+</main>
 </body>
 </html>
