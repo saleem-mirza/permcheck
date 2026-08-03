@@ -27,17 +27,21 @@ pub fn hook_command(abs_rules: &str) -> String {
 }
 
 /// Detection marker for a permcheck hook: the command invokes `permcheck` in
-/// `--hook` mode. Robust to a changed rules path and to bare-vs-absolute binary,
-/// and specific enough never to touch a user's unrelated hooks.
+/// `--hook` mode. Robust to a changed rules path and to bare-vs-absolute binary.
+///
+/// A heuristic, not proof of ownership: a user's own wrapper (say
+/// `run-permcheck.sh --hook`) also matches and would be rewritten or removed.
 pub fn is_permcheck_hook(command: &str) -> bool {
     command.contains("permcheck") && command.contains("--hook")
 }
 
 /// The `--rules` path baked into the first installed permcheck PreToolUse hook,
-/// if any. Parses the value out of the single known command shape produced by
-/// [`hook_command`] (`permcheck --hook --rules "<abs>"`): everything between the
-/// `--rules "` marker and the next `"`. Used by `--install` to detect (and
-/// refuse) a re-point that would silently abandon a hook's current policy file.
+/// if any. Used by `--install` to detect (and refuse) a re-point that would
+/// silently abandon a hook's current policy file.
+///
+/// Recognizes both the quoted form [`hook_command`] writes and the bare form a
+/// hand-wired hook is likely to use; missing the latter would leave the guard
+/// inapplicable to exactly the hooks it protects.
 pub fn installed_rules_path(settings: &Value) -> Option<String> {
     let groups = settings["hooks"]["PreToolUse"].as_array()?;
     let command = groups.iter().find_map(|g| {
@@ -46,8 +50,14 @@ pub fn installed_rules_path(settings: &Value) -> Option<String> {
             is_permcheck_hook(c).then_some(c)
         })
     })?;
-    let rest = command.split_once(r#"--rules ""#)?.1;
-    let path = rest.split_once('"')?.0;
+    let rest = command.split_once("--rules ")?.1.trim_start();
+    let path = match rest.strip_prefix('"') {
+        // Quoted: runs to the closing quote, so it may contain spaces.
+        Some(quoted) => quoted.split_once('"')?.0,
+        // Bare: ends at the next whitespace. Truncating a spaced path is the safe
+        // direction, since a mismatch makes `--install` refuse rather than re-point.
+        None => rest.split_ascii_whitespace().next()?,
+    };
     (!path.is_empty()).then(|| path.to_string())
 }
 
@@ -225,6 +235,21 @@ mod tests {
         assert_eq!(
             installed_rules_path(&out).as_deref(),
             Some("/abs/permcheck.json")
+        );
+        // A hand-wired hook writes the path bare; the guard must still see it,
+        // otherwise `--install` would silently re-point exactly the hooks the
+        // refusal exists to protect.
+        assert_eq!(
+            installed_rules_path(&json!({
+                "hooks": { "PreToolUse": [
+                    { "matcher": "*", "hooks": [
+                        { "type": "command",
+                          "command": "/opt/permcheck --hook --rules /etc/policy.json" }
+                    ] }
+                ] }
+            }))
+            .as_deref(),
+            Some("/etc/policy.json")
         );
         // No permcheck hook → None.
         assert_eq!(installed_rules_path(&json!({})), None);
