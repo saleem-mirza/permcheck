@@ -1,8 +1,6 @@
 //! Path matcher unit tests (§6.5).
 
-#[cfg(windows)]
-use permcheck::matcher::normalize_root;
-use permcheck::matcher::{Matcher, compile};
+use permcheck::matcher::{Matcher, compile, normalize_root};
 use permcheck::types::Family;
 
 fn m(spec: &str) -> Matcher {
@@ -96,20 +94,21 @@ fn tilde_expands_to_home() {
     assert!(!matcher.matches(&format!("{home}/.other")));
 }
 
-/// The home dir the way `home_dir()` resolves it, for building the expected
-/// candidate. POSIX reads `$HOME` verbatim.
-#[cfg(not(windows))]
-fn test_home() -> String {
-    std::env::var("HOME").unwrap_or_default()
+#[test]
+fn tilde_expansion_uses_the_shared_home_resolution() {
+    // `--install` and `~` expansion must resolve the same directory; if they
+    // diverged, a `Read(~/.npmrc)` deny could expand where the file is not. Assert
+    // against `raw_home` rather than any env var.
+    let Some(raw) = permcheck::matcher::raw_home() else {
+        return; // no home in this environment: nothing to pin
+    };
+    assert!(!raw.is_empty(), "raw_home must never yield an empty path");
+    let expanded = normalize_root(&raw);
+    assert!(m("~/.npmrc").matches(&format!("{expanded}/.npmrc")));
 }
 
-/// Windows mirrors `home_dir`: `$HOME` (or `%USERPROFILE%` fallback), normalized.
-#[cfg(windows)]
+/// The home dir as the engine resolves it. Calls `raw_home` rather than
+/// restating the per-platform chain, so it cannot drift.
 fn test_home() -> String {
-    let raw = std::env::var("HOME")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| std::env::var("USERPROFILE").ok())
-        .unwrap_or_default();
-    normalize_root(&raw)
+    normalize_root(&permcheck::matcher::raw_home().unwrap_or_default())
 }

@@ -98,6 +98,38 @@ fn unknown_mcp_tool_defaults_to_deny() {
 }
 
 #[test]
+fn deeply_nested_substitution_denies_instead_of_crashing() {
+    // A stack overflow aborts rather than unwinding, so `catch_unwind` cannot
+    // turn it into deny and the hook would exit non-zero with no decision.
+    // Driven through the real binary: test threads get a larger stack than `main`.
+    let f = rules_file(RULES);
+    let depth = 100_000;
+    let command = format!("{}ls{}", "$(".repeat(depth), ")".repeat(depth));
+    let event = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": command },
+        "cwd": "/repo",
+    })
+    .to_string();
+
+    hook(f.path(), &event)
+        .success()
+        .stdout(predicates::str::contains(r#""permissionDecision":"deny""#));
+}
+
+#[test]
+fn ordinary_nesting_still_decides_normally() {
+    // The guard must not disturb realistic nesting.
+    let f = rules_file(RULES);
+    hook(
+        f.path(),
+        r#"{"tool_name":"Bash","tool_input":{"command":"echo $(aws s3 ls)"},"cwd":"/repo"}"#,
+    )
+    .success()
+    .stdout(predicates::str::contains(r#""permissionDecision":"deny""#));
+}
+
+#[test]
 fn extra_event_fields_are_tolerated() {
     // session_id / transcript_path / hook_event_name and friends are ignored.
     let f = rules_file(RULES);

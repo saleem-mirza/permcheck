@@ -312,6 +312,35 @@ fn secret_file_coverage_includes_dotfile_and_bare_forms() {
 }
 
 #[test]
+fn every_policy_read_location_is_write_protected() {
+    // A writable policy path is a full bypass: one auto-approved Write swaps the
+    // policy for every later call. These are every location a decision is read
+    // from, so adding a resolution path without a deny here reopens the hole.
+    let rs = reference();
+    let paths = [
+        "/home/u/.claude/permcheck.json",
+        "/home/u/.claude/permcheck.local.json",
+        "/home/u/.claude/settings.json",
+        "/home/u/.claude/settings.local.json",
+        "/repo/.permcheck/rules.json",
+        "/repo/.permcheck/nested/rules.json",
+        "/etc/claude-code/managed-settings.json",
+    ];
+    for path in paths {
+        for tool in ["Write", "Edit"] {
+            let tier = evaluate(&rs, tool, &json!({ "file_path": path }), Some("/work")).tier;
+            assert_eq!(tier, Tier::Deny, "{tool} must be denied for {path:?}");
+        }
+    }
+    // And the shell route to the same files is closed by the cross-check.
+    assert_all_deny(&[
+        "echo '{}' > /repo/.permcheck/rules.json",
+        "tee /repo/.permcheck/rules.json",
+        "cp evil.json /home/u/.claude/permcheck.json",
+    ]);
+}
+
+#[test]
 fn legitimate_compounds_are_not_over_denied() {
     // Hardening must not break normal multi-step workflows: commands with an
     // explicit allow stay allowed, even compounded.
@@ -337,6 +366,67 @@ fn documented_gaps_are_locked_honestly() {
     // reference set carries an explicit `rm *--force*` deny instead. Recursive-only
     // stays symmetric with `rm -r`: both ask.
     assert_eq!(bash("rm --recursive /tmp/x"), Tier::Ask);
+}
+
+#[test]
+fn interpreter_module_flag_keeps_its_value_across_spellings() {
+    // The rule names the module, so the canonical form carries the value: an
+    // attached spelling must not slip past a rule written for the spaced one.
+    assert_all_deny(&[
+        "python3 -m http.server",
+        "python3 -mhttp.server",
+        "python -mhttp.server",
+        "python3 -B -mhttp.server",
+        "python3 -Bmhttp.server", // value flag inside a cluster
+        "/usr/bin/python3 -mhttp.server",
+        "env python3 -mhttp.server",
+    ]);
+    // A different module is untouched: the value is matched, not just the flag.
+    assert_eq!(bash("python3 -m pytest"), Tier::Allow);
+    assert_eq!(bash("python3 -mpytest"), Tier::Allow);
+}
+
+#[test]
+fn command_runner_subforms_are_denied() {
+    // Broadly-allowed utilities with a subform that runs a command or writes in
+    // place. `find -exec` is not a shell operator, so only a rule catches it.
+    assert_all_deny(&[
+        "find . -name x -exec rm -rf {} ;",
+        "find / -execdir cat /etc/shadow ;",
+        "find . -ok rm {} ;",
+        "find . -okdir rm {} ;",
+        // `gh` is broadly allowed; these two subcommands read secrets and install
+        // runnable code.
+        "gh secret list",
+        "gh extension install someone/thing",
+        // Long-form destructive flags, at any argument position.
+        "rm --force /tmp/x",
+        "rm --recursive --force /tmp/x",
+        "rm -r --force /tmp/x",
+        // In-place edit subforms, including attached values and reordered flags.
+        "sed -i s/a/b/ /home/u/.bashrc",
+        "sed -i.bak s/a/b/ f",
+        "sed -n -i f",
+        "perl -i -pe s/a/b/ f",
+        "perl -pi -e s/a/b/ f",
+    ]);
+}
+
+#[test]
+fn command_runner_denies_do_not_over_deny_ordinary_use() {
+    // The subform denies must not reach ordinary uses, including operands that
+    // merely contain the flag text.
+    assert_eq!(bash("find . -type f -print"), Tier::Allow);
+    assert_eq!(bash("find . -name my-exec-log"), Tier::Allow);
+    assert_eq!(bash("gh pr list"), Tier::Allow);
+    // `sed` carries no allow rule of its own, so a non-`-i` use lands on the
+    // `defaultMode: "ask"` fall-back. What matters here is that the `sed -i`
+    // deny does not reach an operand that merely contains the flag text.
+    assert_ne!(bash("sed -n 1p notes.txt"), Tier::Deny);
+    assert_ne!(bash("sed s/x/y/ my-input.txt"), Tier::Deny);
+    // `printenv` moved from allow to ask: it dumps environment secrets, so it is
+    // gated rather than silent, but it is not blocked outright.
+    assert_eq!(bash("printenv AWS_SECRET_ACCESS_KEY"), Tier::Ask);
 }
 
 #[test]
