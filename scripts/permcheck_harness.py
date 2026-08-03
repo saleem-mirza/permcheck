@@ -52,6 +52,25 @@ SESSION_ID = str(uuid.uuid4())
 TRANSCRIPT = os.path.expanduser(f"~/.claude/projects/permcheck/{SESSION_ID}.jsonl")
 
 
+def find_binary(repo: str, explicit: str | None) -> str | None:
+    """Locate the permcheck binary: explicit path, then PATH, then a local build.
+
+    Windows builds carry a .exe suffix, and a relative path is not resolvable by
+    CreateProcess the way a shell resolves it, so probe both spellings and return
+    an absolute path.
+    """
+    exe = ".exe" if os.name == "nt" else ""
+    for cand in (
+        explicit,
+        shutil.which("permcheck"),
+        os.path.join(repo, "target", "release", "permcheck" + exe),
+        os.path.join(repo, "target", "debug", "permcheck" + exe),
+    ):
+        if cand and os.path.isfile(cand):
+            return os.path.abspath(cand)
+    return None
+
+
 def realistic_event(tool: str, tool_input: dict, cwd: str) -> dict:
     """A PreToolUse event shaped like the one Claude Code sends.
 
@@ -394,21 +413,22 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Test and benchmark permcheck via its hook interface.")
     ap.add_argument("mode", nargs="?", default="all", choices=["test", "adversarial", "bench", "all"],
                     help="test (correctness), adversarial (break attempts), bench (timing), or all (default)")
-    ap.add_argument("--bin", default=shutil.which("permcheck"), help="permcheck binary (default: from PATH)")
+    ap.add_argument("--bin", help="permcheck binary (default: PATH, then target/release, then target/debug)")
     ap.add_argument("--rules", default=default_rules, help="rules JSON (default: repo rules/permcheck.json)")
     ap.add_argument("--cross-check", action="store_true", help="also verify the CLI exit-code interface agrees")
     ap.add_argument("-n", "--iterations", type=int, default=100, help="bench iterations per case (default: 100)")
     ap.add_argument("--warmup", type=int, default=3, help="bench warmup runs per case (default: 3)")
     args = ap.parse_args()
 
-    if not args.bin:
-        print("error: permcheck not found on PATH; pass --bin <path>", file=sys.stderr)
+    binary = find_binary(repo, args.bin)
+    if not binary:
+        print("error: permcheck binary not found; build it or pass --bin <path>", file=sys.stderr)
         return 1
     if not os.path.isfile(args.rules):
         print(f"error: rules file not found: {args.rules}", file=sys.stderr)
         return 1
 
-    h = Harness(args.bin, args.rules, os.getcwd())
+    h = Harness(binary, args.rules, os.getcwd())
     ok = True
     if args.mode in ("test", "all"):
         ok = run_tests(h, args.cross_check) and ok

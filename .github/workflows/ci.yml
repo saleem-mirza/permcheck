@@ -5,13 +5,17 @@ on:
     branches: [main]
   pull_request:
 
+# Read-only by default: nothing in CI publishes anything.
+permissions:
+  contents: read
+
 jobs:
   rust:
     name: fmt / clippy / test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           components: clippy, rustfmt
       - run: cargo fmt --all --check
@@ -22,8 +26,8 @@ jobs:
     name: clippy / test (windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           components: clippy
       - run: cargo clippy --all-targets -- -D warnings
@@ -33,7 +37,7 @@ jobs:
     name: validate plugin & marketplace manifests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: JSON is well-formed
         run: |
           for f in \
@@ -41,3 +45,36 @@ jobs:
             plugin/hooks/hooks.json; do
             python3 -c "import json,sys; json.load(open(sys.argv[1])); print('ok:', sys.argv[1])" "$f"
           done
+
+  policies:
+    name: shipped policies load, lint clean, and match the docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - run: cargo build --release --locked
+
+      # Every policy this repo ships must load and lint clean. A lint warning
+      # names a rule that is inert or that quietly loosens a restriction, so it
+      # must not reach a release. `--json` keeps the check on the decision path
+      # while ignoring the verdict; stderr carries the warnings.
+      - name: Policies load and lint clean
+        run: |
+          set -euo pipefail
+          for policy in rules/permcheck.json docs/blog-assets/sample-policy.json; do
+            warnings=$(./target/release/permcheck Bash "true" --rules "$policy" --json 2>&1 >/dev/null)
+            if [ -n "$warnings" ]; then
+              echo "::error::$policy has lint warnings:"
+              echo "$warnings"
+              exit 1
+            fi
+            echo "ok: $policy"
+          done
+
+      # The published article and its downloadable policy state specific
+      # verdicts. Drive both through the real hook interface so prose, policy,
+      # and engine cannot drift apart silently.
+      - name: Blog verdicts reproduce
+        run: python3 scripts/blog_examples_test.py --bin target/release/permcheck
+      - name: Reference-set worked examples reproduce
+        run: python3 scripts/permcheck_harness.py test --cross-check --bin target/release/permcheck

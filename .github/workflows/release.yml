@@ -15,6 +15,12 @@ on:
         description: "Release tag to publish (e.g. v0.1.0)"
         required: true
 
+# Read-only by default; only the job that creates the GitHub Release widens this.
+# The two publishing jobs push cross-repo with their own credentials (a deploy
+# key and a PAT), so they need nothing from GITHUB_TOKEN.
+permissions:
+  contents: read
+
 jobs:
   build:
     name: build ${{ matrix.name }}
@@ -44,16 +50,16 @@ jobs:
             os: windows-latest
             cross: false
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Install cross
         if: matrix.cross
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2
         with:
           tool: cross
 
@@ -74,7 +80,7 @@ jobs:
           cp "$src" "dist/${{ matrix.name }}"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.name }}
           path: dist/${{ matrix.name }}
@@ -87,7 +93,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Resolve tag
         id: meta
@@ -99,7 +105,7 @@ jobs:
           fi
 
       - name: Download all binaries
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: artifacts
 
@@ -116,8 +122,23 @@ jobs:
           ( cd plugin && zip -rq "../permcheck-plugin-${tag}.zip" . )
           ls -l plugin/bin
 
+      # An integrity anchor for the install paths that Homebrew does not cover:
+      # the raw binaries and the plugin bundle. The formula pins its own sha256,
+      # but a plugin/marketplace user otherwise has nothing to verify against.
+      - name: Generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          : > SHA256SUMS
+          find artifacts -type f -name 'permcheck-*' -print0 \
+            | sort -z \
+            | while IFS= read -r -d '' f; do
+                sha256sum "$f" | sed "s| .*/| |" >> SHA256SUMS
+              done
+          sha256sum permcheck-plugin-*.zip >> SHA256SUMS
+          cat SHA256SUMS
+
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: permcheck ${{ steps.meta.outputs.tag }}
@@ -125,6 +146,7 @@ jobs:
           files: |
             artifacts/**/permcheck-*
             permcheck-plugin-*.zip
+            SHA256SUMS
 
   # Push the source-free plugin bundle to the dedicated distribution repo
   # (saleem-mirza/marketplace) — the one marketplace users install from. Only
@@ -143,10 +165,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out this repo (for the plugin/ tree)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Download all binaries
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: artifacts
 
@@ -207,10 +229,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out this repo (for the formula template)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Download all binaries
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: artifacts
 
