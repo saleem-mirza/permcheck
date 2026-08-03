@@ -293,10 +293,20 @@ a panic are always `deny`, independent of `defaultMode`.
 
 - The trailing form `cmd:*` matches the command `cmd` plus any
   whitespace-delimited arguments (i.e. `cmd` alone, or `cmd <args>`).
-- `*` anywhere else in the specifier matches any run of characters.
+- A `*` **fenced by a space on both sides** (` * `) matches a single
+  whitespace-delimited token: the "argument slot" idiom. In `aws * describe-*`
+  the slot is one service token, so `aws ec2 describe-instances` matches while
+  `aws s3 rm s3://bucket/describe-report.json` does **not** — the slot cannot swallow
+  the space and let a later `describe-` substring satisfy the suffix. This is what
+  makes a `service`-wildcarded read-only carve-out safe against argument
+  injection.
+- Any other `*` (trailing after a space, or attached to a word such as
+  `describe-*`) spans any run of characters, whitespace included.
 - Every other character is matched literally.
 - Matching is anchored to the whole (trimmed) command string, with no substring
   matches.
+- The token boundary is space; the containment check (§6.3) uses the same
+  boundary, so the strict-subset relation agrees with the match set.
 
 **Path.** A specifier is a glob over the file path:
 
@@ -364,8 +374,11 @@ decomposes it and takes the **most restrictive** verdict.
    `&`, and newlines. Pull inner commands out of command substitutions
    `$(…)`, backticks `` `…` ``, and process substitutions `<(…)` / `>(…)`,
    including inside double quotes. `$((…))` arithmetic is literal. Single quotes
-   suppress expansion. The splitter is total: it never errors, and unterminated
-   constructs are consumed to end of input.
+   suppress expansion. An unquoted `#` that starts a word (at unit start or after
+   whitespace or an operator) opens a comment; it and the rest of the line are
+   dropped, as bash does, so a comment cannot feed matched text. A `#` inside a
+   word (`feature#123`) or inside quotes is literal. The splitter is total: it
+   never errors, and unterminated constructs are consumed to end of input.
 
 2. **Per unit**, strip leading `NAME=value` environment assignments, then decide
    the trimmed unit string against the Bash matchers via §6.3. The unit is also
@@ -464,8 +477,10 @@ out of scope and left to the OS sandbox and enterprise denies:
 - `xargs` is peeled as a wrapper, so the command it runs (`xargs cat …`,
   `xargs rm -rf …`) is decided and cross-checked. A separate-token replace string
   (`xargs -I {} …`) still hides the command; the attached form (`-I{}`) does not.
-- `#` comments and heredoc bodies are not modeled (biases toward over-deny, the
-  safe direction).
+- An unquoted `#` starting a word opens a comment, which the splitter strips
+  through end of line (§8.1) — matching bash, so a comment cannot smuggle a
+  substring into the matched text. Heredoc bodies are not modeled; an unterminated
+  or exotic heredoc biases toward over-deny, the safe direction.
 - The glob-operand cross-check (§8.3) escalates only operands whose every path
   segment begins with a literal, so ordinary globs (`cat *.rs`) are not
   over-denied. This leaves one gap: a segment-leading wildcard against a
@@ -556,7 +571,13 @@ correction backlog for the reference file.
 
    `RuleSet::lint_warnings` is the author-time linter, printed to stderr by the
    CLI checker and `--install` (never in hook mode). It reports the dead-rule
-   form above. The shipped reference set is clean under the check.
+   form above, plus two **weakening carve-outs** that loosen a broader restriction
+   and are easy to write by accident: an `ask` whose match-set is a strict subset
+   of a `deny` (the block silently becomes a prompt), and an `allow` whose match-set
+   is a strict subset of a broader `ask` it outranks on specificity (the prompt
+   silently becomes auto-allow). A narrow `allow` inside a `deny` is **not**
+   flagged: that is the intended read-only carve-out. The shipped reference set is
+   clean under the check.
 
 3. **Coverage gaps / asymmetries.** `Bash(cp -R:*)` is allowed but plain
    `cp a b` matches no rule and takes the `defaultMode: "ask"` fall-back. Short
