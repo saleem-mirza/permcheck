@@ -14,9 +14,15 @@ fn main() {
         process::exit(0);
     }
 
-    if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
-        print_help();
+    // Help is requested output, so stdout and exit 0. No arguments is a usage
+    // error: exiting 0 would read as an `allow` to anything checking exit codes.
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        println!("{}", help_text(std::io::stdout().is_terminal()));
         process::exit(0);
+    }
+    if args.is_empty() {
+        eprintln!("{}", help_text(std::io::stderr().is_terminal()));
+        process::exit(3);
     }
 
     let install = args.iter().any(|a| a == "--install");
@@ -73,12 +79,9 @@ fn scope_from_args(args: &[String]) -> Scope {
     }
 }
 
-/// The user's home directory.
-///
-/// Resolution is platform-specific and lives in the library
-/// ([`permcheck::matcher::raw_home`]), so the directory `--install` writes the
-/// policy into and the directory a `~/…` rule *inside* that policy expands to are
-/// resolved by one chain and cannot drift apart.
+/// The user's home directory. Resolution is platform-specific and lives in
+/// [`permcheck::matcher::raw_home`], shared with `~` expansion so the install
+/// path and a `~/…` rule cannot resolve differently.
 fn home_dir() -> Option<PathBuf> {
     permcheck::matcher::raw_home().map(PathBuf::from)
 }
@@ -107,29 +110,51 @@ fn rules_dest_path(scope: Scope) -> Option<PathBuf> {
     Some(base.join(".claude").join(file))
 }
 
-/// Serialize `value` as pretty JSON and write it atomically: to a sibling
-/// temp file, then `rename` over the target (atomic-replace on Unix and Windows).
-fn write_json_atomic(path: &Path, value: &serde_json::Value) -> std::io::Result<()> {
+/// Sibling temp path for an atomic write, unique per process so concurrent
+/// `--install` runs cannot clobber each other's scratch file.
+fn temp_path(path: &Path) -> PathBuf {
+    path.with_extension(format!("json.permcheck-tmp.{}", process::id()))
+}
+
+/// Write `bytes` to `path` atomically: temp file, `sync_all`, then `rename`
+/// (atomic-replace on Unix and Windows). The flush matters because `rename`
+/// orders the directory entry, not the contents. Cleans up the temp on failure.
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut text = serde_json::to_string_pretty(value).unwrap_or_default();
-    text.push('\n');
+    let tmp = temp_path(path);
 
-    let tmp = path.with_extension("json.permcheck-tmp");
-    std::fs::write(&tmp, text.as_bytes())?;
-    std::fs::rename(&tmp, path)
+    let write = || -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()
+    };
+    if let Err(e) = write() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
 }
 
-/// Copy `src` to `dest` atomically: to a sibling temp file, then `rename` over
-/// the target. Byte-copy counterpart to [`write_json_atomic`].
+/// Serialize `value` as pretty JSON and write it atomically.
+fn write_json_atomic(path: &Path, value: &serde_json::Value) -> std::io::Result<()> {
+    let mut text = serde_json::to_string_pretty(value).unwrap_or_default();
+    text.push('\n');
+    write_atomic(path, text.as_bytes())
+}
+
+/// Copy `src` to `dest` atomically. Policy files are small, so reading into
+/// memory keeps this on the single write path.
 fn copy_rules_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let tmp = dest.with_extension("json.permcheck-tmp");
-    std::fs::copy(src, &tmp)?;
-    std::fs::rename(&tmp, dest)
+    let bytes = std::fs::read(src)?;
+    write_atomic(dest, &bytes)
 }
 
 fn run_install(args: &[String]) {
@@ -446,7 +471,9 @@ fn run_cli(args: &[String]) {
 
     let json_mode = args.iter().any(|a| a == "--json");
 
-    // Collect positional args (not --rules, its value, or --json)
+    // Positional args (not --rules, its value, or --json). An unrecognized long
+    // flag is a usage error: silently skipping `--jsn` would drop the caller into
+    // exit-code mode with no hint.
     let positional: Vec<&str> = {
         let mut pos = Vec::new();
         let mut skip_next = false;
@@ -462,8 +489,14 @@ fn run_cli(args: &[String]) {
             if arg == "--json" {
                 continue;
             }
-            if arg.starts_with("--") {
-                continue;
+            if let Some(flag) = arg.strip_prefix("--") {
+                // `--rules=<path>` is consumed by `find_rules_arg` above.
+                if flag.starts_with("rules=") {
+                    continue;
+                }
+                eprintln!("error: unrecognized option `{arg}`");
+                eprintln!("hint: run `permcheck --help` for usage");
+                process::exit(3);
             }
             pos.push(arg.as_str());
         }
@@ -505,12 +538,14 @@ fn run_cli(args: &[String]) {
     }
 }
 
-fn print_help() {
+/// Render the help screen. `is_tty` is whether the stream it is headed for is a
+/// terminal, which (with NO_COLOR and TERM) decides whether ANSI is emitted.
+fn help_text(is_tty: bool) -> String {
     // Respect NO_COLOR (https://no-color.org), require a non-dumb TERM, and only
-    // emit ANSI when stderr is an actual terminal (not a pipe or file).
+    // emit ANSI when the destination is an actual terminal (not a pipe or file).
     let color = std::env::var("NO_COLOR").is_err()
         && std::env::var("TERM").map(|t| t != "dumb").unwrap_or(false)
-        && std::io::stderr().is_terminal();
+        && is_tty;
 
     // ANSI helpers — empty strings when color is off.
     let bold = if color { "\x1b[1m" } else { "" };
@@ -520,7 +555,7 @@ fn print_help() {
     let red = if color { "\x1b[1;31m" } else { "" };
     let reset = if color { "\x1b[0m" } else { "" };
 
-    eprintln!(
+    format!(
         r#"{bold}permcheck{reset} — permission decision engine for Claude Code PreToolUse hooks
 
 {yellow}USAGE{reset}
@@ -564,7 +599,7 @@ fn print_help() {
 
 {yellow}NOTE{reset}  A specifier like {red}"aws:*"{reset} is a rule pattern, not a payload — passing it checks the
       literal command "aws:*" (which default-denies). Pass a real command instead."#
-    );
+    )
 }
 
 /// The path argument for `--init-rules`, in either form: `--init-rules <path>`

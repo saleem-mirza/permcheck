@@ -40,13 +40,40 @@ fn json_mode_prints_decision_object_and_exits_zero() {
 }
 
 #[test]
-fn help_and_no_args_exit_zero() {
+fn explicit_help_goes_to_stdout_and_succeeds() {
+    // Help is requested output, so it belongs on stdout.
+    for flag in ["--help", "-h"] {
+        Command::cargo_bin("permcheck")
+            .unwrap()
+            .arg(flag)
+            .assert()
+            .code(0)
+            .stdout(predicates::str::contains("USAGE"));
+    }
+}
+
+#[test]
+fn no_args_is_a_usage_error() {
+    // Exiting 0 here would read as an `allow` to anything checking exit codes.
     Command::cargo_bin("permcheck")
         .unwrap()
-        .arg("--help")
         .assert()
-        .code(0);
-    Command::cargo_bin("permcheck").unwrap().assert().code(0); // no args -> help
+        .code(3)
+        .stderr(predicates::str::contains("USAGE"));
+}
+
+#[test]
+fn unknown_long_flag_is_a_usage_error() {
+    // `--jsn` used to fall through to exit-code mode with no diagnostic.
+    let f = rules_file(RULES);
+    Command::cargo_bin("permcheck")
+        .unwrap()
+        .args(["Bash", "ls", "--rules"])
+        .arg(f.path())
+        .arg("--jsn")
+        .assert()
+        .code(3)
+        .stderr(predicates::str::contains("unrecognized option `--jsn`"));
 }
 
 #[test]
