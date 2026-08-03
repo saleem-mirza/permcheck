@@ -792,7 +792,7 @@ permcheck Read <span class="tok-k">"/home/user/.ssh/id_rsa"</span> --rules permc
   <p>A deny-first model is safe but cannot express every bounded exception. permcheck adds the missing axis: a proven-narrower rule carves out the one it contradicts. It is not a sandbox or an intent detector, just the conflict-resolution strategy that keeps a policy from collapsing into all or nothing.</p>
 
   <h2 id="appendix-sample-policy">Appendix: a policy that reproduces this post</h2>
-  <p>Every verdict above comes from one teaching policy. The excerpt below shows its shape; <code>…</code> marks omitted rules, so it is not valid JSON to copy directly. Download the complete, runnable <a href="blog-assets/sample-policy.json">sample-policy.json</a>, then test any example with <code>permcheck &lt;Tool&gt; "&lt;payload&gt;" --rules permcheck.json</code>.</p>
+  <p>Every verdict above comes from one teaching policy. The excerpt below shows its shape; <code>…</code> marks omitted rules, so it is not valid JSON to copy directly. Download the complete, runnable <a href="blog-assets/sample-policy.json">sample-policy.json</a>, then point <code>--rules</code> at wherever you saved it (the examples below call it <code>permcheck.json</code>; rename it or pass its real path). Test any example with <code>permcheck &lt;Tool&gt; "&lt;payload&gt;" --rules &lt;your-file&gt;</code>.</p>
   <pre><code>{
   "permissions": {
     "defaultMode": "ask",
