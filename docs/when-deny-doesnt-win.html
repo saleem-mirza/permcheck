@@ -524,7 +524,7 @@ allow: Bash(aws * describe-*)</code></pre>
         <rect x="305" y="626" width="210" height="44" rx="22" fill="#0969da"/><text x="410" y="653" font-size="13" font-weight="700" fill="#fff">allow / ask / deny</text>
       </g>
     </svg>
-    <figcaption>Every call takes the same route. Bash adds wrapper-peeling and a file-access cross-check before scoring.</figcaption>
+    <figcaption>Every call takes the same route. Bash adds three steps first: compound splitting, wrapper-peeling, and a file-access cross-check.</figcaption>
   </figure>
 
   <h2 id="closing-the-side-doors">Closing the side doors</h2>
@@ -646,7 +646,7 @@ cat .en?            <span class="tok-c"># glob over a literal name, could hit .e
   <p>That is why a bare <code>Read</code> allow does not override the narrower secret-path deny used in the exfiltration walkthrough. Web matching also extracts the full hostname, so a rule for <code>example.com</code> matches <code>https://example.com/path</code> but not <code>example.com.evil.com</code>. When no rule matches, the configured <code>defaultMode</code> decides.</p>
 
   <h2 id="tune-your-rules-not-the-engine">Tune your rules, not the engine</h2>
-  <p>The engine resolves conflicts and normalizes command forms, but it never invents policy: if no rule covers a dangerous form, deny it explicitly. (The one thing the engine handles for you is path canonicalization: it resolves <code>~</code>, absolutizes relative paths, and collapses <code>.</code>/<code>..</code> so a rule matches the target, not one spelling of it.) A loose rule grants more than you intend. Take the reference set's <code>Bash(python3 *)</code> allow, which on its own swallows arbitrary code:</p>
+  <p>The engine resolves conflicts and normalizes command forms, but it never invents policy: if no rule covers a dangerous form, deny it explicitly. (The important exception it handles for you is path canonicalization: it resolves <code>~</code>, absolutizes relative paths, and collapses <code>.</code>/<code>..</code> so a rule matches the target, not one spelling of it.) A loose rule grants more than you intend. Take the reference set's <code>Bash(python3 *)</code> allow, which on its own swallows arbitrary code:</p>
   <pre><code>python3 -c "import os; os.system('rm -rf /')"</code></pre>
   <p>The engine did its job; the rule was too wide. The fix is a paired deny for the dangerous subform, and the reference set demonstrates the pairing:</p>
   <pre><code>allow: Bash(python3 *)          <span class="tok-c"># broad allow</span>
@@ -764,7 +764,7 @@ deny: Write(//**/.claude/settings.json)</code></pre>
   <p>The plugin ships prebuilt binaries for macOS, Linux, and Windows and wires the hook without touching your <code>settings.json</code>:</p>
   <pre><code>/plugin marketplace add saleem-mirza/marketplace
 /plugin install permcheck@zethian</code></pre>
-  <p>It decides against the bundled reference set out of the box: a comprehensive deny list that blocks privilege escalation, destructive deletion, secret reads, and more, with <code>defaultMode: ask</code> so unlisted calls prompt instead of blocking. You grow the <code>allow</code> and <code>ask</code> lists from there. This is the set the examples in this post draw from.</p>
+  <p>It decides against the bundled reference set out of the box: a comprehensive deny list that blocks privilege escalation, destructive deletion, secret reads, and more, with <code>defaultMode: ask</code> so unlisted calls prompt instead of blocking. You grow the <code>allow</code> and <code>ask</code> lists from there. The post's examples run against a smaller teaching subset you can download in the <a href="#appendix-sample-policy">appendix</a>.</p>
 
   <p>Prefer to wire it yourself? The standalone CLI seeds a <strong>minimal starter</strong> (a short safe deny list plus self-protection, empty <code>allow</code>/<code>ask</code>, same <code>defaultMode: ask</code>) rather than the plugin's comprehensive reference set. Both are starting points you edit, not finished policies:</p>
   <pre><code>brew install saleem-mirza/tap/permcheck
