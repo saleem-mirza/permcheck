@@ -12,10 +12,16 @@ pub(super) fn unit_tier(rs: &RuleSet, cmd: &str) -> Tier {
     let base_owned = basename_command(cmd);
     let base = base_owned.as_deref().unwrap_or(cmd);
     let git_owned = git_subcommand_form(base);
+    // Collapse runs of whitespace to single spaces so a prefix/glob rule
+    // (`git push --force:*`) is not evaded by `git  push --force`. Only added when
+    // it changes the string. Collapsing inside a quoted argument can only add a
+    // match (raise the verdict), the safe direction, matching the additive-candidate
+    // pattern in `engine::path_candidates`.
+    let collapsed_owned = collapse_whitespace(cmd);
 
-    // Exactly three identity forms exist: raw, basename-normalized, and the
-    // optional git-subcommand form. Keep this capacity in sync when adding one.
-    const IDENTITY_CAP: usize = 3;
+    // Identity forms: raw, basename-normalized, git-subcommand, and the
+    // whitespace-collapsed spelling. Keep this capacity in sync when adding one.
+    const IDENTITY_CAP: usize = 4;
     let mut identity = [""; IDENTITY_CAP];
     identity[0] = cmd;
     let mut identity_len = 1;
@@ -27,6 +33,11 @@ pub(super) fn unit_tier(rs: &RuleSet, cmd: &str) -> Tier {
     if let Some(git) = git_owned.as_deref() {
         debug_assert!(identity_len < IDENTITY_CAP);
         identity[identity_len] = git;
+        identity_len += 1;
+    }
+    if let Some(collapsed) = collapsed_owned.as_deref() {
+        debug_assert!(identity_len < IDENTITY_CAP);
+        identity[identity_len] = collapsed;
         identity_len += 1;
     }
     let mut tier =
@@ -257,6 +268,14 @@ fn for_each_flag_candidate(cmd: &str, mut visit: impl FnMut(&str) -> bool) {
             break;
         }
     }
+}
+
+/// Collapse every run of ASCII whitespace to a single space, returning the result
+/// only when it differs from `cmd`. `None` means `cmd` was already single-spaced,
+/// so no extra candidate is needed.
+fn collapse_whitespace(cmd: &str) -> Option<String> {
+    let collapsed = cmd.split_ascii_whitespace().collect::<Vec<_>>().join(" ");
+    (collapsed != cmd).then_some(collapsed)
 }
 
 /// Reduce a path-qualified executable token to its basename.

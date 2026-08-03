@@ -129,6 +129,17 @@ fn read_word(s: &str, start: usize) -> (String, usize) {
     while i < n {
         match b[i] {
             b' ' | b'\t' | b'<' | b'>' => break,
+            b'\\' => {
+                // An unquoted backslash escapes the next character (`.\env` ->
+                // `.env`), so the cross-check tests the real path rather than the
+                // escaped spelling. Append the escaped char verbatim and advance a
+                // full UTF-8 char; a trailing backslash is dropped.
+                i += 1;
+                if let Some(ch) = s[i..].chars().next() {
+                    out.push(ch);
+                    i += ch.len_utf8();
+                }
+            }
             b'\'' => {
                 i += 1;
                 let st = i;
@@ -153,7 +164,7 @@ fn read_word(s: &str, start: usize) -> (String, usize) {
             }
             _ => {
                 let st = i;
-                while i < n && !matches!(b[i], b' ' | b'\t' | b'<' | b'>' | b'\'' | b'"') {
+                while i < n && !matches!(b[i], b' ' | b'\t' | b'<' | b'>' | b'\'' | b'"' | b'\\') {
                     i += 1;
                 }
                 out.push_str(&s[st..i]);

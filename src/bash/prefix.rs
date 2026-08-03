@@ -42,9 +42,25 @@ fn skip_word(b: &[u8], mut i: usize) -> usize {
 }
 
 fn is_wrapper_arg(w: &str) -> bool {
-    w.starts_with('-')
-        || w.contains('=')
-        || (!w.is_empty() && w.bytes().all(|b| b.is_ascii_digit()))
+    w.starts_with('-') || w.contains('=') || is_duration(w)
+}
+
+/// A bare numeric wrapper argument, including `timeout`'s duration forms
+/// (`5`, `5s`, `1m`, `1.5h`, `2d`). Recognizing these lets wrapper peeling reach
+/// the wrapped command: without it, `timeout 5s sudo rm -rf /` stops at `5s` and
+/// launders the `sudo` deny down to the fall-back tier. Peeling only ever raises a
+/// verdict, so widening what counts as a wrapper argument cannot loosen a decision.
+fn is_duration(w: &str) -> bool {
+    // An optional single unit suffix (`timeout` accepts one, e.g. `5s`, not `1h30m`).
+    let num = match w.as_bytes().last() {
+        Some(b's' | b'm' | b'h' | b'd') => &w[..w.len() - 1],
+        _ => w,
+    };
+    // The remaining number is digits with at most one decimal point.
+    !num.is_empty()
+        && num.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        && num.bytes().filter(|&b| b == b'.').count() <= 1
+        && num.bytes().any(|b| b.is_ascii_digit())
 }
 
 /// Return the words remaining after leading wrappers and their arguments.

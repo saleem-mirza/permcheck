@@ -94,6 +94,13 @@ impl RuleSet {
     /// **Dead rule.** A Bash `cmd:*` specifier whose prefix contains `*`. The
     /// `cmd:*` form matches `cmd` literally, so an interior `*` is a literal
     /// asterisk and the rule matches nothing (§11.2).
+    ///
+    /// **Weakening carve-out.** A narrower rule that punches through a broader one
+    /// in the direction that *loosens* the decision, which is easy to write by
+    /// accident: an `ask` contained in a `deny` (a block silently becomes a
+    /// prompt), or an `allow` contained in a broader `ask` that outranks it on
+    /// specificity (a prompt silently becomes auto-allow). A narrower `allow`
+    /// inside a `deny` is **not** flagged: that is the intended read-only carve-out.
     pub fn lint_warnings(&self) -> Vec<String> {
         let mut out = Vec::new();
 
@@ -106,6 +113,40 @@ impl RuleSet {
                     "rule `{}` has `*` before `:*`; the `cmd:*` form matches `cmd` literally, so the `*` is a literal asterisk and this rule matches nothing. For a mid-command wildcard use the glob form (no `:*`).",
                     rule.source,
                 ));
+            }
+        }
+
+        // Weakening carve-outs: a narrower rule that loosens a broader restriction.
+        let strict_subset = |a: &Matcher, b: &Matcher| {
+            matcher::matcher_subset(a, b) && !matcher::matcher_subset(b, a)
+        };
+        for narrow in &self.rules {
+            for broad in &self.rules {
+                if narrow.tool != broad.tool {
+                    continue;
+                }
+                // An `ask` inside a `deny` downgrades a hard block to a prompt.
+                if narrow.tier == Tier::Ask
+                    && broad.tier == Tier::Deny
+                    && strict_subset(&narrow.matcher, &broad.matcher)
+                {
+                    out.push(format!(
+                        "ask rule `{}` is a subset of deny rule `{}`, so it carves out the deny: matching calls prompt instead of being blocked, and a prompt can be approved. Drop the ask, or narrow the deny, if the block was intended.",
+                        narrow.source, broad.source,
+                    ));
+                }
+                // A more-specific `allow` inside a broader `ask` wins on specificity
+                // and drops the prompt for that subset.
+                if narrow.tier == Tier::Allow
+                    && broad.tier == Tier::Ask
+                    && narrow.specificity > broad.specificity
+                    && strict_subset(&narrow.matcher, &broad.matcher)
+                {
+                    out.push(format!(
+                        "allow rule `{}` is a subset of ask rule `{}` and outranks it on specificity, so matching calls are allowed without the prompt. Confirm the prompt was not meant to cover them.",
+                        narrow.source, broad.source,
+                    ));
+                }
             }
         }
 
@@ -309,12 +350,45 @@ mod lint_tests {
 
     #[test]
     fn reference_set_has_no_lint_warnings() {
-        // The shipped policy has no dead rules.
+        // The shipped policy has no dead rules and no weakening carve-outs.
         let rs = RuleSet::load_str(DEFAULT_RULES).unwrap();
         assert!(
             rs.lint_warnings().is_empty(),
             "reference rules have lint warnings: {:?}",
             rs.lint_warnings()
         );
+    }
+
+    #[test]
+    fn ask_inside_deny_warns_block_becomes_prompt() {
+        // `git push --force` is denied, but an ask carves it back to a prompt.
+        let rs = RuleSet::load_str(
+            r#"{"ask":["Bash(git push --force:*)"],"deny":["Bash(git push:*)"]}"#,
+        )
+        .unwrap();
+        let w = rs.lint_warnings();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("prompt instead of being blocked"));
+    }
+
+    #[test]
+    fn allow_inside_ask_warns_prompt_dropped() {
+        // `git push:*` prompts, but the narrower, more-specific allow drops it.
+        let rs = RuleSet::load_str(
+            r#"{"allow":["Bash(git push origin:*)"],"ask":["Bash(git push:*)"]}"#,
+        )
+        .unwrap();
+        let w = rs.lint_warnings();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("allowed without the prompt"));
+    }
+
+    #[test]
+    fn allow_inside_deny_is_not_flagged() {
+        // The intended read-only carve-out must stay silent.
+        let rs =
+            RuleSet::load_str(r#"{"allow":["Bash(aws * describe-*)"],"deny":["Bash(aws:*)"]}"#)
+                .unwrap();
+        assert!(rs.lint_warnings().is_empty(), "{:?}", rs.lint_warnings());
     }
 }

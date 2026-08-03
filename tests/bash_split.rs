@@ -46,6 +46,33 @@ fn unterminated_is_total_not_error() {
 }
 
 #[test]
+fn unquoted_comment_is_stripped() {
+    // A `#` starting a word opens a comment bash discards to end of line, so the
+    // matched unit must drop it too.
+    assert_eq!(
+        split("aws ec2 terminate-instances # describe-instances"),
+        ["aws ec2 terminate-instances"]
+    );
+    assert_eq!(split("ls # comment\nrm -rf /"), ["ls", "rm -rf /"]);
+}
+
+#[test]
+fn hash_inside_a_word_is_not_a_comment() {
+    // `#` mid-token (a fragment, an anchor) is an ordinary character.
+    assert_eq!(
+        split("git checkout feature#123"),
+        ["git checkout feature#123"]
+    );
+    assert_eq!(split("echo a#b"), ["echo a#b"]);
+}
+
+#[test]
+fn quoted_hash_is_not_a_comment() {
+    assert_eq!(split("echo '# not a comment'"), ["echo '# not a comment'"]);
+    assert_eq!(split("echo \"# also not\""), ["echo \"# also not\""]);
+}
+
+#[test]
 fn arithmetic_is_literal_not_a_command() {
     // `$(( … ))` is arithmetic, not a command substitution: nothing is extracted.
     assert_eq!(split("echo $((1+2))"), ["echo $((1+2))"]);

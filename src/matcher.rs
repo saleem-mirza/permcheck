@@ -141,7 +141,10 @@ pub fn compile(family: Family, spec: &str) -> Result<(Matcher, u32), CompileErro
             } else {
                 let specificity = score(spec, &['*']);
                 (
-                    Matcher::Bash(BashMatcher::Glob(spec.to_string())),
+                    Matcher::Bash(BashMatcher::Glob(BashGlob {
+                        raw: spec.to_string(),
+                        toks: bash_glob_tokens(spec),
+                    })),
                     specificity,
                 )
             }
@@ -187,15 +190,94 @@ fn literal_count(spec: &str, wildcards: &[char]) -> u32 {
 pub enum BashMatcher {
     /// Trailing `cmd:*` form: matches `cmd` alone or `cmd` + whitespace + args.
     Prefix(String),
-    /// General glob where `*` matches any run of characters.
-    Glob(String),
+    /// General glob. A trailing or word-attached `*` spans any run of characters;
+    /// an interior `*` fenced by spaces on both sides matches a single
+    /// whitespace-delimited token (§6.5).
+    Glob(BashGlob),
+}
+
+/// A compiled Bash glob: the raw specifier plus its token sequence, so matching
+/// and the containment check share one compilation and the hot path allocates
+/// nothing per call.
+#[derive(Debug, Clone)]
+pub struct BashGlob {
+    raw: String,
+    toks: Vec<PToken>,
 }
 
 impl BashMatcher {
     fn matches(&self, cmd: &str) -> bool {
         match self {
             BashMatcher::Prefix(prefix) => prefix_covers(prefix, cmd),
-            BashMatcher::Glob(pattern) => glob_star_match(cmd.as_bytes(), pattern.as_bytes()),
+            // Space is the token separator: `Star` stops at it, `DStar` spans it.
+            BashMatcher::Glob(g) => tokens_match(cmd.as_bytes(), &g.toks, b' '),
+        }
+    }
+}
+
+/// Compile a Bash glob specifier into tokens. A `*` (or a run of them) becomes a
+/// single-token `Star` only when a space fences it on both sides — the
+/// `aws * describe-*` "argument slot" idiom — so it cannot swallow whitespace and
+/// let a mutating call ride in on a later `describe-` substring. A trailing `*`
+/// (space before, end after) and a word-attached `*` (`describe-*`) stay spanning
+/// `DStar`, preserving the established prefix and suffix idioms.
+fn bash_glob_tokens(spec: &str) -> Vec<PToken> {
+    let b = spec.as_bytes();
+    let mut t = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'*' {
+            let prev = (i > 0).then(|| b[i - 1]);
+            let mut j = i + 1;
+            while j < b.len() && b[j] == b'*' {
+                j += 1;
+            }
+            let next = (j < b.len()).then(|| b[j]);
+            let fenced = |c: Option<u8>| matches!(c, Some(b' ') | Some(b'\t'));
+            t.push(if fenced(prev) && fenced(next) {
+                PToken::Star
+            } else {
+                PToken::DStar
+            });
+            i = j;
+        } else {
+            t.push(PToken::Lit(b[i]));
+            i += 1;
+        }
+    }
+    t
+}
+
+/// Anchored full-command match over Bash glob tokens with `sep` as the token
+/// separator. Mirrors [`glob_star_match`] for spanning `DStar`, and adds the
+/// single-token `Star` that stops at `sep`. Plain backtracking over trusted,
+/// short rule patterns (§9.2).
+fn tokens_match(text: &[u8], toks: &[PToken], sep: u8) -> bool {
+    match toks.first() {
+        None => text.is_empty(),
+        Some(PToken::Lit(c)) => {
+            !text.is_empty() && text[0] == *c && tokens_match(&text[1..], &toks[1..], sep)
+        }
+        Some(PToken::Ques) => {
+            !text.is_empty() && text[0] != sep && tokens_match(&text[1..], &toks[1..], sep)
+        }
+        Some(PToken::Star) => {
+            let rest = &toks[1..];
+            let mut i = 0;
+            loop {
+                if tokens_match(&text[i..], rest, sep) {
+                    return true;
+                }
+                if i < text.len() && text[i] != sep {
+                    i += 1;
+                } else {
+                    return false;
+                }
+            }
+        }
+        Some(PToken::DStar) => {
+            let rest = &toks[1..];
+            (0..=text.len()).any(|i| tokens_match(&text[i..], rest, sep))
         }
     }
 }
@@ -503,10 +585,11 @@ pub(crate) fn matcher_subset(a: &Matcher, d: &Matcher) -> bool {
         (_, Matcher::Bare) => true,
         // A bare allow (matches everything) refines only a universal deny.
         (Matcher::Bare, _) => is_universal(d),
-        (Matcher::Path(pa), Matcher::Path(pd)) => tokens_subset(&pa.0, &pd.0),
+        (Matcher::Path(pa), Matcher::Path(pd)) => tokens_subset(&pa.0, &pd.0, b'/'),
         (Matcher::Generic(ga), Matcher::Generic(gd)) => tokens_subset(
             &glob_to_tokens(ga.0.as_bytes()),
             &glob_to_tokens(gd.0.as_bytes()),
+            b'/',
         ),
         (Matcher::Bash(ba), Matcher::Bash(bd)) => bash_subset(ba, bd),
         // Cross-family rules never share a tool, so this is unreachable in
@@ -521,7 +604,7 @@ fn is_universal(m: &Matcher) -> bool {
         Matcher::Bare => true,
         Matcher::Path(p) => matches!(p.0.as_slice(), [PToken::DStar]),
         Matcher::Generic(g) => g.0 == "*",
-        Matcher::Bash(BashMatcher::Glob(s)) => s == "*",
+        Matcher::Bash(BashMatcher::Glob(g)) => g.toks.as_slice() == [PToken::DStar],
         Matcher::Bash(BashMatcher::Prefix(_)) => false,
     }
 }
@@ -566,25 +649,25 @@ fn bash_subset(a: &BashMatcher, d: &BashMatcher) -> bool {
         // A glob whose fixed leading literal already clears `d`'s prefix boundary
         // is contained in the prefix (`aws * describe-* ⊆ aws:*`).
         (BashMatcher::Glob(ga), BashMatcher::Prefix(pd)) => {
-            let lit = ga.split('*').next().unwrap_or(ga);
-            if !ga.contains('*') {
-                return prefix_covers(pd, ga);
+            if !ga.raw.contains('*') {
+                return prefix_covers(pd, &ga.raw);
             }
+            let lit = ga.raw.split('*').next().unwrap_or(&ga.raw);
             lit.len() > pd.len()
                 && lit.starts_with(pd)
                 && lit.as_bytes()[pd.len()].is_ascii_whitespace()
         }
-        (BashMatcher::Glob(ga), BashMatcher::Glob(gd)) => tokens_subset(
-            &glob_to_tokens(ga.as_bytes()),
-            &glob_to_tokens(gd.as_bytes()),
-        ),
+        // Space is the token separator for both Bash globs.
+        (BashMatcher::Glob(ga), BashMatcher::Glob(gd)) => tokens_subset(&ga.toks, &gd.toks, b' '),
         // A prefix's language is `pre` or `pre` + whitespace + anything. Over-
         // approximate it as `pre` + `**` (more strings, so proving subset stays
-        // sound) and test against the glob.
+        // sound) and test against the glob. The prefix side keeps every `*`
+        // spanning (`glob_to_tokens`), since a `cmd:*` prefix treats `*` as a
+        // literal asterisk, so the spanning reading is the safe over-approximation.
         (BashMatcher::Prefix(pa), BashMatcher::Glob(gd)) => {
             let mut toks = glob_to_tokens(pa.as_bytes());
             toks.push(PToken::DStar);
-            tokens_subset(&toks, &glob_to_tokens(gd.as_bytes()))
+            tokens_subset(&toks, &gd.toks, b' ')
         }
     }
 }
@@ -598,24 +681,26 @@ fn bash_subset(a: &BashMatcher, d: &BashMatcher) -> bool {
 /// branch keeps `d` alive and accepting. Revisiting a `(position, dstate)` pair is
 /// treated as success (greatest-fixpoint over the safety property). Returns `false`
 /// for oversized or budget-exceeding inputs — always the safe direction.
-fn tokens_subset(a: &[PToken], d: &[PToken]) -> bool {
+fn tokens_subset(a: &[PToken], d: &[PToken], sep: u8) -> bool {
     // `dstate` is a bitset over positions `0..=d.len()`, so `d.len()` must index
     // into a u128. Oversized patterns (never real rules) fail closed.
     if d.len() >= 127 || a.len() >= 127 {
         return false;
     }
     let lits = d_literals(d);
-    let fresh = fresh_byte(&lits);
-    // Representative characters an `a`-wildcard adversary may pick. `/` is kept
-    // separate because `?`/`*` reject it while `**` accepts it.
-    let mut reps_nonsep: Vec<u8> = lits.iter().copied().filter(|&b| b != b'/').collect();
+    let fresh = fresh_byte(&lits, sep);
+    // Representative characters an `a`-wildcard adversary may pick. The separator
+    // (`/` for paths, space for Bash) is kept separate because `?`/`*` reject it
+    // while `**` accepts it.
+    let mut reps_nonsep: Vec<u8> = lits.iter().copied().filter(|&b| b != sep).collect();
     reps_nonsep.push(fresh);
     let mut reps_all = reps_nonsep.clone();
-    reps_all.push(b'/');
+    reps_all.push(sep);
 
     let start = closure_d(d, 1u128);
     let mut ctx = InclCtx {
         d,
+        sep,
         reps_nonsep: &reps_nonsep,
         reps_all: &reps_all,
         seen: std::collections::HashSet::new(),
@@ -626,6 +711,7 @@ fn tokens_subset(a: &[PToken], d: &[PToken]) -> bool {
 
 struct InclCtx<'a> {
     d: &'a [PToken],
+    sep: u8,
     reps_nonsep: &'a [u8],
     reps_all: &'a [u8],
     seen: std::collections::HashSet<(usize, u128)>,
@@ -650,7 +736,7 @@ fn incl(a: &[PToken], i: usize, dstate: u128, ctx: &mut InclCtx) -> bool {
     }
     match a[i] {
         PToken::Lit(c) => {
-            let ns = step_d(ctx.d, dstate, c);
+            let ns = step_d(ctx.d, dstate, c, ctx.sep);
             incl(a, i + 1, ns, ctx)
         }
         // A single non-`/` char: advance past `?`, requiring every representative.
@@ -684,7 +770,7 @@ fn all_reps(a: &[PToken], next_i: usize, dstate: u128, reps: RepSet, ctx: &mut I
             RepSet::NonSeparator => ctx.reps_nonsep[index],
             RepSet::All => ctx.reps_all[index],
         };
-        let ns = step_d(ctx.d, dstate, ch);
+        let ns = step_d(ctx.d, dstate, ch, ctx.sep);
         incl(a, next_i, ns, ctx)
     })
 }
@@ -706,11 +792,12 @@ fn d_literals(d: &[PToken]) -> Vec<u8> {
     v
 }
 
-/// A byte that is neither `/` nor any of `d`'s literals — one representative for
-/// "every other character", which all of `d`'s tokens treat identically.
-fn fresh_byte(lits: &[u8]) -> u8 {
+/// A byte that is neither the separator nor any of `d`'s literals — one
+/// representative for "every other character", which all of `d`'s tokens treat
+/// identically.
+fn fresh_byte(lits: &[u8], sep: u8) -> u8 {
     (1u8..=255)
-        .find(|b| *b != b'/' && !lits.contains(b))
+        .find(|b| *b != sep && !lits.contains(b))
         .unwrap_or(0)
 }
 
@@ -731,9 +818,11 @@ fn closure_d(d: &[PToken], mut bits: u128) -> u128 {
     }
 }
 
-/// Transition of a (closed) `d` state on one concrete character.
-fn step_d(d: &[PToken], bits: u128, ch: u8) -> u128 {
-    let sep = ch == b'/';
+/// Transition of a (closed) `d` state on one concrete character. `sep_byte` is the
+/// token separator (`/` for paths, space for Bash): a non-spanning `*` stays live
+/// on any character except it.
+fn step_d(d: &[PToken], bits: u128, ch: u8, sep_byte: u8) -> u128 {
+    let sep = ch == sep_byte;
     let mut nb = 0u128;
     for (j, tok) in d.iter().enumerate() {
         if bits & (1u128 << j) == 0 {

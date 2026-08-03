@@ -78,6 +78,21 @@ fn bash_narrow_allow_carves_out_broad_deny() {
         decide_bash("aws s3 rm s3://b --recursive", &rs, None).tier,
         Tier::Deny
     );
+    // The carve-out survives the single-token service slot: a mutating call does
+    // not ride in on a later `describe-` substring or a value that contains one.
+    assert_eq!(
+        decide_bash("aws s3 rm s3://prod-bucket/describe-report.json", &rs, None).tier,
+        Tier::Deny
+    );
+    assert_eq!(
+        decide_bash("aws iam delete-user --user-name describe-me", &rs, None).tier,
+        Tier::Deny
+    );
+    // A describe across any single-token service still carves out.
+    assert_eq!(
+        decide_bash("aws rds describe-db-instances", &rs, None).tier,
+        Tier::Allow
+    );
 }
 
 // A narrow allow carves out a bare (match-everything) deny.

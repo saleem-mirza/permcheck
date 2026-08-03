@@ -59,8 +59,11 @@ fn bash_evasion_to_denied_file_is_denied() {
         "sudo cat .env",                             // wrapper peel
         "env cat .env",                              // wrapper peel
         "timeout 5 cat .env",                        // wrapper + numeric arg
+        "timeout 5s cat .env",                       // wrapper + duration-suffix arg
+        "timeout 1.5h cat .env",                     // wrapper + fractional duration
         "nice -n 10 cat .env",                       // wrapper + option + numeric
         "cat < .env",                                // input redirection
+        "cat .\\env",                                // backslash escape -> .env
         "grep secret .env",                          // pattern-first reader
         "tee /home/user/.ssh/authorized_keys",       // writer operand
         "echo hi > /home/user/.ssh/authorized_keys", // output redirection
@@ -78,6 +81,9 @@ fn bash_evasion_to_denied_file_is_denied() {
 #[test]
 fn specific_deny_beats_broad_allow() {
     assert_eq!(bash("git push --force origin main"), Tier::Deny);
+    // Extra interior whitespace must not evade a prefix deny.
+    assert_eq!(bash("git  push --force origin main"), Tier::Deny);
+    assert_eq!(bash("git   push   --force"), Tier::Deny);
     assert_eq!(bash("curl http://example.com"), Tier::Deny);
 }
 
@@ -89,6 +95,10 @@ fn legitimate_lookalikes_are_not_over_denied() {
     assert_eq!(bash("grep .env notes.txt"), Tier::Allow);
     // Quoted text is an argument to echo, not an executed command.
     assert_eq!(bash("echo 'cat .env'"), Tier::Allow);
+    // Whitespace collapse must not over-deny: a benign command with runs of
+    // spaces stays allowed when no deny prefix covers it.
+    assert_eq!(bash("echo 'a  b'"), Tier::Allow);
+    assert_eq!(bash("git  push origin main"), Tier::Allow);
     // A pure fd dup is not a file write.
     assert_eq!(bash("echo hi 2>&1"), Tier::Allow);
     // Interpreter exec is allowed by `python3 *` (a documented rule-set gap).
@@ -120,4 +130,41 @@ fn parent_traversal_evades_directory_anchored_deny() {
 fn benign_paths_are_allowed() {
     assert_eq!(read("/tmp/notes.txt"), Tier::Allow);
     assert_eq!(write("/home/user/project/out.txt"), Tier::Allow);
+}
+
+// The `aws * describe-*` carve-out must admit only genuine read-only calls. Two
+// bypasses used to promote a mutating `aws` call to allow: (1) an interior `*`
+// that spanned whitespace let a later `describe-` substring satisfy the allow
+// while the executed operation stayed destructive; (2) a trailing `# describe-…`
+// comment fed the allow glob but bash discarded it at runtime. The single-token
+// service slot closes (1); comment stripping closes (2).
+#[test]
+fn describe_carveout_admits_only_read_only_calls() {
+    const CARVEOUT: &str = r#"{
+      "allow": ["Bash(aws * describe-*)"],
+      "deny": ["Bash(aws:*)"]
+    }"#;
+    let rs = load_rules_str(CARVEOUT).expect("carve-out rules load");
+    let d = |cmd: &str| evaluate(&rs, "Bash", &json!({ "command": cmd }), Some(CWD)).tier;
+
+    // Genuine read-only calls across any single-token service still carve out.
+    assert_eq!(d("aws ec2 describe-instances"), Tier::Allow);
+    assert_eq!(d("aws rds describe-db-instances"), Tier::Allow);
+    assert_eq!(d("aws ec2 describe-instances --output json"), Tier::Allow);
+
+    // Mutating calls stay denied through every injection shape.
+    assert_eq!(d("aws ec2 terminate-instances"), Tier::Deny);
+    assert_eq!(
+        d("aws s3 rm s3://prod-bucket/describe-report.json"),
+        Tier::Deny
+    );
+    assert_eq!(d("aws iam delete-user --user-name describe-me"), Tier::Deny);
+    assert_eq!(
+        d("aws ec2 terminate-instances # describe-instances"),
+        Tier::Deny
+    );
+    assert_eq!(
+        d("aws iam delete-user --user-name x # describe-me"),
+        Tier::Deny
+    );
 }

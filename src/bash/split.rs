@@ -78,6 +78,22 @@ fn scan(s: &str, start: usize, end: usize, out: &mut Vec<(usize, usize)>) {
                 i += 1;
                 unit_start = i;
             }
+            // An unquoted `#` opening a word starts a comment that bash discards
+            // through end-of-line, so the matched text must exclude it too:
+            // otherwise `aws … # describe-instances` smuggles the substring a glob allow
+            // needs into a command whose executed part stays destructive. A `#`
+            // right after a redirection operator (`>#file`) is a target word, not a
+            // comment, so `<`/`>` are excluded to keep that target visible to the
+            // file-access cross-check.
+            b'#' if i == start
+                || matches!(b[i - 1], b' ' | b'\t' | b'\n' | b';' | b'&' | b'|' | b'(') =>
+            {
+                out.push((unit_start, i));
+                while i < end && b[i] != b'\n' {
+                    i += 1;
+                }
+                unit_start = i;
+            }
             _ => i += 1,
         }
     }
