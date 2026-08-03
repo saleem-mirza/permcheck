@@ -54,16 +54,33 @@ The hook decides against a JSON rule file, resolved first-hit-wins:
    `$CLAUDE_PROJECT_DIR`).
 3. The bundled default `rules/permcheck.json` (the canonical reference set).
 
+> **Every entry in that list is a policy source, so every entry needs protecting.**
+> Whoever can write `.permcheck/rules.json` sets the policy for the next tool
+> call, and whoever can set `$PERMCHECK_RULES` in the hook's environment picks the
+> file outright. The bundled rules deny `Write`/`Edit` on `.permcheck/**` and on
+> the `.claude/` policy and settings files for this reason; if you replace them
+> with your own, carry those denies over. The environment is outside what a rule
+> can reach, so treat it as trusted input like the rule file itself.
+
 For the rule grammar and matching semantics, see the
 [main README](https://github.com/saleem-mirza/permcheck#rules) and
 [SPEC](https://github.com/saleem-mirza/permcheck/blob/main/specs/SPEC.md).
 
 ## Platforms
 
-`hooks/permcheck-hook.sh` (POSIX), plus `hooks/permcheck-hook.cmd` for native
-Windows `cmd.exe`, selects a prebuilt binary from `bin/` by OS/arch:
-`permcheck-{darwin,linux,windows}-{arm64,x64}`. macOS, Linux, and
-Windows-under-git-bash are handled by the shell wrapper.
+`hooks/hooks.json` wires `hooks/permcheck-hook.sh`, which selects a prebuilt
+binary from `bin/` by OS/arch. Five binaries ship, matching the release matrix:
+
+| Platform | Binary |
+|---|---|
+| macOS (Apple silicon / Intel) | `permcheck-darwin-arm64` · `permcheck-darwin-x64` |
+| Linux (x64 / arm64, static musl) | `permcheck-linux-x64` · `permcheck-linux-arm64` |
+| Windows (x64; ARM runs it emulated) | `permcheck-windows-x64.exe` |
+
+`hooks/permcheck-hook.cmd` mirrors the wrapper for native `cmd.exe`. It is **not**
+wired by `hooks.json`, which runs the POSIX wrapper: on Windows that needs a `sh`
+on `PATH` (git-bash ships one). Point a hook at the `.cmd` yourself if you have no
+`sh`.
 
 If no binary matches the platform, the hook **fails open** (emits no decision, so
 Claude Code uses its normal permission flow) rather than blocking every call. To

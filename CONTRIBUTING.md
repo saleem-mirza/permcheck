@@ -65,16 +65,32 @@ Cut a release by pushing a tag:
 git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
-Each release attaches the five raw binaries **and** a ready-to-use
-`permcheck-plugin-<tag>.zip` (the whole plugin with `bin/` populated). Install that
-bundle directly:
+Each release attaches the five raw binaries, a ready-to-use
+`permcheck-plugin-<tag>.zip` (the whole plugin with `bin/` populated), and a
+`SHA256SUMS` covering both. Homebrew users get integrity from the formula's pinned
+`sha256`; `SHA256SUMS` is the equivalent anchor for the plugin and direct-download
+paths. Install the bundle directly:
 
 ```sh
 claude --plugin-url https://github.com/saleem-mirza/permcheck/releases/download/<tag>/permcheck-plugin-<tag>.zip
 ```
 
-Bump the `version` in both `Cargo.toml` and `plugin/.claude-plugin/plugin.json` before
-tagging, so already-installed users get the update.
+Before tagging:
+
+1. Bump `version` in both `Cargo.toml` and `plugin/.claude-plugin/plugin.json`, so
+   already-installed users get the update.
+2. If the blog changed, bump `<lastBuildDate>` in `docs/feed.xml` and `dateModified`
+   in `docs/when-deny-doesnt-win.html`.
+
+**Pinned actions.** Both workflows pin every action to a commit SHA with the tag in
+a trailing comment. To move one, resolve the new SHA and update both the pin and the
+comment:
+
+```sh
+curl -s https://api.github.com/repos/<owner>/<repo>/git/refs/tags/<tag> | jq -r .object.sha
+# if that returns an annotated tag object, dereference it:
+curl -s https://api.github.com/repos/<owner>/<repo>/git/tags/<sha> | jq -r .object.sha
+```
 
 ## Distribution repo (the install channel)
 

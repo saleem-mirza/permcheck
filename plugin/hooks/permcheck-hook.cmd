@@ -7,9 +7,10 @@ rem missing, so a platform mismatch never blocks every tool call.
 set "ROOT=%CLAUDE_PLUGIN_ROOT%"
 if "%ROOT%"=="" set "ROOT=%~dp0.."
 
-set "ARCH=x64"
-if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "ARCH=arm64"
-set "BIN=%ROOT%\bin\permcheck-windows-%ARCH%.exe"
+rem Only a windows-x64 binary is published (see .github/workflows/release.yml).
+rem Windows on ARM runs it under x64 emulation, so there is no arch branch here;
+rem adding one would point at a binary that is never built and fail open.
+set "BIN=%ROOT%\bin\permcheck-windows-x64.exe"
 
 if defined PERMCHECK_RULES (
   set "RULES=%PERMCHECK_RULES%"

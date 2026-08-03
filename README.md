@@ -144,7 +144,7 @@ Or add the hook yourself under `hooks.PreToolUse`, pointing `--rules` at your ru
         "hooks": [
           {
             "type": "command",
-            "command": "/abs/path/to/permcheck --hook --rules /abs/path/to/rules/permcheck.json"
+            "command": "/abs/path/to/permcheck --hook --rules \"/abs/path/to/rules/permcheck.json\""
           }
         ]
       }
@@ -229,11 +229,15 @@ permcheck <Tool> [payload] --rules <path> [--json]
 | `2` | deny |
 | `3` | config/usage error (bad arguments, unreadable or invalid rules file) |
 
-`--json` prints the same decision object as hook mode instead of using the exit code. `--rules` accepts either `--rules <path>` or `--rules=<path>`. Run `permcheck --version` to print the version, `permcheck --help` for full usage.
+`--json` prints the same decision object as hook mode instead of using the exit code. `--rules` accepts either `--rules <path>` or `--rules=<path>`. An unrecognized long flag is a usage error (exit `3`), never silently ignored. Run `permcheck --version` to print the version, `permcheck --help` for full usage (help goes to stdout; running with no arguments prints it to stderr and exits `3`).
 
-The CLI check and `--install` also print an author-time lint warning to stderr (never in hook mode):
+The CLI check and `--install` also print author-time lint warnings to stderr (never in hook mode). A flagged rule still loads; the lint names rules that are inert or that quietly loosen a restriction:
 
 - **Dead rule.** A `Bash(cmd:*)` specifier with a `*` before the `:*` compiles to a literal asterisk and matches nothing. Use the glob form `Bash(cmd …)` for a mid-command wildcard.
+- **Weakening carve-out: `ask` inside `deny`.** An `ask` whose match-set is a strict subset of a `deny` carves that deny out, so a block silently becomes a prompt, and a prompt can be approved.
+- **Weakening carve-out: `allow` inside `ask`.** An `allow` that is a strict subset of a broader `ask` and outranks it on specificity drops the prompt for that subset.
+
+A narrow `allow` inside a `deny` is **not** flagged: that is the intended read-only carve-out.
 
 ```sh
 permcheck Bash "cat notes.txt"          --rules rules/permcheck.json   # exit 0 (allow)

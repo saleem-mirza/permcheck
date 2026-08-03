@@ -91,7 +91,9 @@ Invoked as `permcheck <Tool> [payload] --rules <path> [--json]`.
 - `payload` is the tool's primary input string (a Bash command, a file path, a
   URL, …). If omitted, the tool is checked with an empty payload.
 - Exit codes: `0` = allow, `1` = ask, `2` = deny, `3` = config/usage error
-  (bad arguments, unreadable or invalid rules file).
+  (bad arguments, unreadable or invalid rules file). An unrecognized long flag
+  is a usage error, and so is invoking with no arguments; `-h`/`--help` prints
+  usage to stdout and exits `0`.
 - `--json` prints the same decision object as hook mode, pretty-printed for
   readability, instead of using the exit code.
 - Config errors surface as exit `3` in CLI mode. In hook mode the same
@@ -126,11 +128,19 @@ unrelated settings or other hooks.
 - **`--uninstall`** removes every permcheck hook entry and prunes emptied
   matcher groups / `PreToolUse` / `hooks` containers.
 - Detection is by command marker (contains `permcheck` and `--hook`), so a
-  user's other hooks are left untouched. Writes are atomic (temp file +
-  `rename`). A missing/empty file starts from `{}`, and a present-but-non-object
-  file is refused rather than clobbered. Both exit `0` on success (or when already in
+  user's other hooks are left untouched (the marker is a heuristic: a command
+  naming both `permcheck` and `--hook` matches, including a user's own wrapper
+  around it). The baked `--rules` path is recognized quoted or bare, so the
+  re-point refusal above also covers a hand-wired hook. Writes are atomic: a
+  per-process temp file, flushed with `sync_all`, then `rename` over the target.
+  A missing/empty file starts from `{}`, and a present-but-non-object file is
+  refused rather than clobbered. Both exit `0` on success (or when already in
   the desired state), `3` on a usage/IO error. These commands are portable across
-  Linux, macOS, and Windows (`$HOME` → `%USERPROFILE%` → `%HOMEDRIVE%%HOMEPATH%`).
+  Linux, macOS, and Windows. Home resolution is per-platform: POSIX reads `$HOME`
+  only, Windows tries `$HOME` → `%USERPROFILE%` → `%HOMEDRIVE%%HOMEPATH%`. The
+  same resolution serves `~` expansion in Path specifiers (§6.5), so the
+  directory `--install` writes a policy into and the directory a `~/…` rule
+  *inside* that policy expands to are always the same.
 
 ## 3. Rule file
 
@@ -379,6 +389,9 @@ decomposes it and takes the **most restrictive** verdict.
    dropped, as bash does, so a comment cannot feed matched text. A `#` inside a
    word (`feature#123`) or inside quotes is literal. The splitter is total: it
    never errors, and unterminated constructs are consumed to end of input.
+   Substitution nesting is bounded: past a fixed depth (far above any real
+   command) the splitter stops descending and the command is **denied**, since a
+   partial split could miss a denied inner command (§9.1).
 
 2. **Per unit**, strip leading `NAME=value` environment assignments, then decide
    the trimmed unit string against the Bash matchers via §6.3. The unit is also
@@ -397,8 +410,11 @@ decomposes it and takes the **most restrictive** verdict.
      **interpreter inline-code** invocation is canonicalized to `<interp> <flag>`
      (`python3 -cimport` / `python3 -W ignore -c` / `perl -we` / `node --eval` /
      `deno eval` → `python3 -c` / `perl -e` / `node -e` / `deno eval`) so every
-     spelling matches whatever the rules say about that interpreter. The
-     interpreter+flag vocabulary is an engine table (`python`, `perl`, `ruby`,
+     spelling matches whatever the rules say about that interpreter. A
+     **value-taking** flag keeps its value, because that is what the rule names:
+     `python3 -mhttp.server` and `python3 -Bmhttp.server` both canonicalize to
+     `python3 -m http.server`, while `python3 -mpytest` stays a different command.
+     The interpreter+flag vocabulary is an engine table (`python`, `perl`, `ruby`,
      `node`, `deno`, `php`, `bun`, `lua`, `Rscript`, …); the policy stays in the
      rules.
 
@@ -452,6 +468,11 @@ decomposes it and takes the **most restrictive** verdict.
 - Every fallible load step returns a result, and invalid rules fail at **load →
   deny**. No evaluation-path code panics on runtime input.
 - Hook mode wraps evaluation so that any unexpected panic becomes `deny`.
+- Recursive analysis is depth-bounded so it cannot exhaust the stack. A stack
+  overflow **aborts** the process rather than unwinding, so `catch_unwind` cannot
+  convert it to `deny` and the hook would exit non-zero with no decision — which
+  Claude Code treats as a non-blocking error, letting the call run. The Bash
+  splitter therefore caps substitution nesting and denies past the cap (§8.1).
 - Unreadable/invalid rules file, unparseable stdin, or a missing/empty tool name
   → `deny` (hook) or exit `3` (CLI, config errors only). An unrecognized
   non-empty tool name routes to Generic and is not an error (§5).
@@ -531,7 +552,7 @@ allows, so those commands are governed by the broad deny. Git read commands
 
 Two rows show both directions of the design: an active protection (`cat .env`)
 denies regardless of the fall-back, while a broad allow the rules do not narrow
-(`Bash(printenv:*)` exposes environment secrets) grants more than intended (§11).
+grants more than intended (§11).
 
 ## 11. Appendix: known issues in the reference rule set
 
@@ -551,14 +572,22 @@ correction backlog for the reference file.
    arbitrary-package runners under `yarn:*`/`pnpm:*`/`uv:*` (`yarn dlx`, `pnpm dlx`,
    `pnpm exec`, `uv run`, `uvx`, `uv tool run`) are denied. (`Bash(env:*)` is
    denied, and `env` is peeled as a wrapper so `env <cmd>` re-decides `<cmd>`,
-   §8.2.) Remaining open: `Bash(printenv:*)` exposes environment secrets,
-   `gh extension` installs runnable code, and dependency installs (`npm install`,
-   `pip install`, `gem install`, …) run package build/lifecycle code by design,
-   which a prefix deny cannot separate from a safe install. *Pattern:* pair any
-   broad interpreter/tool allow with denies for its exec/secret subforms, or move
-   it to `ask`; the install residual is a sandbox concern, not a rule fix. An
+   §8.2.) The same pairing now covers utilities whose *subform* runs a command or
+   writes in place while the tool itself stays broadly allowed: `find -exec` /
+   `-execdir` / `-ok` / `-okdir` (an arbitrary command runner that is invisible to
+   the splitter, since it is not a shell operator), `gh secret` and
+   `gh extension`, and `sed -i` / `perl -i`. `Bash(printenv:*)` moved from `allow`
+   to `ask`. Remaining open: dependency installs (`npm install`, `pip install`,
+   `gem install`, …) run package build/lifecycle code by design, which a prefix
+   deny cannot separate from a safe install. *Pattern:* pair any broad
+   interpreter/tool allow with denies for its exec/secret subforms, or move it to
+   `ask`; the install residual is a sandbox concern, not a rule fix. An
    interpreter not in the engine table (§9.2) is not normalized, but it takes the
    `defaultMode` fall-back, not a silent allow.
+
+   A subform deny must use the **glob** form when the flag can appear at any
+   argument position (`Bash(find *-exec *)`, `Bash(rm *--force*)`); the `cmd:*`
+   prefix form anchors at position 0 only.
 
 2. **Dead / redundant under command-splitting.** *Pattern:* one rule per simple
    command, and never put shell operators in a specifier. A specifier like
@@ -583,9 +612,11 @@ correction backlog for the reference file.
    `cp a b` matches no rule and takes the `defaultMode: "ask"` fall-back. Short
    destructive-flag variants are now normalized onto their single-flag rule
    (§8 step 2), so `rm -fr`, `rm -Rf`, `rm -r -f` all match `Bash(rm -f:*)` and
-   deny. Remaining open: the **long-form** flags (`rm --recursive --force`) are not
-   mapped to their short equivalents, so they still hit the `rm:*` **ask**.
-   *Pattern:* add explicit denies for the long-form spellings, or move `rm` to ask.
+   deny. The **long-form** flags are still not mapped to their short equivalents
+   by the engine (that pairing is per-utility and not standardized), so the
+   reference set carries an explicit `Bash(rm *--force*)` deny instead;
+   `rm --recursive` without force stays `ask`, symmetric with `rm -r`.
+   *Pattern:* when a utility supports both spellings, write a deny for each.
 
 4. **`gcp` vs `gcloud`** (fixed). `Bash(gcp:*)` denied a command named `gcp`, but
    the real GCP CLI is `gcloud` (also `gsutil`, `bq`). The reference now denies

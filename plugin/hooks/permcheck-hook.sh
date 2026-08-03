@@ -30,7 +30,11 @@ case "$(uname -m 2>/dev/null || echo unknown)" in
   *) arch=unknown ;;
 esac
 ext=""
-[ "$plat" = windows ] && ext=".exe"
+# Only a windows-x64 binary is published; Windows on ARM runs it emulated.
+if [ "$plat" = windows ]; then
+  ext=".exe"
+  arch=x64
+fi
 bin="$root/bin/permcheck-${plat}-${arch}${ext}"
 
 # --- resolve the rules file: env override, then project-local, then bundled ---
