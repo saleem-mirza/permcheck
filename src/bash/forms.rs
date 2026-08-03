@@ -94,119 +94,75 @@ fn git_subcommand_form(cmd: &str) -> Option<String> {
     Some(format!("git {}", tokens[i..].join(" ")))
 }
 
-/// An interpreter and the option forms that make it run inline code.
+/// An interpreter and the option forms that make it execute caller-supplied
+/// code: inline source (`-c`, `-e`) or a named module (`-m`).
 struct Interp {
     name: &'static str,
+    /// Flags whose canonical form is the flag alone (`python -c`).
     short: &'static [u8],
+    /// Flags whose value belongs in the canonical form, because the rule names
+    /// it (`python -m http.server`).
+    value_short: &'static [u8],
     long: &'static [(&'static str, &'static str)],
     subcommand: &'static [&'static str],
 }
 
+impl Interp {
+    const fn new(name: &'static str, short: &'static [u8]) -> Self {
+        Interp {
+            name,
+            short,
+            value_short: b"",
+            long: &[],
+            subcommand: &[],
+        }
+    }
+
+    const fn value_short(mut self, flags: &'static [u8]) -> Self {
+        self.value_short = flags;
+        self
+    }
+
+    const fn long(mut self, forms: &'static [(&'static str, &'static str)]) -> Self {
+        self.long = forms;
+        self
+    }
+
+    const fn subcommand(mut self, names: &'static [&'static str]) -> Self {
+        self.subcommand = names;
+        self
+    }
+}
+
+const NODE_LONG: &[(&str, &str)] = &[("--eval", "-e"), ("--print", "-p")];
+
 const INTERPRETERS: &[Interp] = &[
-    Interp {
-        name: "python",
-        short: b"c",
-        long: &[],
-        subcommand: &[],
-    },
-    Interp {
-        name: "python2",
-        short: b"c",
-        long: &[],
-        subcommand: &[],
-    },
-    Interp {
-        name: "python3",
-        short: b"c",
-        long: &[],
-        subcommand: &[],
-    },
-    Interp {
-        name: "pypy",
-        short: b"c",
-        long: &[],
-        subcommand: &[],
-    },
-    Interp {
-        name: "pypy3",
-        short: b"c",
-        long: &[],
-        subcommand: &[],
-    },
-    Interp {
-        name: "perl",
-        short: b"eE",
-        long: &[],
-        subcommand: &[],
-    },
-    Interp {
-        name: "perl5",
-        short: b"eE",
-        long: &[],
-        subcommand: &[],
-    },
-    Interp {
-        name: "ruby",
-        short: b"e",
-        long: &[],
-        subcommand: &[],
-    },
-    Interp {
-        name: "node",
-        short: b"ep",
-        long: &[("--eval", "-e"), ("--print", "-p")],
-        subcommand: &[],
-    },
-    Interp {
-        name: "nodejs",
-        short: b"ep",
-        long: &[("--eval", "-e"), ("--print", "-p")],
-        subcommand: &[],
-    },
-    Interp {
-        name: "bun",
-        short: b"e",
-        long: &[("--eval", "-e")],
-        subcommand: &[],
-    },
-    Interp {
-        name: "deno",
-        short: b"",
-        long: &[],
-        subcommand: &["eval"],
-    },
-    Interp {
-        name: "php",
-        short: b"r",
-        long: &[],
-        subcommand: &[],
-    },
-    Interp {
-        name: "lua",
-        short: b"e",
-        long: &[],
-        subcommand: &[],
-    },
-    Interp {
-        name: "luajit",
-        short: b"e",
-        long: &[],
-        subcommand: &[],
-    },
-    Interp {
-        name: "Rscript",
-        short: b"e",
-        long: &[],
-        subcommand: &[],
-    },
+    Interp::new("python", b"c").value_short(b"m"),
+    Interp::new("python2", b"c").value_short(b"m"),
+    Interp::new("python3", b"c").value_short(b"m"),
+    Interp::new("pypy", b"c").value_short(b"m"),
+    Interp::new("pypy3", b"c").value_short(b"m"),
+    Interp::new("perl", b"eE"),
+    Interp::new("perl5", b"eE"),
+    Interp::new("ruby", b"e"),
+    Interp::new("node", b"ep").long(NODE_LONG),
+    Interp::new("nodejs", b"ep").long(NODE_LONG),
+    Interp::new("bun", b"e").long(&[("--eval", "-e")]),
+    Interp::new("deno", b"").subcommand(&["eval"]),
+    Interp::new("php", b"r"),
+    Interp::new("lua", b"e"),
+    Interp::new("luajit", b"e"),
+    Interp::new("Rscript", b"e"),
 ];
 
-/// Return the canonical inline-code form for a known interpreter invocation.
+/// The canonical inline-code form for a known interpreter invocation. A
+/// value-taking flag keeps its value, so `python3 -mhttp.server` and
+/// `python3 -m http.server` both reach `python3 -m http.server`.
 fn inline_exec_candidate(cmd: &str) -> Option<String> {
-    let mut toks = cmd.split_ascii_whitespace();
+    let mut toks = cmd.split_ascii_whitespace().peekable();
     let name = basename(toks.next()?);
     let interp = INTERPRETERS.iter().find(|i| i.name == name)?;
-    for tok in toks {
+    while let Some(tok) = toks.next() {
         if tok == "--" {
             break;
         }
@@ -226,9 +182,21 @@ fn inline_exec_candidate(cmd: &str) -> Option<String> {
             }
             continue;
         }
-        for &c in &b[1..] {
+        // The first code-executing flag in the cluster decides the canonical
+        // form, bundled (`-We`) or with an attached value (`-mhttp.server`).
+        for (offset, &c) in b[1..].iter().enumerate() {
             if interp.short.contains(&c) {
                 return Some(format!("{name} -{}", c as char));
+            }
+            if interp.value_short.contains(&c) {
+                // The value follows the flag in this token, or is the next token.
+                let attached = &tok[2 + offset..];
+                let value = if attached.is_empty() {
+                    toks.peek().copied()
+                } else {
+                    Some(attached)
+                };
+                return value.map(|value| format!("{name} -{} {value}", c as char));
             }
             if !c.is_ascii_alphanumeric() {
                 break;
