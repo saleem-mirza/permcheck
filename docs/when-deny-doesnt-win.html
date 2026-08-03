@@ -531,12 +531,14 @@ literal + <span class="tok-k">if</span> has_wildcard { 0 } <span class="tok-k">e
         <tr><td><code>aws ec2 describe-instances</code></td><td><span class="v deny">deny</span></td><td><span class="v allow">allow</span></td><td><code>aws * describe-*</code> is a strict subset carve-out of <code>aws:*</code> deny</td></tr>
         <tr><td><code>aws ec2 terminate-instances</code></td><td><span class="v deny">deny</span></td><td><span class="v deny">deny</span></td><td>only <code>aws:*</code> deny matches</td></tr>
         <tr><td><code>aws iam delete-user --user-name describe-me</code></td><td><span class="v deny">deny</span></td><td><span class="v deny">deny</span></td><td>the <code>*</code> service slot is one token, so <code>describe-*</code> must match the operation, not an argument value</td></tr>
-        <tr><td><code>kubectl get secret db --namespace dev</code></td><td><span class="v deny">deny</span></td><td><span class="v deny">deny</span></td><td>the allow <code>kubectl get * --namespace dev</code> is longer and overlaps the deny <code>kubectl get secret:*</code>, but is not inside it</td></tr>
+        <tr><td><code>kubectl get secret --namespace dev</code></td><td><span class="v deny">deny</span></td><td><span class="v deny">deny</span></td><td>the allow <code>kubectl get * --namespace dev</code> is longer and overlaps the deny <code>kubectl get secret:*</code>, but is not inside it</td></tr>
       </tbody>
     </table>
   </div>
 
   <p>That last row separates containment from length. <code>kubectl get * --namespace dev</code> is the longer, higher-scoring rule, and it matches the call. It still loses, because it also matches <code>kubectl get pods --namespace dev</code>, which the deny does not touch. The allow reaches outside the deny, so it is an overlap rather than an exception, and the deny holds for every call in the intersection. Score never enters this decision. Compare the first row, where the allow nests: every command <code>aws * describe-*</code> matches is also an <code>aws</code> command, so the exception sits wholly inside the rule it contradicts. Longer is not the test. Contained is.</p>
+
+  <p>The same slot rule that protects the <code>aws</code> carve-out applies here: <code>kubectl get * --namespace dev</code> binds exactly one token, so it matches <code>kubectl get secret --namespace dev</code> but not <code>kubectl get secret db --namespace dev</code>. That second call reaches no allow at all and takes the fall-back or the deny, which is why the carve-out question only arises for the single-token form.</p>
 
   <p>The <code>aws iam</code> row is why the slot matters. The call is a real, destructive IAM operation whose only <code>describe-</code> sits in an argument value. Because the space-fenced <code>*</code> matches a single service token, <code>describe-*</code> lands on the operation name, <code>delete-user</code>, and fails; the <code>describe-me</code> value never enters the comparison. That single-token binding is what keeps a service-wildcarded read-only carve-out safe.</p>
 
@@ -726,6 +728,7 @@ deny:  Bash(python3 -c:*)       <span class="tok-c"># holds: the allow is not a 
     <li><strong>File reads outside the covered tool set.</strong> The cross-check knows a fixed list: the reader utilities, <code>dd</code>, and the <code>curl</code>/<code>wget</code> file-read forms. A secret read by a tool outside it (<code>tar</code>, <code>git</code>, <code>cp</code>, an editor) is not followed.</li>
     <li><strong>Enumerated interpreter and exfiltration coverage.</strong> Known inline-code and upload forms are normalized, but coverage is still an explicit list. An unlisted interpreter or exfiltration utility sits outside it.</li>
     <li><strong>Data-dependent arguments.</strong> permcheck recognizes a literal command following <code>xargs</code>, but it does not reconstruct arguments that <code>xargs</code> receives from stdin.</li>
+    <li><strong>Command runners hidden in arguments.</strong> <code>find -exec</code> runs a command without any shell operator, so the splitter never sees it; only a rule catches it. The shipped policy denies the <code>-exec</code> family, but the general shape (a broadly allowed tool with a subcommand that executes something else) is one you have to spot in your own allow-list.</li>
     <li><strong>Heredocs.</strong> Heredoc bodies are not modeled, which biases toward over-deny, the safe direction. (Unquoted <code>#</code> comments <em>are</em> stripped before matching, as bash discards them, so a comment cannot smuggle a substring into the matched text.)</li>
     <li><strong>Adversarial glob patterns.</strong> Path matching is a plain backtracker, not hardened against catastrophic backtracking. The trusted-config assumption above is what makes that acceptable.</li>
   </ul>
@@ -814,8 +817,11 @@ deny:  Bash(python3 -c:*)       <span class="tok-c"># holds: the allow is not a 
   <pre><code>deny: Edit(//**/.claude/permcheck.json)
 deny: Write(//**/.claude/permcheck.json)
 deny: Edit(//**/.claude/settings.json)
-deny: Write(//**/.claude/settings.json)</code></pre>
-  <p>This raises the bar without sealing it. permcheck does not guarantee the integrity of the file it reads: an edit made out of band, or through a tool permcheck does not model, sits outside its view. For a hard guarantee, put the authoritative rules in enterprise <code>managed-settings.json</code> or enforce them in the OS sandbox. Both are enforcement layers outside the hook that the agent cannot modify.</p>
+deny: Write(//**/.claude/settings.json)
+deny: Edit(//**/.permcheck/**)
+deny: Write(//**/.permcheck/**)</code></pre>
+  <p>That list has to cover <em>every</em> location a decision can be read from, not just the canonical one. The plugin also honours a per-project <code>.permcheck/rules.json</code> and a <code>$PERMCHECK_RULES</code> override, and <code>--install --local</code> writes a <code>.local.json</code> variant. Miss one and a single auto-approved write swaps the policy out from under the next call, which is why the denies above are broader than the one file the hook usually reads.</p>
+  <p>This raises the bar without sealing it. permcheck does not guarantee the integrity of the file it reads: an edit made out of band, through a tool permcheck does not model, or through the hook's environment, sits outside its view. For a hard guarantee, put the authoritative rules in enterprise <code>managed-settings.json</code> or enforce them in the OS sandbox. Both are enforcement layers outside the hook that the agent cannot modify.</p>
 
   <h2 id="start-in-two-lines">Start in two lines</h2>
   <p>The plugin ships prebuilt binaries for macOS, Linux, and Windows and wires the hook without touching your <code>settings.json</code>:</p>
@@ -850,9 +856,7 @@ permcheck Read <span class="tok-k">"/home/user/.ssh/id_rsa"</span> --rules permc
 
   <div class="callout">
     <p class="label">What you are installing</p>
-    <p>permcheck is Apache-2.0. One Rust binary, two dependencies (<code>serde</code> and <code>serde_json</code>), no network access and no telemetry. In hook mode it reads one tool call on stdin and writes one decision; it never executes the call. The <a href="https://github.com/saleem-mirza/marketplace">plugin marketplace</a> and the <a href="https://github.com/saleem-mirza/homebrew-tap">Homebrew tap</a> in the commands above are both public: the marketplace repo carries the hook wiring and the complete reference policy, 249 rules, so you read every rule that will decide your tool calls before you install one, and the tap's formula pins a SHA-256 for each release binary.</p>
-    <p>The engine ships with a test suite of roughly 200 cases. The ones that matter for a security tool are the adversarial suites: 20 evasion cases against the shipped reference set, a file-access cross-check suite of 19, a tokenizer and compound-splitter corpus, and a <em>known issues</em> file that locks the reference rule set's documented gaps as regression tests, so a gap that silently changes shape fails the build. A separate harness drives every verdict in this post through the real hook interface against the downloadable policy, so the prose and the policy cannot drift apart.</p>
-    <p>The engine source is not public. What that costs you is the ability to audit the matcher; what it does not cost you is the ability to audit the policy or to check the behavior, since the appendix file reproduces every claim in this post on your own machine and the CLI reports its reasoning on each call.</p>
+    <p>One Apache-2.0 Rust binary with two dependencies, no network access and no telemetry. It reads one tool call on stdin and writes one decision; it never executes the call. <strong>The engine source is not public</strong>, so you cannot audit the matcher. You can audit the policy: the <a href="https://github.com/saleem-mirza/marketplace">marketplace repo</a> carries all 249 reference rules in the clear, and the <a href="#appendix-sample-policy">appendix policy</a> reproduces every verdict in this post on your own machine.</p>
   </div>
 
   <p>A deny-first model is safe but cannot express every bounded exception. permcheck adds the missing axis: a proven-narrower rule carves out the one it contradicts. It is not a sandbox or an intent detector, only the conflict-resolution strategy that keeps a policy from collapsing into all or nothing.</p>
@@ -937,7 +941,7 @@ permcheck Bash <span class="tok-k">"cat .env"</span> --rules permcheck.json
 permcheck Bash <span class="tok-k">"python3 -c 'import os'"</span> --rules permcheck.json
 <span class="tok-c"># exit 2 — the inline-code deny holds under the Python allow</span>
 
-permcheck Bash <span class="tok-k">"kubectl get secret db --namespace dev"</span> --rules permcheck.json
+permcheck Bash <span class="tok-k">"kubectl get secret --namespace dev"</span> --rules permcheck.json
 <span class="tok-c"># exit 2 — the longer allow overlaps the deny instead of nesting inside it</span>
 
 permcheck Bash <span class="tok-k">"kubectl get pods --namespace dev"</span> --rules permcheck.json
