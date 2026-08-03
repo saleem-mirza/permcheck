@@ -442,7 +442,7 @@
   <p>The goal is simple: let the agent inspect your cloud, but never change it. You write the obvious policy:</p>
   <pre><code>deny:  Bash(aws:*)
 allow: Bash(aws * describe-*)</code></pre>
-  <p><code>aws ec2 describe-instances</code> matches both. Watch the two models diverge:</p>
+  <p><code>aws ec2 describe-instances</code> matches both, and the two models diverge on it:</p>
 
   <figure class="fig">
     <svg viewBox="0 0 860 470" role="img" aria-label="The same AWS describe command enters two parallel permission models. Native deny precedence blocks it, while permcheck recognizes the narrower allow as a strict-subset carve-out and allows it.">
@@ -529,7 +529,7 @@ permcheck Bash <span class="tok-k">"aws ec2 terminate-instances"</span> --rules 
     </table>
   </div>
 
-  <p>That last row separates containment from length. <code>kubectl get * --namespace dev</code> is the longer, higher-scoring rule, and it matches the call. It still loses: it also matches <code>kubectl get pods --namespace dev</code>, which the deny does not touch, so it is an overlap rather than an exception, and the deny holds for every call in the intersection. Longer is not the test. Contained is.</p>
+  <p>That last row separates containment from length. <code>kubectl get * --namespace dev</code> is the longer, higher-scoring rule, and it matches the call. It still loses: it also matches <code>kubectl get pods --namespace dev</code>, which the deny does not touch, so it is an overlap rather than an exception, and the deny holds for every call in the intersection. The test is containment, not length.</p>
 
   <p>The <code>aws iam</code> row is the slot rule at work: the space-fenced <code>*</code> matches a single service token, so <code>describe-*</code> lands on the operation name, <code>delete-user</code>, and fails; the <code>describe-me</code> argument value never enters the comparison. That binding keeps a service-wildcarded read-only carve-out safe.</p>
 
@@ -577,7 +577,7 @@ permcheck Bash <span class="tok-k">"aws ec2 terminate-instances"</span> --rules 
   <p>The non-Bash routes are shorter and identical in kind: path-oriented calls such as <code>Read</code> match normalized paths, every other tool matches strings, and the same containment and specificity rules resolve the conflict, which is why a bare <code>Read</code> allow does not override a narrower secret-path deny. Web matching extracts the full hostname, so a rule for <code>example.com</code> matches <code>https://example.com/path</code> but not <code>example.com.evil.com</code>.</p>
 
   <h2 id="closing-the-side-doors">Closing the side doors</h2>
-  <p>A precise allow-list is worthless if a command slips around it. permcheck treats <code>Bash</code> as the danger surface it is. Three defenses, each with a concrete bypass it kills.</p>
+  <p>A precise allow-list is worthless if a command slips around it, so permcheck treats <code>Bash</code> as the danger surface it is and applies three defenses to it. Each one closes a concrete bypass.</p>
 
   <h3>Compound commands split apart</h3>
   <p>One denied unit denies the whole line.</p>
@@ -628,7 +628,7 @@ permcheck Bash <span class="tok-k">"aws ec2 terminate-instances"</span> --rules 
   <h3>Wrappers get peeled</h3>
   <p>A denied command tries to ride in behind a wrapper the deny does not name:</p>
   <pre><code>timeout 5 aws ec2 terminate-instances   <span class="tok-c"># peels to the aws call → DENIED</span></code></pre>
-  <p>Without peeling, <code>timeout 5 aws …</code> matches no rule and falls back to <code>ask</code>, laundering the <code>aws</code> deny. So permcheck strips the leading wrapper (<code>timeout</code>, <code>sudo</code>, <code>env</code>, <code>nice</code>, <code>doas</code>, including nested ones like <code>sudo env aws …</code>) and re-decides the command behind it. The peel only ever <em>raises</em> a verdict, so wrapping an allowed command carries no allow through: <code>timeout 5 ls</code> resolves to <code>ask</code>, not <code>allow</code>.</p>
+  <p>Without peeling, <code>timeout 5 aws …</code> matches no rule and falls back to <code>ask</code>, which launders the <code>aws</code> deny. So permcheck strips the leading wrapper (<code>timeout</code>, <code>sudo</code>, <code>env</code>, <code>nice</code>, <code>doas</code>, including nested ones like <code>sudo env aws …</code>) and re-decides the command behind it. The peel only ever <em>raises</em> a verdict, so wrapping an allowed command carries no allow through: <code>timeout 5 ls</code> resolves to <code>ask</code>, not <code>allow</code>.</p>
 
   <h3>File reads and writes get cross-checked against path rules</h3>
   <p>You deny <code>Read(//**/.env*)</code> to protect secrets. The agent reaches for the shell instead:</p>
@@ -724,7 +724,7 @@ deny:  Bash(python3 -c:*)       <span class="tok-c"># holds: the allow is not a 
     <li><strong>Heredocs.</strong> Heredoc bodies are not modeled, which biases toward over-deny, the safe direction. Unquoted <code>#</code> comments <em>are</em> stripped before matching, as bash discards them.</li>
     <li><strong>Adversarial glob patterns.</strong> Path matching is a plain backtracker, not hardened against catastrophic backtracking. The trusted-config assumption above is what makes that acceptable.</li>
   </ul>
-  <p>Syntax the analyzer does not safely interpret is denied; coverage gaps instead produce false negatives when runtime behavior falls outside the forms it understands. Safe-by-default is a posture, not a proof, which is why permcheck needs an OS sandbox or another boundary beneath it. Found a bypass these lists miss? Report it on the <a href="https://github.com/saleem-mirza/marketplace/issues">marketplace issue tracker</a>.</p>
+  <p>Syntax the analyzer does not safely interpret is denied; coverage gaps instead produce false negatives when runtime behavior falls outside the forms it understands. That safe default is a posture rather than a proof, which is why permcheck needs an OS sandbox or another boundary beneath it. Found a bypass these lists miss? Report it on the <a href="https://github.com/saleem-mirza/marketplace/issues">marketplace issue tracker</a>.</p>
 
   <h2 id="where-it-fits">Where it fits</h2>
   <p>The OS sandbox and enterprise <code>managed-settings.json</code> are the boundary; permcheck layers on top of them to express the narrow exceptions the native precedence model leaves out. It merges with your existing PreToolUse hooks, and a <code>deny</code> from any of them still wins.</p>
@@ -806,7 +806,7 @@ deny: Write(//**/.claude/settings.json)
 deny: Edit(//**/.permcheck/**)
 deny: Write(//**/.permcheck/**)</code></pre>
   <p>The list covers <em>every</em> location a decision is read from, not only the canonical file: the plugin also honours a per-project <code>.permcheck/rules.json</code>, a <code>$PERMCHECK_RULES</code> override, and the <code>.local.json</code> variant that <code>--install --local</code> writes. Miss one and a single auto-approved write swaps the policy out from under the next call.</p>
-  <p>This raises the bar without sealing it: an edit made out of band, through a tool permcheck does not model, or through the hook's environment, sits outside its view. For a hard guarantee, put the authoritative rules in enterprise <code>managed-settings.json</code> or enforce them in the OS sandbox, layers the agent cannot modify.</p>
+  <p>This raises the bar without sealing it: an edit made out of band, through a tool permcheck does not model, or through the hook's environment, sits outside its view. For a hard guarantee, put the authoritative rules in enterprise <code>managed-settings.json</code> or enforce them in the OS sandbox, layers beyond the agent's reach.</p>
 
   <h2 id="start-in-two-lines">Start in two lines</h2>
   <p>The plugin ships prebuilt binaries for macOS, Linux, and Windows and wires the hook without touching your <code>settings.json</code>:</p>
@@ -841,16 +841,16 @@ permcheck Read <span class="tok-k">"/home/user/.ssh/id_rsa"</span> --rules permc
 
   <div class="callout">
     <p class="label">What you are installing</p>
-    <p>One Apache-2.0 Rust binary with two dependencies, no network access and no telemetry. It reads one tool call on stdin and writes one decision; it never executes the call. <strong>The engine source is not public</strong>, so you cannot audit the matcher. You can audit the policy: the <a href="https://github.com/saleem-mirza/marketplace">marketplace repo</a> carries all 249 reference rules in the clear, and the <a href="#appendix-sample-policy">appendix policy</a> reproduces every verdict in this post on your own machine.</p>
+    <p>One Apache-2.0 Rust binary with two dependencies, no network access and no telemetry. It reads one tool call on stdin and writes one decision; it never executes the call. <strong>The engine source is not public</strong>, so the matcher is closed to audit. The policy is open: the <a href="https://github.com/saleem-mirza/marketplace">marketplace repo</a> carries all 249 reference rules in the clear, and the <a href="#appendix-sample-policy">appendix policy</a> reproduces every verdict in this post on your own machine.</p>
   </div>
 
-  <p>A deny-first model is safe but cannot express every bounded exception. permcheck adds only the missing conflict rule, a proven-narrower exception carving out the rule it contradicts: not a sandbox, not an intent detector.</p>
+  <p>A deny-first model is safe but too coarse to express a bounded exception. permcheck adds only the missing conflict rule, under which a proven-narrower exception carves out the rule it contradicts. It is neither a sandbox nor an intent detector.</p>
 
   <h2 id="four-recipes">Four policies to start from</h2>
   <p>Each recipe is a rule fragment you paste into the <code>allow</code> and <code>deny</code> lists of your <code>permcheck.json</code>, plus one command that proves it works. Every verdict below is reproducible: run the check, read the exit code.</p>
 
   <h3>1. Read-only cloud</h3>
-  <p>The policy this post opened on. Inspection stays open, mutation closes.</p>
+  <p>The policy this post opened on: inspection stays open, mutation stays closed.</p>
   <pre><code>deny:  Bash(aws:*)
 allow: Bash(aws * describe-*)
 allow: Bash(aws * list-*)
@@ -859,7 +859,7 @@ permcheck Bash <span class="tok-k">"aws ec2 terminate-instances"</span> --rules 
   <p>Both allows are strict subsets of the deny, so both carve out; everything else under <code>aws</code> stays denied. Repeat the shape for <code>kubectl get</code> or <code>gcloud * list</code>.</p>
 
   <h3>2. No secret reads</h3>
-  <p>Denies the paths, not the tools, so the shell route closes with them.</p>
+  <p>The denies name paths rather than tools, so the shell route closes along with the direct one.</p>
   <pre><code>deny: Read(//**/.env*)
 deny: Read(//**/id_rsa*)
 deny: Read(//**/.aws/credentials)
