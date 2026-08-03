@@ -21,7 +21,11 @@ pub use tokenize::{RedirectKind, Token, tokenize};
 
 /// Decide a Bash command by aggregating per-unit verdicts (§8).
 pub fn decide_bash(command: &str, rs: &RuleSet, cwd: Option<&str>) -> Decision {
-    let units = split::units(command);
+    let (units, too_deep) = split::units(command);
+    // Incomplete units could miss a denied inner command, so fail closed (§9.1).
+    if too_deep {
+        return Decision::deny_msg("bash: substitution nesting too deep");
+    }
     if units.is_empty() {
         // Empty / whitespace-only command matches no Bash rule -> fall-back tier.
         return Decision::for_call(rs.default_tier, "Bash", command);
