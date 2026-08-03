@@ -117,14 +117,12 @@ impl RuleSet {
         }
 
         // Weakening carve-outs: a narrower rule that loosens a broader restriction.
-        let strict_subset = |a: &Matcher, b: &Matcher| {
-            matcher::matcher_subset(a, b) && !matcher::matcher_subset(b, a)
-        };
+        // Only same-tool rules interact, so pair within each tool bucket. File
+        // order on the outer loop keeps the warning list deterministic.
+        let strict_subset = matcher::is_strict_carve_out;
         for narrow in &self.rules {
-            for broad in &self.rules {
-                if narrow.tool != broad.tool {
-                    continue;
-                }
+            for &broad_idx in self.rules_for(&narrow.tool) {
+                let broad = &self.rules[broad_idx];
                 // An `ask` inside a `deny` downgrades a hard block to a prompt.
                 if narrow.tier == Tier::Ask
                     && broad.tier == Tier::Deny
@@ -135,8 +133,8 @@ impl RuleSet {
                         narrow.source, broad.source,
                     ));
                 }
-                // A more-specific `allow` inside a broader `ask` wins on specificity
-                // and drops the prompt for that subset.
+                // A more-specific `allow` inside a broader `ask` wins on
+                // specificity and drops the prompt for that subset.
                 if narrow.tier == Tier::Allow
                     && broad.tier == Tier::Ask
                     && narrow.specificity > broad.specificity
@@ -231,6 +229,10 @@ const DEFAULT_RULES: &str = include_str!("../rules/permcheck.json");
 /// destructive removes, secret reads (which also gate shell readers through the
 /// file-access cross-check), history-rewriting push, and edits to permcheck's own
 /// policy and its wiring.
+///
+/// The policy denies cover every location a decision can be read from: the
+/// `.local` scope variants and the plugin's `.permcheck/` override. Miss one and
+/// an allowed `Write` swaps the policy out from under the next call.
 const STARTER_DENY: &[&str] = &[
     "Bash(sudo:*)",
     "Bash(rm -f:*)",
@@ -240,8 +242,14 @@ const STARTER_DENY: &[&str] = &[
     "Read(//**/.ssh/**)",
     "Edit(//**/.claude/permcheck.json)",
     "Write(//**/.claude/permcheck.json)",
+    "Edit(//**/.claude/permcheck.local.json)",
+    "Write(//**/.claude/permcheck.local.json)",
     "Edit(//**/.claude/settings.json)",
     "Write(//**/.claude/settings.json)",
+    "Edit(//**/.claude/settings.local.json)",
+    "Write(//**/.claude/settings.local.json)",
+    "Edit(//**/.permcheck/**)",
+    "Write(//**/.permcheck/**)",
 ];
 
 /// A starter rules value for `permcheck --init-rules`: the minimal safe [`STARTER_DENY`]
@@ -309,6 +317,23 @@ mod starter_tests {
                 deny.iter().any(|r| r == needle),
                 "starter deny missing {needle}"
             );
+        }
+
+        // Every location a decision can be read from must be write-protected.
+        for path in [
+            "//**/.claude/permcheck.json",
+            "//**/.claude/permcheck.local.json",
+            "//**/.claude/settings.json",
+            "//**/.claude/settings.local.json",
+            "//**/.permcheck/**",
+        ] {
+            for tool in ["Edit", "Write"] {
+                let needle = format!("{tool}({path})");
+                assert!(
+                    deny.iter().any(|r| r == &needle),
+                    "starter deny missing {needle}"
+                );
+            }
         }
 
         // The written form loads, lints clean, and falls back to ask.

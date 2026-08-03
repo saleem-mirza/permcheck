@@ -48,9 +48,13 @@ fn issue3_rm_short_flag_variants_are_now_denied() {
     assert_eq!(bash("rm -r -f /tmp/x"), Tier::Deny);
     // Recursive-only rm (no force) stays on the ask-tier `rm:*`.
     assert_eq!(bash("rm -r /tmp/x"), Tier::Ask);
-    // Long-form flags are not normalized to their short equivalents, so this
-    // still slips to ask (documented gap).
-    assert_eq!(bash("rm --recursive --force /tmp/x"), Tier::Ask);
+    // §11.3 fixed at the rule level: the engine still does not map a long flag
+    // onto its short equivalent, so the reference set carries an explicit
+    // `rm *--force*` deny that matches the flag at any argument position.
+    assert_eq!(bash("rm --recursive --force /tmp/x"), Tier::Deny);
+    assert_eq!(bash("rm --force /tmp/x"), Tier::Deny);
+    // Recursive-only stays symmetric with its short spelling: both ask.
+    assert_eq!(bash("rm --recursive /tmp/x"), Tier::Ask);
 }
 
 #[test]
