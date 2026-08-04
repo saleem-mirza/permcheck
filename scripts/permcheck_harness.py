@@ -166,8 +166,16 @@ CASES: list[Case] = [
 # policy so the payload denies — the assertion here does not change.
 
 def B(command, why, label):
-    """An adversarial Bash case: secure verdict is always deny."""
+    """An adversarial Bash case whose secure verdict is deny."""
     return C("Bash", "deny", {"command": command, "description": "adversarial"},
+             why, command, label)
+
+
+def BG(command, why, label):
+    """An adversarial Bash case the policy deliberately *gates* rather than
+    blocks: the secure verdict is `ask`, so the call prompts instead of running
+    silently. Used where a blanket deny would block routine legitimate use."""
+    return C("Bash", "ask", {"command": command, "description": "adversarial"},
              why, command, label)
 
 
@@ -249,14 +257,17 @@ ADVERSARIAL_STRENGTHS: list[Case] = [
     B("grep AWS /proc/1234/environ",
       "the deny is per-pid, so another process's environment is covered too",
       "adv proc environ pid"),
+    # Gated, not blocked: `printenv PATH` is routine, so the policy prompts
+    # rather than blocking. What must not regress is the silent-allow verdict.
+    BG("printenv AWS_SECRET_ACCESS_KEY",
+       "printenv:* is ask, so dumping an env secret prompts instead of running silently",
+       "adv printenv"),
 ]
 
-# Gaps: the shipped policy leaks today (current verdict in the note). These are
-# EXPECTED to FAIL until the engine or the policy closes them.
-ADVERSARIAL_GAPS: list[Case] = [
-    B("printenv AWS_SECRET_ACCESS_KEY",
-      "now allow: printenv:* allow dumps environment secrets (authoring gap)", "adv printenv"),
-]
+# Gaps: payloads the shipped policy leaks today, EXPECTED to FAIL until the
+# engine or the policy closes them. Empty means nothing this harness knows how
+# to express is currently leaking; add an entry when a new leak is found.
+ADVERSARIAL_GAPS: list[Case] = []
 
 
 class Harness:
@@ -335,13 +346,14 @@ def run_tests(h: Harness, cross_check: bool) -> bool:
 def run_adversarial(h: Harness, cross_check: bool) -> bool:
     """Black-box break attempts against the shipped policy.
 
-    Every case asserts the secure verdict (deny). Strengths are expected to
+    Every case asserts the secure verdict, which is `deny` unless the policy
+    deliberately gates the payload at `ask` instead. Strengths are expected to
     hold; the documented gaps are expected to FAIL until closed. Returns True
     only when nothing failed, so the process exits non-zero while a gap leaks.
     """
     print(f"ADVERSARIAL (hook mode)  binary={h.binary}\n"
           f"                         rules={h.rules}\n")
-    print("Each case asserts the SECURE verdict (deny). Strengths must hold;")
+    print("Each case asserts the SECURE verdict. Strengths must hold;")
     print("the documented gaps FAIL until the engine or policy closes them.\n")
 
     cols = f"{'RESULT':7} {'SECURE':6} {'HOOK':6}"
@@ -353,6 +365,9 @@ def run_adversarial(h: Harness, cross_check: bool) -> bool:
     for title, group in (("STRENGTHS (must hold)", ADVERSARIAL_STRENGTHS),
                          ("GAPS (leak today, expected FAIL)", ADVERSARIAL_GAPS)):
         print(title)
+        if not group:
+            print("  none\n")
+            continue
         print(cols)
         print("-" * (len(cols) + 24))
         for c in group:
@@ -379,7 +394,9 @@ def run_adversarial(h: Harness, cross_check: bool) -> bool:
     total = len(ADVERSARIAL_STRENGTHS) + len(ADVERSARIAL_GAPS)
     print("-" * (len(cols) + 24))
     print(f"{total_passed} passed, {total_failed} failed, {total} total")
-    print("(a nonzero exit is expected while any gap still leaks)\n")
+    if ADVERSARIAL_GAPS:
+        print("(a nonzero exit is expected while any gap still leaks)")
+    print()
     return total_failed == 0
 
 
