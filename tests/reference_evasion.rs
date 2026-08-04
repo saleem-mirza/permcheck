@@ -165,7 +165,7 @@ fn path_qualified_denied_binaries_are_denied() {
     // A denied binary invoked by absolute or relative path is decided by the same
     // rule as the bare name: the leading executable token is basename-normalized
     // before matching, so a path prefix cannot launder it past the `Bash(cmd:*)`
-    // deny (unlike name obfuscation, which only downgrades to ask).
+    // deny.
     assert_all_deny(&[
         "/usr/bin/aws ec2 terminate-instances",
         "/bin/rm -rf /tmp/x",
