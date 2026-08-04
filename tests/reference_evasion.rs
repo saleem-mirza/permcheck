@@ -389,6 +389,25 @@ fn redirection_to_denied_files_is_denied() {
 }
 
 #[test]
+fn reader_option_values_do_not_shift_the_operands() {
+    // Against the shipped rules: a value-taking option must not push the pattern
+    // into a file position. `grep -m 5 .env notes.txt` searched only notes.txt,
+    // yet was denied because `5` was read as the pattern and `.env` as a file.
+    assert_eq!(bash("grep -m 5 .env notes.txt"), Tier::Allow);
+    assert_eq!(bash("grep -A 3 .env notes.txt"), Tier::Allow);
+    assert_eq!(bash("grep --max-count 5 .env notes.txt"), Tier::Allow);
+    assert_eq!(bash("grep -rn --context 2 .env src"), Tier::Allow);
+    // The real read is still caught in every one of those spellings.
+    assert_all_deny(&[
+        "grep -m 5 secret /work/.env",
+        "grep -A 3 secret /work/.env",
+        "grep --max-count 5 secret /work/.env",
+        "grep --exclude-from /work/.env pattern notes.txt",
+        "awk -F , '{print}' /work/.env",
+    ]);
+}
+
+#[test]
 fn secret_file_coverage_includes_dotfile_and_bare_forms() {
     // Hardening: the real Vault token is a dotfile (`.vault-token`) that a bare
     // `vault*` rule misses, and a `backup*` secret can be a file, not only a

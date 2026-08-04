@@ -61,16 +61,109 @@ const PATTERN_FIRST: &[&str] = &[
 const WRITERS: &[&str] = &["tee", "truncate"];
 
 enum ReaderOpt<'a> {
+    /// Supplies the pattern inline (`-e`, `--regexp`), so the first positional
+    /// is a file rather than the pattern.
     Pattern(Option<&'a str>),
-    File(Option<&'a str>),
+    /// Names a file that supplies the pattern (`-f`, `--file`): the file is
+    /// read, and the first positional is a file too.
+    PatternFile(Option<&'a str>),
+    /// Names a file the reader opens without supplying the pattern
+    /// (`--exclude-from`), so the pattern operand is still to come.
+    AuxFile(Option<&'a str>),
+}
+
+/// Options that take a **separate** value and name neither a pattern nor a file,
+/// keyed by reader. Their value has to be consumed, because a leftover value is
+/// misread as the next operand: `grep -m 5 .env notes.txt` took `5` as the
+/// pattern and then checked `.env` as a file, denying a command that only ever
+/// searched `notes.txt`.
+///
+/// The table is deliberately short, and it lists only options whose value is
+/// mandatory and separable. Skipping a token that is really a file operand would
+/// under-deny, which is the dangerous direction, so an option is left out
+/// whenever its arity varies: `sed -i` takes a mandatory suffix on BSD and an
+/// optional attached one on GNU, and `--color` takes a value only in the
+/// `=` form. Both stay unlisted, which costs one harmless extra path check.
+///
+/// An option that names a file (`-f`, `--file`, `--exclude-from`) belongs in
+/// [`reader_option`] instead, so its value is checked rather than skipped.
+struct ValueOpts {
+    short: &'static [u8],
+    long: &'static [&'static str],
+}
+
+const GREP_VALUE_OPTS: ValueOpts = ValueOpts {
+    short: b"mABCdD",
+    long: &[
+        "--max-count",
+        "--after-context",
+        "--before-context",
+        "--context",
+        "--directories",
+        "--devices",
+        "--binary-files",
+        "--label",
+        "--include",
+        "--exclude",
+        "--exclude-dir",
+    ],
+};
+
+const AWK_VALUE_OPTS: ValueOpts = ValueOpts {
+    short: b"vF",
+    long: &[],
+};
+
+const NO_VALUE_OPTS: ValueOpts = ValueOpts {
+    short: b"",
+    long: &[],
+};
+
+fn value_opts(name: &str) -> &'static ValueOpts {
+    match name {
+        "grep" | "egrep" | "fgrep" | "zgrep" | "rgrep" => &GREP_VALUE_OPTS,
+        "awk" | "gawk" => &AWK_VALUE_OPTS,
+        _ => &NO_VALUE_OPTS,
+    }
+}
+
+/// Does `option` consume the **next** token as its value for reader `name`?
+///
+/// Only the separated spelling does. An attached value is self-contained
+/// (`-m5`, `-A3`, `--max-count=5`), and in a cluster the value-taking letter
+/// ends the token, so anything after it is the attached value (`-im` consumes
+/// the next token, `-mi` carries `i` as the value). `grep`'s `-NUM` form is a
+/// self-contained option and is left alone.
+fn consumes_next_value(name: &str, option: &str) -> bool {
+    let opts = value_opts(name);
+    if option.starts_with("--") {
+        return opts.long.contains(&option);
+    }
+    let Some(cluster) = option.strip_prefix('-') else {
+        return false;
+    };
+    cluster.bytes().all(|c| c.is_ascii_alphanumeric())
+        && cluster
+            .bytes()
+            .next_back()
+            .is_some_and(|last| opts.short.contains(&last))
 }
 
 fn reader_option(op: &str) -> Option<ReaderOpt<'_>> {
     if op == "--file" {
-        return Some(ReaderOpt::File(None));
+        return Some(ReaderOpt::PatternFile(None));
     }
     if let Some(value) = op.strip_prefix("--file=") {
-        return Some(ReaderOpt::File(Some(value)));
+        return Some(ReaderOpt::PatternFile(Some(value)));
+    }
+    // `--exclude-from` names a file grep reads, so its value is checked rather
+    // than skipped. It does not supply the pattern, so the pattern operand is
+    // still to come.
+    if op == "--exclude-from" {
+        return Some(ReaderOpt::AuxFile(None));
+    }
+    if let Some(value) = op.strip_prefix("--exclude-from=") {
+        return Some(ReaderOpt::AuxFile(Some(value)));
     }
     if op == "--regexp" {
         return Some(ReaderOpt::Pattern(None));
@@ -82,7 +175,7 @@ fn reader_option(op: &str) -> Option<ReaderOpt<'_>> {
     if b.len() >= 2 && b[0] == b'-' && b[1] != b'-' {
         let attached = (op.len() > 2).then(|| &op[2..]);
         return match b[1] {
-            b'f' => Some(ReaderOpt::File(attached)),
+            b'f' => Some(ReaderOpt::PatternFile(attached)),
             b'e' => Some(ReaderOpt::Pattern(attached)),
             _ => None,
         };
@@ -171,19 +264,25 @@ fn reader_reads_denied(rs: &RuleSet, name: &str, operands: &[&str], cwd: Option<
         }
         if !end_of_options && operand.len() > 1 && operand.starts_with('-') {
             if pattern_first && let Some(kind) = reader_option(operand) {
-                pattern_consumed = true;
-                let (is_file, attached) = match kind {
-                    ReaderOpt::File(value) => (true, value),
-                    ReaderOpt::Pattern(value) => (false, value),
+                let (checks_file, supplies_pattern, attached) = match kind {
+                    ReaderOpt::Pattern(value) => (false, true, value),
+                    ReaderOpt::PatternFile(value) => (true, true, value),
+                    ReaderOpt::AuxFile(value) => (true, false, value),
                 };
+                pattern_consumed |= supplies_pattern;
                 let value = attached.or_else(|| operands.get(i).copied().inspect(|_| i += 1));
-                if is_file
+                if checks_file
                     && let Some(value) = value
                     && !value.is_empty()
                     && engine::path_hits_deny(rs, &["Read"], value, cwd)
                 {
                     return true;
                 }
+            } else if consumes_next_value(name, operand) {
+                // The option's value is a separate token. Leaving it in place
+                // shifts every later operand by one, so the pattern is read as a
+                // file and a benign command is denied (§8.3).
+                i += 1;
             }
             continue;
         }

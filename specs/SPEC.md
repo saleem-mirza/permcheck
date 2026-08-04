@@ -536,6 +536,11 @@ out of scope and left to the OS sandbox and enterprise denies:
 - `xargs` is peeled as a wrapper, so the command it runs (`xargs cat …`,
   `xargs rm -rf …`) is decided and cross-checked. A separate-token replace string
   (`xargs -I {} …`) still hides the command; the attached form (`-I{}`) does not.
+- The reader **option** vocabulary (§8 step 3) is an enumeration, like the
+  interpreter table. An option outside it whose value is a separate token leaves
+  that value in the operand stream, where it is checked as if it were a path.
+  That direction over-denies rather than under-denies, so an option is added to
+  the table only when its value is mandatory and separable on every platform.
 - An unquoted `#` starting a word opens a comment, which the splitter strips
   through end of line (§8.1) — matching bash, so a comment cannot smuggle a
   substring into the matched text. Heredoc bodies are not modeled; an unterminated

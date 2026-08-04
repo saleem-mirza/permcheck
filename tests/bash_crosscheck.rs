@@ -193,6 +193,92 @@ fn attached_short_option_does_not_eat_the_file() {
 }
 
 #[test]
+fn an_options_separate_value_does_not_become_an_operand() {
+    // A value-taking option whose value is its own token used to leave that
+    // value in the operand stream, shifting everything after it by one: `5` was
+    // read as the pattern and `.env` as a file, so a command that only ever
+    // searched `notes.txt` was denied. The value is now consumed (§8.3).
+    let t = |c: &str| decide_bash(c, &grep_rs(), Some("/home/user")).tier;
+    for cmd in [
+        "grep -m 5 .env notes.txt",
+        "grep -A 3 .env notes.txt",
+        "grep -B 2 .env notes.txt",
+        "grep -C 1 .env notes.txt",
+        "grep -d skip .env notes.txt",
+        "grep --max-count 5 .env notes.txt",
+        "grep --after-context 3 .env notes.txt",
+        "grep --label x .env notes.txt",
+        "grep -im 5 .env notes.txt", // value flag ends a cluster
+    ] {
+        assert_eq!(t(cmd), Tier::Allow, "expected no over-deny for: {cmd:?}");
+    }
+    // An attached value is self-contained and consumes nothing extra, so the
+    // operands keep their positions either way.
+    for cmd in [
+        "grep -m5 .env notes.txt",
+        "grep -A3 .env notes.txt",
+        "grep --max-count=5 .env notes.txt",
+        "grep -mi .env notes.txt", // `i` is the attached value of `-m`
+    ] {
+        assert_eq!(t(cmd), Tier::Allow, "expected no over-deny for: {cmd:?}");
+    }
+}
+
+#[test]
+fn consuming_a_value_does_not_hide_a_real_file_operand() {
+    // The dangerous direction: skipping one token too many would drop a file
+    // from the check. Every spelling above must still reach the real operand.
+    let t = |c: &str| decide_bash(c, &grep_rs(), Some("/home/user")).tier;
+    for cmd in [
+        "grep -m 5 secret .env",
+        "grep -A 3 secret .env",
+        "grep --max-count 5 secret .env",
+        "grep --max-count=5 secret .env",
+        "grep -m5 secret .env",
+        "grep -im 5 secret .env",
+        "grep -m 5 secret notes.txt .env",
+        "grep secret .env",
+    ] {
+        assert_eq!(t(cmd), Tier::Deny, "expected deny for: {cmd:?}");
+    }
+}
+
+#[test]
+fn options_naming_a_file_are_checked_not_skipped() {
+    // `--exclude-from` names a file grep reads, so its value is checked. Unlike
+    // `-f`/`--file` it does NOT supply the pattern, so the pattern operand is
+    // still to come and must not be mistaken for a file.
+    let t = |c: &str| decide_bash(c, &grep_rs(), Some("/home/user")).tier;
+    assert_eq!(t("grep --exclude-from .env pat notes.txt"), Tier::Deny);
+    assert_eq!(t("grep --exclude-from=.env pat notes.txt"), Tier::Deny);
+    assert_eq!(
+        t("grep --exclude-from skip.txt .env notes.txt"),
+        Tier::Allow
+    );
+    // `--exclude`/`--include` take glob values, not files, so they are skipped.
+    assert_eq!(t("grep --exclude .env pat notes.txt"), Tier::Allow);
+    assert_eq!(t("grep --include *.rs pat notes.txt"), Tier::Allow);
+}
+
+#[test]
+fn awk_option_values_are_consumed_and_the_program_is_not_a_file() {
+    // awk's first positional is the program text, and `-F`/`-v` take values.
+    let rs = RuleSet::load_str(
+        r#"{"allow":["Bash(awk:*)"],"deny":["Read(/**/.env*)"],"defaultMode":"ask"}"#,
+    )
+    .unwrap();
+    let t = |c: &str| decide_bash(c, &rs, Some("/home/user")).tier;
+    // The file after the program is checked, through every option spelling.
+    assert_eq!(t("awk '{print}' .env"), Tier::Deny);
+    assert_eq!(t("awk -F , '{print}' .env"), Tier::Deny);
+    assert_eq!(t("awk -F, '{print}' .env"), Tier::Deny);
+    assert_eq!(t("awk -v x=1 '{print}' .env"), Tier::Deny);
+    assert_eq!(t("awk -v x=1 -F , '{print}' .env"), Tier::Deny);
+    // A benign run is not over-denied.
+    assert_eq!(t("awk -F , '{print}' notes.txt"), Tier::Allow);
+}
+
+#[test]
 fn pattern_file_option_is_read_checked() {
     let t = |c: &str| decide_bash(c, &grep_rs(), Some("/home/user")).tier;
     // `-f <file>` / `-f<file>` / `--file=<file>` name a file grep reads.
