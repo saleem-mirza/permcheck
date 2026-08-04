@@ -241,6 +241,14 @@ ADVERSARIAL_STRENGTHS: list[Case] = [
       "node --eval normalized to node -e", "adv node --eval"),
     B('deno eval "Deno.exit(0)"',
       "deno eval subcommand denied", "adv deno"),
+    # Reading the environment out of procfs reaches the same secrets as an env
+    # dump, through a plainly-allowed reader.
+    B("cat /proc/self/environ",
+      "the /proc/*/environ deny catches the procfs route to the environment",
+      "adv proc environ"),
+    B("grep AWS /proc/1234/environ",
+      "the deny is per-pid, so another process's environment is covered too",
+      "adv proc environ pid"),
 ]
 
 # Gaps: the shipped policy leaks today (current verdict in the note). These are

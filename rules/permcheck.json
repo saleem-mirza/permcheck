@@ -81,6 +81,7 @@
       "Read(//**/.env/**)",
       "Read(/**/.env.*)",
       "Read(/**/.env*)",
+      "Read(/proc/*/environ)",
       "Read(//**/.aws/**)",
       "Read(//**/.gcp/**)",
       "Read(//**/.azure/**)",
