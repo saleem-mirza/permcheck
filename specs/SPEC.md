@@ -100,6 +100,15 @@ Invoked as `permcheck <Tool> [payload] --rules <path> [--json]`.
   (bad arguments, unreadable or invalid rules file). An unrecognized long flag
   is a usage error, and so is invoking with no arguments; `-h`/`--help` prints
   usage to stdout and exits `0`.
+- **Mode selection reads only the leading flags**, those before the first
+  positional argument. In check mode the first positional is the tool name, so a
+  mode flag after it (`permcheck Bash "--install" …`) is payload text, not a
+  request to install, uninstall, seed rules, or enter hook mode. A value-taking
+  flag (`--rules`, `--init-rules`) consumes the token after it, so that token is
+  not the first positional.
+- A bare `--` ends option parsing: every later argument is positional, so a
+  payload that starts with dashes stays checkable
+  (`permcheck Bash --rules <path> -- --install`).
 - `--json` prints the same decision object as hook mode, pretty-printed for
   readability, instead of using the exit code.
 - Config errors surface as exit `3` in CLI mode. In hook mode the same
@@ -521,6 +530,8 @@ decomposes it and takes the **most restrictive** verdict.
   panics on failure: a panic there would land outside the `catch_unwind` above
   and exit non-zero with no decision, which reads as a non-blocking error and
   lets the call run. A decision that cannot be written exits `2` instead (§2.1).
+- Mode selection never reads the payload (§2.2), so a checked command string
+  cannot steer permcheck into a state-changing mode.
 
 ### 9.2 Non-goals (documented limitations)
 

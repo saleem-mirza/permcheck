@@ -8,15 +8,17 @@ use permcheck::{evaluate, evaluate_payload, load_rules, settings};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Mode selection reads only the leading flags, never the payload (§2.2).
+    let modes = mode_args(&args);
 
-    if args.iter().any(|a| a == "-V" || a == "--version") {
+    if modes.iter().any(|a| a == "-V" || a == "--version") {
         println!("permcheck {}", env!("CARGO_PKG_VERSION"));
         process::exit(0);
     }
 
     // Help is requested output, so stdout and exit 0. No arguments is a usage
     // error: exiting 0 would read as an `allow` to anything checking exit codes.
-    if args.iter().any(|a| a == "-h" || a == "--help") {
+    if modes.iter().any(|a| a == "-h" || a == "--help") {
         println!("{}", help_text(std::io::stdout().is_terminal()));
         process::exit(0);
     }
@@ -25,9 +27,9 @@ fn main() {
         process::exit(3);
     }
 
-    let install = args.iter().any(|a| a == "--install");
-    let uninstall = args.iter().any(|a| a == "--uninstall");
-    let init_rules = args.iter().any(|a| a == "--init-rules");
+    let install = modes.iter().any(|a| a == "--install");
+    let uninstall = modes.iter().any(|a| a == "--uninstall");
+    let init_rules = modes.iter().any(|a| a == "--init-rules");
     if [install, uninstall, init_rules]
         .iter()
         .filter(|b| **b)
@@ -43,7 +45,7 @@ fn main() {
         run_install(&args);
     } else if uninstall {
         run_uninstall(&args);
-    } else if args.iter().any(|a| a == "--hook") {
+    } else if modes.iter().any(|a| a == "--hook") {
         // --json is CLI-only; in hook mode it is silently ignored
         // (hook mode always emits JSON and always exits 0).
         // Silence panic output; `run_hook` converts the panic itself to deny.
@@ -52,6 +54,37 @@ fn main() {
     } else {
         run_cli(&args);
     }
+}
+
+/// The leading arguments that select a mode: everything before the first
+/// positional (and before an explicit `--`).
+///
+/// In check mode the first positional is the tool name, so anything after it is
+/// the payload being checked, not a request to change what permcheck does.
+/// Without that cut, `permcheck Bash "--install" --rules <file>` scanned the
+/// whole argument vector, matched `--install`, and performed a real install:
+/// wiring the hook and seeding a policy while the caller believed it was
+/// checking a command string. The CLI exists to check arbitrary, potentially
+/// hostile payloads, which is exactly where such a string arrives.
+///
+/// A value-taking flag consumes the token after it, so that token is not the
+/// first positional. [`flag_value`] uses the same rule, so the two agree on
+/// where the flags end.
+fn mode_args(args: &[String]) -> &[String] {
+    const VALUE_FLAGS: [&str; 2] = ["--rules", "--init-rules"];
+    let mut i = 0;
+    while let Some(arg) = args.get(i) {
+        if arg == "--" || !arg.starts_with('-') {
+            break;
+        }
+        i += 1;
+        if VALUE_FLAGS.contains(&arg.as_str())
+            && args.get(i).is_some_and(|next| !next.starts_with("--"))
+        {
+            i += 1;
+        }
+    }
+    &args[..i]
 }
 
 /// Where a settings file lives, selected by the scope flags.
@@ -490,30 +523,38 @@ fn run_cli(args: &[String]) {
 
     // Positional args (not --rules, its value, or --json). An unrecognized long
     // flag is a usage error: silently skipping `--jsn` would drop the caller into
-    // exit-code mode with no hint.
+    // exit-code mode with no hint. A bare `--` ends option parsing, so a payload
+    // that looks like a flag stays checkable (`permcheck Bash --rules r -- --install`).
     let positional: Vec<&str> = {
         let mut pos = Vec::new();
         let mut skip_next = false;
+        let mut end_of_options = false;
         for arg in args {
             if skip_next {
                 skip_next = false;
                 continue;
             }
-            if arg == "--rules" {
-                skip_next = true;
-                continue;
-            }
-            if arg == "--json" {
-                continue;
-            }
-            if let Some(flag) = arg.strip_prefix("--") {
-                // `--rules=<path>` is consumed by `find_rules_arg` above.
-                if flag.starts_with("rules=") {
+            if !end_of_options {
+                if arg == "--" {
+                    end_of_options = true;
                     continue;
                 }
-                eprintln!("error: unrecognized option `{arg}`");
-                eprintln!("hint: run `permcheck --help` for usage");
-                process::exit(3);
+                if arg == "--rules" {
+                    skip_next = true;
+                    continue;
+                }
+                if arg == "--json" {
+                    continue;
+                }
+                if let Some(flag) = arg.strip_prefix("--") {
+                    // `--rules=<path>` is consumed by `find_rules_arg` above.
+                    if flag.starts_with("rules=") {
+                        continue;
+                    }
+                    eprintln!("error: unrecognized option `{arg}`");
+                    eprintln!("hint: run `permcheck --help` for usage");
+                    process::exit(3);
+                }
             }
             pos.push(arg.as_str());
         }
@@ -633,11 +674,15 @@ fn find_rules_arg(args: &[String]) -> Option<PathBuf> {
 /// The value of a path-taking flag, in either `--flag=<path>` or `--flag <path>`
 /// form. A following flag (or nothing) means no value: the next token is not
 /// swallowed as the path, so callers see a dangling flag and error rather than
-/// silently seeding.
+/// silently seeding. Scanning stops at a bare `--`, so a payload after it is
+/// never mistaken for a flag.
 fn flag_value(args: &[String], flag: &str) -> Option<PathBuf> {
     let eq_prefix = format!("{flag}=");
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
+        if arg == "--" {
+            return None;
+        }
         if let Some(path) = arg.strip_prefix(&eq_prefix) {
             return Some(PathBuf::from(path));
         }
