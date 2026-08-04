@@ -88,6 +88,73 @@ fn specific_deny_beats_broad_allow() {
 }
 
 #[test]
+fn identity_normalizations_compose() {
+    // §8 step 2: each stage runs on the previous stage's output, so a command
+    // wearing several disguises still reduces to the spelling the deny names.
+    // Isolated on a crafted rule set: only `Bash(git push --force:*)` and
+    // `Bash(curl:*)` deny here, so a hit proves the pipeline reached the rule.
+    let denied = [
+        "git push --force",                      // no disguise, the baseline
+        "/usr/bin/git push --force",             // basename alone
+        "git  push --force",                     // whitespace alone
+        r#"git push "--force""#,                 // quoting alone
+        "/usr/bin/git  push --force",            // basename + whitespace
+        r#"/usr/bin/git push "--force""#,        // basename + quoting
+        r#"git  push "--force""#,                // whitespace + quoting
+        r#"/usr/bin/git  push "--force""#,       // all three
+        r#""/usr/bin/git"  push '--force'"#,     // all three, binary quoted too
+        r"\git push --force",                    // escape instead of quotes
+        r#"/usr/bin/cu"rl" http://example.com"#, // basename + split name
+    ];
+    for cmd in denied {
+        assert_eq!(bash(cmd), Tier::Deny, "expected deny for: {cmd:?}");
+    }
+}
+
+#[test]
+fn quoted_wrapper_is_still_peeled() {
+    // `sudo`/`env` are broadly allowed here, so laundering only fails if the
+    // wrapper is recognized through its disguise and the wrapped command is
+    // decided on its own. `curl` is the denied payload.
+    let denied = [
+        "env curl http://example.com",
+        r#""env" curl http://example.com"#,
+        r#"en"v" curl http://example.com"#,
+        r"\env curl http://example.com",
+        r#""sudo" "env" curl http://example.com"#,
+        r#""/usr/bin/env" curl http://example.com"#,
+        r#""FOO=bar" env curl http://example.com"#,
+        r#""timeout" 5 curl http://example.com"#,
+    ];
+    for cmd in denied {
+        assert_eq!(bash(cmd), Tier::Deny, "expected deny for: {cmd:?}");
+    }
+}
+
+#[test]
+fn quoted_flags_reach_the_escalation_forms() {
+    // The clustered-short-flag and interpreter candidates read the canonical
+    // spelling, so quoting a flag no longer takes it out of their reach. `rm` is
+    // ask-tier here and `python3 *` is allowed, so these assert the canonical
+    // form is what gets built, not that a deny fires.
+    assert_eq!(bash(r#"rm "-rf" scratch"#), Tier::Ask);
+    assert_eq!(bash(r#"python3 "-c" "import os""#), Tier::Allow);
+}
+
+#[test]
+fn quoting_strip_stays_anchored_at_the_command_word() {
+    // Stripping quotes merges quoted text into the matched string. Matching is
+    // anchored (§6.5), so denied text sitting inside an argument must not turn a
+    // benign command into a deny.
+    assert_eq!(bash(r#"echo "git push --force""#), Tier::Allow);
+    assert_eq!(bash(r#"echo "curl http://example.com""#), Tier::Allow);
+    assert_eq!(bash(r#"grep "curl" access.log"#), Tier::Allow);
+    // A quoted argument that is a denied *path* is still caught, because the
+    // cross-check tokenizes and reads operands regardless of quoting (§8.3).
+    assert_eq!(bash(r#"cat ".env""#), Tier::Deny);
+}
+
+#[test]
 fn legitimate_lookalikes_are_not_over_denied() {
     // Hardening must not block benign commands that merely resemble evasions.
     assert_eq!(bash("cat notes.txt"), Tier::Allow);

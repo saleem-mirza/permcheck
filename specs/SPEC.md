@@ -399,10 +399,31 @@ decomposes it and takes the **most restrictive** verdict.
    command line. Two kinds:
 
    - **Identity** forms decide together with the raw command, so an allow can
-     still win: a **path-qualified** executable (`/usr/bin/aws …`) matches by
-     basename, and a **git** invocation with global options before the subcommand
-     (`git -c x config …`, `git -C /r push --force`) matches the subcommand-exposed
-     form.
+     still win. They come from a normalization **pipeline**: each stage runs on
+     the previous stage's output and every intermediate spelling is kept, so a
+     command wearing several disguises at once still reaches the rule that names
+     it. The stages, in order:
+
+     1. **Quoting and escaping** are removed, leaving the characters the shell
+        passes to the command: `"sudo" rm`, `su"do" rm`, `\sudo rm`, `$'sudo' rm`,
+        and `git push "--force"` all reduce to their bare spelling. Quoting is
+        stripped across the whole unit, not only the command word, because a
+        rule names argument text too.
+     2. Leading `NAME=value` **environment assignments** that were hidden behind
+        quoting (`"FOO=bar" sudo …`) are stripped, as step 2 already does for
+        the plain spelling.
+     3. Runs of **whitespace** collapse to a single space, so `git  push
+        --force` reaches a rule written with single spaces.
+     4. A **path-qualified** executable reduces to its basename
+        (`/usr/bin/aws …` → `aws …`).
+     5. A **git** invocation with global options before the subcommand
+        (`git -c x config …`, `git -C /r push --force`) exposes the subcommand.
+
+     The order is load-bearing, and so is composing the stages rather than
+     applying them independently: quoting hides every later stage's marker (a
+     quoted `"/usr/bin/git"` shows no `/` to reduce), and irregular whitespace
+     hides the rest. `/usr/bin/git  push --force` matches only when basename
+     reduction runs on the whitespace-collapsed spelling.
    - **Escalation** forms are each decided on their own and can only *raise* the
      verdict, and only on a real rule match — so they respect `defaultMode` and
      never invent a deny. A clustered/reordered/split **short-flag** set maps onto
@@ -422,7 +443,9 @@ decomposes it and takes the **most restrictive** verdict.
    `timeout`, `nice`, `xargs`, …), peel the wrapper and its options / assignments
    / numeric args and decide the wrapped command too, taking the most restrictive.
    This runs the wrapped command's own rules, so `env aws …` cannot ride in on a
-   broad `Bash(env:*)` allow and bypass an `aws` deny.
+   broad `Bash(env:*)` allow and bypass an `aws` deny. Peeling reads the
+   fully-normalized spelling from the pipeline above, so a disguised wrapper
+   (`"env" aws …`) is still recognized as one.
 
 3. **File-access cross-check** (raises to `deny` only, never loosens): tokenize
    the unit, peel wrapper commands (`sudo`, `env`, `timeout`, `nice`, `xargs`,
@@ -483,12 +506,15 @@ The Bash analyzer is a best-effort scanner, not a full shell parser. These are
 out of scope and left to the OS sandbox and enterprise denies:
 
 - `eval`, shell aliases/functions, dynamic variable expansion, and commands
-  assembled at runtime.
+  assembled at runtime. Quote and escape *removal* is normalized (§8 step 2),
+  but the escape sequences inside `$'…'` are not decoded, so a name spelled
+  `$'\x73udo'` is not reduced to `sudo`.
 - Non-POSIX shells (PowerShell, `cmd.exe`): the splitter, reader vocabulary, and
   env-stripping model POSIX syntax and do not apply there, though Windows
   binaries ship.
-- File reads by tools outside the covered set (readers, `dd`, `curl`, `wget`):
-  `scp`, `tar`, `git`, `rsync`, and editors reading a secret are not followed.
+- File reads by tools outside the covered set (readers, `dd`, `curl`, `wget`,
+  `cp`/`mv`): `scp`, `tar`, `git`, `rsync`, and editors reading a secret are not
+  followed.
 - Interpreter inline-exec is form-normalized (§8 step 2): once an interpreter is
   in the engine table, every spelling of its inline flag (clustered, attached,
   reordered, long, spaced, path-qualified) maps onto the rule, so a bundled flag

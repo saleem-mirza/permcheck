@@ -14,7 +14,7 @@ mod prefix;
 mod split;
 mod tokenize;
 use crosscheck::cross_check;
-use forms::unit_tier;
+use forms::{identity_forms, unit_tier};
 pub use prefix::strip_env_assignments;
 use prefix::strip_leading_wrappers;
 pub use tokenize::{RedirectKind, Token, tokenize};
@@ -34,13 +34,19 @@ pub fn decide_bash(command: &str, rs: &RuleSet, cwd: Option<&str>) -> Decision {
     let mut worst = Tier::Allow;
     for unit in units {
         let cmd = strip_env_assignments(unit);
-        let mut tier = unit_tier(rs, cmd);
+        let forms = identity_forms(cmd);
+        let mut tier = unit_tier(rs, &forms);
         // A leading wrapper (`env`, `sudo`, `timeout`, …) executes the command
         // that follows it, so the wrapped command's own decision must apply too.
         // Otherwise `env aws …` would ride in on the wrapper's allow rule and
         // bypass an `aws` deny. This can only raise the verdict (§8.3).
-        if let Some(inner) = strip_leading_wrappers(cmd) {
-            let inner_tier = unit_tier(rs, inner);
+        //
+        // Peel from the canonical spelling rather than the raw unit: a disguised
+        // wrapper (`"env" aws …`) is invisible to the raw string, and every
+        // pipeline stage leaves the leading word easier to recognize, never
+        // harder.
+        if let Some(inner) = strip_leading_wrappers(forms.canonical()) {
+            let inner_tier = unit_tier(rs, &identity_forms(inner));
             if inner_tier > tier {
                 tier = inner_tier;
             }

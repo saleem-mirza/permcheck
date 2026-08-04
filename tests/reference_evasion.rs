@@ -79,19 +79,85 @@ fn wrapper_commands_cannot_launder_denied_commands() {
 }
 
 #[test]
-fn obfuscated_command_names_fall_to_default_fallback() {
-    // Quote- and escape-splitting the command name means it no longer matches the
-    // `aws:*` deny — so under `defaultMode: "ask"` it lands on the ask fall-back.
-    // Note this is a *weaker* posture than a hard deny: obfuscating a denied name
-    // downgrades deny -> ask. It still cannot reach `allow`.
-    for &cmd in &[
+fn obfuscated_command_names_are_denied() {
+    // Quoting and escaping are stripped before matching (§8 step 2), so splitting
+    // a denied command name across quotes no longer takes it out of reach of the
+    // rule. This used to downgrade deny -> ask, which left every `Bash(cmd:*)`
+    // deny in the shipped set one pair of quotes away from a prompt.
+    assert_all_deny(&[
         r#"a"w"s ec2 terminate-instances"#,
         r"\aws ec2 terminate-instances",
         r#"aws"" ec2 terminate-instances"#,
         "'aws' ec2 terminate-instances",
-    ] {
-        assert_eq!(bash(cmd), Tier::Ask, "expected ASK for: {cmd:?}");
-    }
+        r#""sudo" rm -rf /tmp/x"#,
+        r#"su"do" rm -rf /tmp/x"#,
+        r"\sudo rm -rf /tmp/x",
+        r#""kubectl" delete pod x"#,
+        // `$'…'` and `$"…"` are quoting too: the `$` belongs to the quotes, not
+        // to the word, so it comes off with them.
+        r"$'sudo' rm -rf /tmp/x",
+        r#"$"sudo" rm -rf /tmp/x"#,
+    ]);
+}
+
+#[test]
+fn quoted_arguments_cannot_hide_a_denied_subform() {
+    // Stripping covers the whole unit, not only the command word: a rule names
+    // argument text too, so quoting the argument used to evade it just as
+    // effectively as quoting the command.
+    assert_all_deny(&[
+        r#"git push "--force" origin main"#,
+        "git push '--force' origin main",
+        r#"rm "-rf" /tmp/x"#,
+        r#"git "push" "--force""#,
+        r#"kubectl "delete" "pod" x"#,
+    ]);
+}
+
+#[test]
+fn quoting_cannot_hide_a_wrapper_or_its_assignments() {
+    // Wrapper peeling reads the normalized spelling, so a quoted wrapper is still
+    // recognized as one and the command it runs is still decided. Quoting a
+    // leading `NAME=value` assignment likewise no longer shields what follows.
+    assert_all_deny(&[
+        r#""env" aws ec2 terminate-instances"#,
+        r#""sudo" env kubectl delete pod x"#,
+        r#"en"v" aws ec2 terminate-instances"#,
+        r#""FOO=bar" sudo rm -rf /tmp/x"#,
+        r#""timeout" 5 env kubectl delete pod x"#,
+    ]);
+}
+
+#[test]
+fn disguises_worn_together_still_reduce_to_the_rule() {
+    // The normalizations compose (§8 step 2). Each of these wears two or three
+    // disguises at once — a path-qualified binary, runs of whitespace, quoting —
+    // and every one used to slip through because each normalization ran on the
+    // raw command instead of on the previous one's output.
+    assert_all_deny(&[
+        "/usr/bin/git  push --force origin main", // path + double space
+        "/usr/bin/git   push   --force",          // path + several runs
+        r#"/usr/bin/git push "--force""#,         // path + quoted argument
+        r#""/usr/bin/git" push --force"#,         // quoted path-qualified binary
+        "/usr/local/bin/kubectl  delete pod x",
+        r#"/bin/rm  "-rf" /tmp/x"#, // path + space + quoted flag
+        "/usr/bin/git  -c x=y  config --global a b", // path + space + git globals
+        r#""/bin/sudo"  rm -rf /tmp/x"#, // quoted path + wrapper peel
+    ]);
+}
+
+#[test]
+fn normalization_does_not_over_deny_benign_commands() {
+    // Stripping quotes merges quoted text into the matched string, so the guard
+    // is that rule matching stays anchored at the command word: denied text
+    // sitting in an argument must not turn a benign command into a deny.
+    assert_eq!(bash(r#"git commit -m "push --force""#), Tier::Ask);
+    assert_eq!(bash(r#"git commit -m "rm -rf everything""#), Tier::Ask);
+    assert_eq!(bash(r#"echo "hello; sudo""#), Tier::Ask);
+    assert_eq!(bash(r#"grep "sudo" /var/log/auth.log"#), Tier::Allow);
+    assert_eq!(bash("ls -la"), Tier::Allow);
+    assert_eq!(bash(r#"cat "notes.txt""#), Tier::Allow);
+    assert_eq!(bash("/bin/ls  -la"), Tier::Allow);
 }
 
 #[test]
