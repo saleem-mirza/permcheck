@@ -37,14 +37,24 @@ fn empty_payload_when_no_string_field() {
 #[test]
 fn generic_fallback_is_lexicographically_first_field() {
     // The Generic fallback picks the lexicographically-first (by field name)
-    // non-empty string field (§5). `serde_json::Map` is a BTreeMap, so key order
-    // is sorted regardless of JSON source order: `database` (d) < `query` (q).
+    // non-empty string field (§5): `database` (d) < `query` (q).
     let input = json!({"query": "SELECT *", "database": "prod"});
     assert_eq!(extract_payload("mcp__db__run", &input), "prod");
 
-    // Source order reversed — same result, because selection is by sorted key.
+    // Source order reversed — same result. The extractor computes the key order
+    // itself rather than trusting map iteration order, so this holds whether
+    // `serde_json::Map` is a BTreeMap or an IndexMap. Enabling the
+    // `preserve_order` feature anywhere in the build would otherwise redefine
+    // the rule as "first inserted field" with no compile error.
     let reversed = json!({"database": "prod", "query": "SELECT *"});
     assert_eq!(extract_payload("mcp__db__run", &reversed), "prod");
+
+    // Sorting is by the whole key, not by first byte, and it is byte-ordered:
+    // uppercase sorts before lowercase, and a prefix before its extension.
+    let mixed = json!({"zeta": "z", "query": "q", "Query": "upper"});
+    assert_eq!(extract_payload("mcp__x__y", &mixed), "upper");
+    let prefixes = json!({"queryText": "long", "query": "short"});
+    assert_eq!(extract_payload("mcp__x__y", &prefixes), "short");
 }
 
 #[test]

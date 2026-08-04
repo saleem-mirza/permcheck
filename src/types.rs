@@ -129,12 +129,20 @@ pub(crate) fn extract_payload_ref<'a>(tool: &str, input: &'a Value) -> &'a str {
         "WebSearch" => field("query"),
         "SlashCommand" => field("command"),
         // Generic fallback: the lexicographically-first (by field name)
-        // non-empty string field of tool_input. `serde_json::Map` is a
-        // `BTreeMap` (no `preserve_order` feature), so `.values()` visits keys
-        // in sorted order — deterministic, and the behavior SPEC §5 pins.
+        // non-empty string field of tool_input, which is the behavior SPEC §5
+        // pins.
+        //
+        // The key order is computed here rather than inherited from iteration
+        // order. `serde_json::Map` is a `BTreeMap` only while the
+        // `preserve_order` feature is off, and features unify across the whole
+        // build: one dependency anywhere in the graph turning it on would swap
+        // in an `IndexMap` and silently redefine this as "first inserted field",
+        // changing decisions with no compile error and no test failure.
         _ => input.as_object().and_then(|map| {
-            map.values()
-                .find_map(|v| v.as_str().filter(|s| !s.is_empty()))
+            map.iter()
+                .filter(|(_, value)| value.as_str().is_some_and(|s| !s.is_empty()))
+                .min_by(|(a, _), (b, _)| a.cmp(b))
+                .and_then(|(_, value)| value.as_str())
         }),
     };
 

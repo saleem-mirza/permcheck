@@ -237,6 +237,10 @@ Routing rules:
   URL/string semantics (§6.5). Any built-in or MCP tool the engine does not name
   explicitly falls into **Generic** and is still evaluated, so the taxonomy has no
   gaps.
+- "Lexicographically-first" is by **byte order of the field name**, computed from
+  the names themselves. It is not whichever field a JSON map happens to yield
+  first, so the payload a tool call resolves to does not depend on how the JSON
+  object is built or ordered.
 - A rule's tool name must equal the call's tool name exactly, so
   `mcp__github__create_issue(...)` rules apply only to that MCP tool, and
   `NotebookEdit` is not covered by a bare `Edit` rule (different tool name).
