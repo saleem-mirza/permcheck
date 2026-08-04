@@ -453,13 +453,25 @@ decomposes it and takes the **most restrictive** verdict.
    - if the command is a known **reader** (`cat`, `grep`, `sed`, `head`, …),
      check each non-option operand against the `Read` **deny** rules
      (pattern-first readers like `grep`/`sed`/`awk` skip their first operand,
-     which is a pattern, not a file).
+     which is a pattern, not a file). An option that takes a **separate value**
+     (`grep -m 5`, `-A/-B/-C`, `--max-count 5`, `awk -F ,`) consumes that value,
+     so it is not counted as an operand: leaving it in place would shift every
+     later operand by one and read the pattern as a file. An attached value
+     (`-m5`, `--max-count=5`) is self-contained and consumes nothing further.
+     An option that *names a file* is checked rather than skipped: `-f`/`--file`
+     supplies the pattern from a file, and `--exclude-from` reads one without
+     supplying the pattern. The option vocabulary is a fixed engine table
+     (§9.2), and an option whose arity varies by platform (`sed -i`) is left out
+     of it, which costs an extra path check but never skips a real operand.
    - if it is a known **writer** (`tee`, `truncate`), check operands against the
      `Write`/`Edit` deny rules.
-   - `cp`/`mv` overwrite their destination: the last path operand (or the
-     `-t <dir>` / `--target-directory=<dir>` target, with each source's landing
-     path) is checked against `Write`/`Edit` deny. The source reads are not
-     followed (§9.2).
+   - `cp`/`mv` touch both sides, and both are checked. They **overwrite** their
+     destination: the last path operand (or the `-t <dir>` /
+     `--target-directory=<dir>` target, with each source's landing path) is
+     checked against `Write`/`Edit` deny. They also **read** every source: each
+     remaining positional (all of them in the `-t` form) is checked against
+     `Read` deny, since `cp .env /tmp/leak` exposes the file exactly as
+     `cat .env` does.
    - `dd` names files by key-value operand: `if=<path>` is checked against `Read`
      deny, `of=<path>` against `Write`/`Edit` deny.
    - two exfil tools read files by argument: `curl` (`@file` on `-d`/`--data*`/

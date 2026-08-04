@@ -71,8 +71,8 @@ fn wrapper_cannot_launder_a_denied_command() {
 // --- cp/mv destination write cross-check -------------------------------------
 
 #[test]
-fn cp_mv_destination_write_is_checked_source_is_not() {
-    // cp/mv are allowed here; only a Write/Edit-denied DESTINATION raises to deny.
+fn cp_mv_check_both_the_source_read_and_the_destination_write() {
+    // cp/mv are allowed here, so every deny below comes from the cross-check.
     let rs = RuleSet::load_str(
         r#"{"allow":["Bash(cp:*)","Bash(mv:*)"],
             "deny":["Read(/**/.env*)","Write(//**/.ssh/**)","Edit(//**/.ssh/**)"],
@@ -84,11 +84,27 @@ fn cp_mv_destination_write_is_checked_source_is_not() {
     assert_eq!(t("cp x /home/user/.ssh/authorized_keys"), Tier::Deny);
     assert_eq!(t("mv x /home/user/.ssh/id_ed25519"), Tier::Deny);
     assert_eq!(t("cp -t /home/user/.ssh key"), Tier::Deny);
-    // The source read side is a documented non-goal (§9.2): copying a Read-denied
-    // file OUT to a benign destination is not followed, so it stays allowed.
-    assert_eq!(t("cp /home/user/.env /tmp/x"), Tier::Allow);
-    // A benign copy is not over-denied.
+    // The source side is checked too: copying a Read-denied file OUT to a benign
+    // destination exposes it exactly as `cat` would, so it is denied. This used
+    // to pass through, leaving `cat .env` blocked and `cp .env /tmp/x` open.
+    assert_eq!(t("cp /home/user/.env /tmp/x"), Tier::Deny);
+    assert_eq!(t("mv /home/user/.env /tmp/x"), Tier::Deny);
+    assert_eq!(t("cp .env /tmp/leak"), Tier::Deny); // relative, cwd-absolutized
+    assert_eq!(t("cp -r /home/user/.env.d /tmp/x"), Tier::Deny);
+    // Every source is checked, not only the first, including the `-t` form where
+    // all positionals are sources.
+    assert_eq!(t("cp notes.txt /home/user/.env /tmp/dir"), Tier::Deny);
+    assert_eq!(t("cp -t /tmp/dir notes.txt /home/user/.env"), Tier::Deny);
+    assert_eq!(
+        t("cp --target-directory=/tmp/dir /home/user/.env"),
+        Tier::Deny
+    );
+    // A benign copy is not over-denied, and the destination is not read-checked:
+    // writing TO a path that a Read rule covers is a write, not an exposure.
     assert_eq!(t("cp a b"), Tier::Allow);
+    assert_eq!(t("cp notes.txt /tmp/notes.txt"), Tier::Allow);
+    assert_eq!(t("cp -t /tmp/dir notes.txt"), Tier::Allow);
+    assert_eq!(t("cp /tmp/x /home/user/.env"), Tier::Allow);
 }
 
 // --- interpreter inline-exec normalization (policy stays in the rules) -------

@@ -242,6 +242,31 @@ fn cp_mv_cannot_overwrite_protected_files() {
 }
 
 #[test]
+fn cp_mv_cannot_exfiltrate_protected_files() {
+    // cp/mv read their sources, so copying a secret to an unprotected path is the
+    // same exposure as reading it. This used to pass: `cat .env` was denied while
+    // `cp .env /tmp/leak` reached the ask fall-back, because only the destination
+    // was checked.
+    assert_all_deny(&[
+        "cp /work/.env /tmp/leak",
+        "cp .env /tmp/leak",                  // relative, cwd-absolutized
+        "mv /work/.env /tmp/leak",            //
+        "cp /home/u/.ssh/id_rsa /tmp/k",      // private key
+        "cp /home/u/.aws/credentials /tmp/c", // cloud credentials
+        "cp -r /home/u/.ssh/ /tmp/backup",    // whole directory, trailing slash
+        "cp notes.txt /work/.env /tmp/dir",   // secret among several sources
+        "cp -t /tmp/dir /work/.env",          // -t form: all positionals read
+        "cp --target-directory=/tmp/dir /work/.env",
+        "sudo cp /work/.env /tmp/leak", // through a wrapper
+        "cp /work/.env /tmp/a && ls",   // inside a compound
+    ]);
+    // The read check must not reach the destination: writing TO a path a Read
+    // rule covers is a write, and the Write rules already decide that.
+    assert_eq!(bash("cp /tmp/notes.txt /work/notes.txt"), Tier::Ask);
+    assert_eq!(bash("cp -R project /tmp/backup-dir"), Tier::Allow);
+}
+
+#[test]
 fn escaped_quote_cannot_swallow_a_chained_command() {
     // Regression: an unquoted `\"` is a *literal* quote in shell, not a quote
     // opener. The splitter used to misread it as opening a quoted region with no
@@ -432,6 +457,21 @@ fn documented_gaps_are_locked_honestly() {
     // reference set carries an explicit `rm *--force*` deny instead. Recursive-only
     // stays symmetric with `rm -r`: both ask.
     assert_eq!(bash("rm --recursive /tmp/x"), Tier::Ask);
+    // The secret-directory rules name the *contents* (`//**/.ssh/**`), so the
+    // bare directory path is not covered for any tool. The engine applies the
+    // rules as authored; closing this needs a rule (`Read(//**/.ssh)`), not an
+    // engine change. The trailing-slash spelling is already covered.
+    assert_eq!(
+        evaluate(
+            &reference(),
+            "Read",
+            &json!({ "file_path": "/home/u/.ssh" }),
+            Some("/work")
+        )
+        .tier,
+        Tier::Allow
+    );
+    assert_eq!(bash("cp -r /home/u/.ssh /tmp/backup"), Tier::Ask);
 }
 
 #[test]

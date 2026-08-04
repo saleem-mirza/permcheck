@@ -148,7 +148,7 @@ pub(super) fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> bool {
                 return true;
             }
         }
-    } else if ((name == "cp" || name == "mv") && cp_mv_writes_denied(rs, operands, cwd))
+    } else if ((name == "cp" || name == "mv") && cp_mv_denied(rs, operands, cwd))
         || (name == "curl" && curl_reads_denied(rs, operands, cwd))
         || (name == "wget" && wget_reads_denied(rs, operands, cwd))
     {
@@ -198,7 +198,12 @@ fn reader_reads_denied(rs: &RuleSet, name: &str, operands: &[&str], cwd: Option<
     false
 }
 
-fn cp_mv_writes_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> bool {
+/// `cp` and `mv` touch two sides, and both are checked: they **read** every
+/// source and **overwrite** the destination. Sources go against the `Read` deny
+/// rules, because copying a secret out exposes it exactly as `cat`-ing it does
+/// (`cp .env /tmp/leak`); the destination goes against `Write`/`Edit` deny,
+/// because replacing a protected file is how a policy gets swapped out.
+fn cp_mv_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> bool {
     let mut target_dir = None;
     let mut positionals = Vec::new();
     let mut end_options = false;
@@ -224,20 +229,32 @@ fn cp_mv_writes_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> bo
         }
     }
 
-    let hits =
+    let reads = |path: &str| !path.is_empty() && engine::path_hits_deny(rs, &["Read"], path, cwd);
+    let writes =
         |path: &str| !path.is_empty() && engine::path_hits_deny(rs, &["Write", "Edit"], path, cwd);
+
+    // With `-t <dir>` every positional is a source; otherwise the last operand is
+    // the destination and the rest are sources.
+    let sources = match target_dir {
+        Some(_) => positionals.as_slice(),
+        None => positionals.split_last().map_or(&[][..], |(_, rest)| rest),
+    };
+    if sources.iter().any(|source| reads(source)) {
+        return true;
+    }
+
     if let Some(directory) = target_dir {
-        if hits(directory) {
+        if writes(directory) {
             return true;
         }
         let base = directory.trim_end_matches('/');
         return positionals
             .iter()
-            .any(|source| hits(&format!("{base}/{}", basename(source))));
+            .any(|source| writes(&format!("{base}/{}", basename(source))));
     }
     positionals
         .split_last()
-        .is_some_and(|(destination, _)| hits(destination))
+        .is_some_and(|(destination, _)| writes(destination))
 }
 
 fn long_value<'a>(
