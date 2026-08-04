@@ -61,7 +61,7 @@ Invoked as `permcheck --hook --rules <path>`. Wired into Claude Code
   All other fields (`session_id`, `transcript_path`, `hook_event_name`, …) are
   tolerated and ignored. Missing/unknown fields never error.
 
-- **Output** (stdout, JSON), **always exit 0**:
+- **Output** (stdout, JSON), **exit 0** whenever the decision is written:
 
   ```json
   {
@@ -83,6 +83,12 @@ Invoked as `permcheck --hook --rules <path>`. Wired into Claude Code
   0). An unrecognized non-empty tool name is not an error: it routes to Generic
   (§5) and uses its matching result or the `defaultMode` fall-back (§6.4). The
   hook never crashes the tool call open.
+
+- **Undeliverable decision**: if the decision cannot be written to stdout (a
+  broken pipe, for instance), the verdict falls back to the exit-code channel and
+  the process exits `2`, which Claude Code treats as a blocking error. Exiting
+  `0` there would report a decision that never arrived, and any other non-zero
+  code reads as a non-blocking error and lets the call through.
 
 ### 2.2 CLI: direct check
 
@@ -511,6 +517,10 @@ decomposes it and takes the **most restrictive** verdict.
 - Unreadable/invalid rules file, unparseable stdin, or a missing/empty tool name
   → `deny` (hook) or exit `3` (CLI, config errors only). An unrecognized
   non-empty tool name routes to Generic and is not an error (§5).
+- Emitting the decision is itself fallible, so it is not left to a macro that
+  panics on failure: a panic there would land outside the `catch_unwind` above
+  and exit non-zero with no decision, which reads as a non-blocking error and
+  lets the call run. A decision that cannot be written exits `2` instead (§2.1).
 
 ### 9.2 Non-goals (documented limitations)
 

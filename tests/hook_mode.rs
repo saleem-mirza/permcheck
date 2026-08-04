@@ -141,3 +141,45 @@ fn extra_event_fields_are_tolerated() {
     .success()
     .stdout(predicates::str::contains(r#""permissionDecision":"allow""#));
 }
+
+#[test]
+fn an_undeliverable_decision_blocks_instead_of_failing_open() {
+    // The decision travels on stdout, so a stdout that cannot be written leaves
+    // the caller with no verdict. Writing through `println!` panicked here —
+    // outside the `catch_unwind` — and exited 101, which Claude Code reads as a
+    // non-blocking error and lets the tool call through: the one path where the
+    // hook failed open. The verdict now falls back to the exit-code channel,
+    // where 2 is a blocking error (§2.1, §9.1).
+    //
+    // A closed read end makes it deterministic: the decision is written only
+    // after stdin reaches EOF, and the read end is dropped before stdin is fed,
+    // so the write is guaranteed to hit a broken pipe. (An unwritable fd would
+    // not reproduce it — `std` reports EBADF on stdout as success by design, so
+    // a broken pipe is the failure mode that actually reaches the caller.)
+    use std::process::{Command, Stdio};
+
+    let f = rules_file(RULES);
+    let mut child = Command::new(assert_cmd::cargo::cargo_bin("permcheck"))
+        .arg("--hook")
+        .arg("--rules")
+        .arg(f.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take().expect("piped stdout"));
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(br#"{"tool_name":"Bash","tool_input":{"command":"ls -la"}}"#)
+        .unwrap();
+
+    let status = child.wait().unwrap();
+    assert_eq!(
+        status.code(),
+        Some(2),
+        "an undeliverable decision must block, not fail open"
+    );
+}

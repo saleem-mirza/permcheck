@@ -1,4 +1,4 @@
-use std::io::{IsTerminal, Read as IoRead};
+use std::io::{IsTerminal, Read as IoRead, Write as IoWrite};
 use std::panic;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -455,7 +455,24 @@ fn run_hook(args: &[String]) {
     });
 
     let decision = result.unwrap_or_else(|_| Decision::deny_msg("internal panic"));
-    println!("{}", decision.to_hook_json());
+
+    // Write through a locked handle rather than `println!`: that macro panics on
+    // a write error, and this sits outside the `catch_unwind` above, so a stdout
+    // whose reader is gone exited 101 with no decision — which Claude Code reads
+    // as a non-blocking error and lets the tool call through. That was the one
+    // path where the hook failed open. (`std` reports EBADF on stdout as success,
+    // so the reachable failure is a broken pipe, not a closed descriptor.)
+    //
+    // An undeliverable decision falls back to the exit-code channel: exit 2 is a
+    // blocking error, so the call is stopped rather than waved through (§9.1).
+    // Nothing else is worth attempting here; stderr may be just as broken.
+    let mut out = std::io::stdout().lock();
+    if writeln!(out, "{}", decision.to_hook_json())
+        .and_then(|()| out.flush())
+        .is_err()
+    {
+        process::exit(2);
+    }
     process::exit(0);
 }
 
