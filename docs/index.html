@@ -1,210 +1,48 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<!-- Google tag (gtag.js) -->
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-W1ZPH7MEP0"></script>
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
-  gtag('js', new Date());
-
-  gtag('config', 'G-W1ZPH7MEP0');
-</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Zethian: permission engineering for coding agents</title>
+<meta http-equiv="refresh" content="0; url=/when-deny-doesnt-win.html">
+<title>When deny doesn't win</title>
 <meta name="description" content="Writing on permission models, least privilege, and security boundaries for coding agents such as Claude Code.">
-<link rel="canonical" href="https://blogs.zethian.com/">
+<link rel="canonical" href="https://blogs.zethian.com/when-deny-doesnt-win.html">
 <link rel="alternate" type="application/rss+xml" title="Zethian" href="/feed.xml">
 
-<meta property="og:type" content="website">
+<meta property="og:type" content="article">
 <meta property="og:site_name" content="Zethian">
-<meta property="og:title" content="Zethian: permission engineering for coding agents">
-<meta property="og:description" content="Writing on permission models, least privilege, and security boundaries for coding agents such as Claude Code.">
-<meta property="og:url" content="https://blogs.zethian.com/">
+<meta property="og:title" content="When deny doesn't win">
+<meta property="og:description" content="A practical guide to precise Claude Code permissions, containment-based carve-outs, and the limits of a shell-aware hook.">
+<meta property="og:url" content="https://blogs.zethian.com/when-deny-doesnt-win.html">
+<meta property="og:image" content="https://blogs.zethian.com/blog-assets/og-card.png">
+<meta property="og:image:width" content="2400">
+<meta property="og:image:height" content="1260">
+<meta property="og:image:alt" content="Social card for When deny doesn't win: a broad deny on aws with a narrower allow on aws describe commands, and the same call blocked by the native model but allowed by permcheck.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="When deny doesn't win">
+<meta name="twitter:description" content="A practical guide to precise Claude Code permissions, containment-based carve-outs, and the limits of a shell-aware hook.">
+<meta name="twitter:image" content="https://blogs.zethian.com/blog-assets/og-card.png">
+<meta name="twitter:image:alt" content="Social card for When deny doesn't win: a broad deny on aws with a narrower allow on aws describe commands, and the same call blocked by the native model but allowed by permcheck.">
+
+<script>location.replace('/when-deny-doesnt-win.html');</script>
 <style>
-  :root {
-    --bg: #fbfcfe;
-    --panel: #f1f5fb;
-    --panel-line: #e2e8f2;
-    --ink: #131b2b;
-    --ink-soft: #2b3550;
-    --muted: #55627a;
-    --faint: #8a94a8;
-    --hairline: #e4e9f2;
-    --accent: #1a56db;
-    --allow: #1a7f37;
-    --ask: #9a6700;
-    --deny: #cf222e;
-    --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
-    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  }
-
-  * { box-sizing: border-box; }
-  html { -webkit-text-size-adjust: 100%; }
-
   body {
     margin: 0;
-    background: var(--bg);
-    color: var(--ink);
-    font-family: var(--serif);
-    font-size: 19px;
-    line-height: 1.78;
-    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 2rem;
+    background: #fbfcfe;
+    color: #131b2b;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 1rem;
+    line-height: 1.6;
+    text-align: center;
   }
-
-  .wrap {
-    max-width: 44rem;
-    margin-inline: auto;
-    padding: clamp(2.4rem, 5vw, 5rem) clamp(1.2rem, 4vw, 2.6rem) 5rem;
-  }
-
-  .eyebrow {
-    font-family: var(--sans);
-    font-size: 0.78rem;
-    font-weight: 700;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--accent);
-    margin: 0 0 1.1rem;
-  }
-
-  h1 {
-    font-family: var(--sans);
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    line-height: 1.1;
-    font-size: clamp(1.8rem, 4.4vw, 2.4rem);
-    margin: 0 0 0.7rem;
-  }
-
-  .tagline {
-    font-size: 1.15rem;
-    line-height: 1.5;
-    color: var(--ink-soft);
-    margin: 0 0 1.6rem;
-    text-wrap: pretty;
-  }
-
-  .rule-mark {
-    display: flex;
-    width: 140px;
-    height: 4px;
-    border-radius: 3px;
-    overflow: hidden;
-    margin: 1.4rem 0 2.4rem;
-  }
-  .rule-mark i { flex: 1; }
-  .rule-mark .a { background: var(--allow); }
-  .rule-mark .b { background: var(--ask); }
-  .rule-mark .d { background: var(--deny); }
-
-  h2 {
-    font-family: var(--sans);
-    font-weight: 750;
-    font-size: 1.05rem;
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin: 3.2rem 0 1.2rem;
-    padding-bottom: 0.6rem;
-    border-bottom: 1px solid var(--hairline);
-  }
-
-  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid #eaf0fd; }
-  a:hover { border-bottom-color: var(--accent); }
-  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
-
-  article.post { margin: 0 0 2.4rem; }
-  article.post h3 {
-    font-family: var(--sans);
-    font-size: 1.3rem;
-    font-weight: 750;
-    line-height: 1.25;
-    margin: 0 0 0.45rem;
-  }
-  article.post h3 a { color: var(--ink); border-bottom: none; }
-  article.post h3 a:hover { color: var(--accent); }
-  article.post p { margin: 0 0 0.5rem; color: var(--ink-soft); font-size: 1.02rem; line-height: 1.6; }
-  .post-meta {
-    font-family: var(--sans);
-    font-size: 0.8rem;
-    color: var(--muted);
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem 0.7rem;
-    align-items: center;
-    margin-bottom: 0.6rem;
-  }
-  .post-meta .tag {
-    background: var(--panel);
-    border: 1px solid var(--panel-line);
-    color: var(--ink-soft);
-    padding: 0.1rem 0.55rem;
-    border-radius: 999px;
-    font-weight: 600;
-  }
-  .post-meta .dot { color: var(--faint); }
-
-  .discussion {
-    margin: 2rem 0 0;
-    padding: 1rem 1.1rem;
-    color: var(--ink-soft);
-    background: var(--panel);
-    border: 1px solid var(--panel-line);
-    border-radius: 9px;
-    font-family: var(--sans);
-    font-size: 0.9rem;
-    line-height: 1.5;
-  }
-
-  footer {
-    margin-top: 3.4rem;
-    padding-top: 1.4rem;
-    border-top: 1px solid var(--hairline);
-    font-family: var(--sans);
-    font-size: 0.84rem;
-    color: var(--muted);
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem 1.1rem;
-  }
-
-  @media (max-width: 640px) { body { font-size: 18px; } }
+  a { color: #1a56db; }
 </style>
 </head>
 <body>
-<main class="wrap">
-
-  <p class="eyebrow">Zethian</p>
-  <h1>Permission engineering for coding agents</h1>
-  <p class="tagline">Permission models, least privilege, and where the real security boundary sits when an agent runs commands for you.</p>
-  <div class="rule-mark" aria-hidden="true"><i class="a"></i><i class="b"></i><i class="d"></i></div>
-
-  <h2>Writing</h2>
-
-  <article class="post">
-    <h3><a href="/when-deny-doesnt-win">When deny doesn't win</a></h3>
-    <div class="post-meta">
-      <span class="tag">Security</span>
-      <span class="tag">Claude Code</span>
-      <span class="tag">Least privilege</span>
-      <span class="dot">·</span>
-      <span>Updated 5 August 2026</span>
-      <span class="dot">·</span>
-      <span>12 min read</span>
-    </div>
-    <p>A poisoned issue can turn an allowed shell into an SSH-key exfiltration path. permcheck blocks the protected read while still letting a strict-subset exception cross a broader deny. A practical look at containment, shell decomposition, the limits of static analysis, and where the real security boundary belongs.</p>
-  </article>
-
-  <p class="discussion">Have a policy shape the native model cannot express? <a href="https://www.linkedin.com/feed/update/urn:li:share:7489364873362059264/">Join the discussion on LinkedIn</a> with the broad restriction, the exception you need, and the verdict you expect.</p>
-
-  <footer>
-    <span><a href="/feed.xml">RSS</a></span>
-    <span class="dot">·</span>
-    <span>© 2026 <a href="https://www.linkedin.com/in/saleem-mirza/" rel="me">Saleem Mirza</a></span>
-  </footer>
-
-</main>
+<p>Redirecting to <a href="/when-deny-doesnt-win.html">When deny doesn't win</a>.</p>
 </body>
 </html>

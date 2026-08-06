@@ -10,8 +10,8 @@
 
     <item>
       <title>When deny doesn't win</title>
-      <link>https://blogs.zethian.com/when-deny-doesnt-win</link>
-      <guid isPermaLink="true">https://blogs.zethian.com/when-deny-doesnt-win</guid>
+      <link>https://blogs.zethian.com/when-deny-doesnt-win.html</link>
+      <guid isPermaLink="true">https://blogs.zethian.com/when-deny-doesnt-win.html</guid>
       <pubDate>Thu, 30 Jul 2026 00:00:00 +0000</pubDate>
       <description>Claude Code resolves permission conflicts with a fixed deny-always-wins rule, so a read-only cloud policy cannot be expressed. permcheck runs as a PreToolUse hook and lets an exception carve through a broad deny when its match-set is a strict subset, with the enterprise cost of the single-shape policy and where auto mode fits.</description>
     </item>

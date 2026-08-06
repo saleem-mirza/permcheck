@@ -13,24 +13,24 @@
 </script>
 <title>When Deny Doesn't Win: precise permissions for Claude Code</title>
 <meta name="description" content="Claude Code's fixed permission precedence cannot express every narrow exception. Learn how permcheck uses containment-based carve-outs, and where its protection ends.">
-<link rel="canonical" href="https://blogs.zethian.com/when-deny-doesnt-win">
+<link rel="canonical" href="https://blogs.zethian.com/when-deny-doesnt-win.html">
 <link rel="alternate" type="application/rss+xml" title="Zethian" href="/feed.xml">
 
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="Zethian">
 <meta property="og:title" content="When deny doesn't win">
 <meta property="og:description" content="A practical guide to precise Claude Code permissions, containment-based carve-outs, and the limits of a shell-aware hook.">
-<meta property="og:url" content="https://blogs.zethian.com/when-deny-doesnt-win">
-<meta property="og:image" content="https://blogs.zethian.com/blog-assets/diagram-2-native-vs-permcheck.png">
-<meta property="og:image:width" content="1720">
-<meta property="og:image:height" content="1080">
-<meta property="og:image:alt" content="The same AWS describe call is denied by native fixed precedence and allowed by a narrower permcheck carve-out.">
+<meta property="og:url" content="https://blogs.zethian.com/when-deny-doesnt-win.html">
+<meta property="og:image" content="https://blogs.zethian.com/blog-assets/og-card.png">
+<meta property="og:image:width" content="2400">
+<meta property="og:image:height" content="1260">
+<meta property="og:image:alt" content="Social card for When deny doesn't win: a broad deny on aws with a narrower allow on aws describe commands, and the same call blocked by the native model but allowed by permcheck.">
 
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="When deny doesn't win">
 <meta name="twitter:description" content="A practical guide to precise Claude Code permissions, containment-based carve-outs, and the limits of a shell-aware hook.">
-<meta name="twitter:image" content="https://blogs.zethian.com/blog-assets/diagram-2-native-vs-permcheck.png">
-<meta name="twitter:image:alt" content="The same AWS describe call is denied by native fixed precedence and allowed by a narrower permcheck carve-out.">
+<meta name="twitter:image" content="https://blogs.zethian.com/blog-assets/og-card.png">
+<meta name="twitter:image:alt" content="Social card for When deny doesn't win: a broad deny on aws with a narrower allow on aws describe commands, and the same call blocked by the native model but allowed by permcheck.">
 
 <script type="application/ld+json">
 {
@@ -54,9 +54,9 @@
   "dateModified": "2026-08-05",
   "mainEntityOfPage": {
     "@type": "WebPage",
-    "@id": "https://blogs.zethian.com/when-deny-doesnt-win"
+    "@id": "https://blogs.zethian.com/when-deny-doesnt-win.html"
   },
-  "image": "https://blogs.zethian.com/blog-assets/diagram-2-native-vs-permcheck.png",
+  "image": "https://blogs.zethian.com/blog-assets/og-card.png",
   "inLanguage": "en",
   "keywords": "Claude Code, permissions, least privilege, PreToolUse hook, prompt injection, agent security"
 }
@@ -612,7 +612,7 @@
     </section>
 
     <figure>
-      <img src="blog-assets/diagram-5-injection.svg" alt="An exfiltration command is split into cat and curl units. The cat unit reaches a denied SSH key, so the complete pipe is denied before it runs.">
+      <img src="blog-assets/diagram-5-injection.png" alt="An exfiltration command is split into cat and curl units. The cat unit reaches a denied SSH key, so the complete pipe is denied before it runs.">
       <figcaption>The rule blocks a protected read; it does not need to recognize the surrounding prompt injection.</figcaption>
     </figure>
 
@@ -628,7 +628,7 @@ allow: Bash(aws * describe-*)</code></pre>
     </section>
 
     <figure>
-      <img src="blog-assets/diagram-2-native-vs-permcheck.svg" alt="The same AWS describe command meets the same two rules in both models. The native model matches the deny first and stops, so the allow is never reached. permcheck tests the allow against the deny, finds it is a strict subset, and allows the call.">
+      <img src="blog-assets/diagram-2-native-vs-permcheck.png" alt="The same AWS describe command meets the same two rules in both models. The native model matches the deny first and stops, so the allow is never reached. permcheck tests the allow against the deny, finds it is a strict subset, and allows the call.">
       <figcaption>Both models match the deny. Native stops there; permcheck tests whether the allow matches anything the deny does not.</figcaption>
     </figure>
 
@@ -728,7 +728,7 @@ permcheck Bash "aws ec2 terminate-instances" --rules sample-policy.json
     </div>
 
     <figure>
-      <img src="blog-assets/diagram-4-compound.svg" alt="The command ls and sudo rm is split into two units. The sudo wrapper is peeled, the rm unit is denied, and that denial blocks the whole line.">
+      <img src="blog-assets/diagram-4-compound.png" alt="The command ls and sudo rm is split into two units. The sudo wrapper is peeled, the rm unit is denied, and that denial blocks the whole line.">
       <figcaption>One denied unit blocks the compound command. Wrapper peeling exposes the command the rule names.</figcaption>
     </figure>
 
@@ -783,7 +783,7 @@ cat *.rs           <span class="comment"># allow in the sample policy</span></co
     </section>
 
     <figure>
-      <img src="blog-assets/diagram-6-stack.svg" alt="A four-layer stack places prompt intent above permcheck, native Claude Code permissions, and the OS sandbox and managed settings at the base.">
+      <img src="blog-assets/diagram-6-stack.png" alt="A four-layer stack places prompt intent above permcheck, native Claude Code permissions, and the OS sandbox and managed settings at the base.">
       <figcaption>permcheck adds policy precision. Native permissions and the operating-system boundary still decide what cannot be bypassed.</figcaption>
     </figure>
 
@@ -1000,7 +1000,7 @@ permcheck Bash "kubectl get pods --namespace dev" --rules sample-policy.json
       <p class="section-kicker">The takeaway</p>
       <h2>Precision is useful when its boundary is explicit</h2>
       <p>“Deny always wins” is safe, but sometimes too coarse to express a bounded exception. permcheck adds a conservative carve-out: an exception can cross a deny only when containment is proven. Shell decomposition closes several common side doors, while the OS sandbox remains responsible for containment the hook cannot provide.</p>
-      <p>Where does your agent policy need a narrow exception, and which layer should provide the real boundary? <a href="https://www.linkedin.com/feed/update/urn:li:share:7489364873362059264/">Join the discussion on LinkedIn</a> with the broad restriction, the exception you need, and the verdict you expect.</p>
+      <p>Where does your agent policy need a narrow exception, and which layer should provide the real boundary? <a href="https://www.linkedin.com/posts/saleem-mirza_when-deny-doesnt-win-share-7490953417008496640-pUVk/">Join the discussion on LinkedIn</a> with the broad restriction, the exception you need, and the verdict you expect.</p>
     </section>
   </article>
 
