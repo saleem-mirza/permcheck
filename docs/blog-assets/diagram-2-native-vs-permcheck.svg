@@ -1,36 +1,72 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 400" width="860" height="400" font-family="-apple-system, Segoe UI, Roboto, sans-serif" role="img" aria-label="The same aws describe call is blocked by the native deny-always-wins model but allowed by permcheck, where the higher-specificity allow beats the broad deny.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 540" width="860" height="540" font-family="-apple-system, Segoe UI, Roboto, sans-serif" role="img" aria-label="The same aws describe call meets the same two rules. The native model matches the deny first and stops, so the allow is never reached and the call is blocked. permcheck holds the matching deny, then reaches the matching allow, finds it is a strict subset of the deny, and allows the call.">
   <title>Native model versus permcheck on the same call</title>
   <defs>
     <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#57606a"/></marker>
-    <marker id="ah2d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#8c959f"/></marker>
+    <style>
+      .flow { fill: none; stroke: #57606a; stroke-width: 1.5; marker-end: url(#ah2); }
+      .m { font-size: 13px; font-family: ui-monospace, SFMono-Regular, monospace; fill: #1f2328; }
+      .m-off { font-size: 13px; font-family: ui-monospace, SFMono-Regular, monospace; fill: #8c959f; }
+      .t { font-size: 13px; fill: #1f2328; }
+      .tag { font-size: 11px; fill: #57606a; }
+      .off { font-size: 11px; font-style: italic; fill: #8c959f; }
+      .w { font-size: 13.5px; font-weight: 700; fill: #ffffff; }
+      .step { font-size: 11px; fill: #57606a; letter-spacing: 1px; }
+    </style>
   </defs>
-  <rect x="315" y="12" width="230" height="42" rx="8" fill="#eaeef2" stroke="#57606a" stroke-width="1.5"/>
-  <text x="430" y="38" text-anchor="middle" font-size="13" font-family="ui-monospace, monospace" fill="#1f2328">aws ec2 describe-instances</text>
-  <line x1="400" y1="54" x2="230" y2="86" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah2)"/>
-  <line x1="460" y1="54" x2="640" y2="86" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah2)"/>
 
-  <rect x="20" y="86" width="400" height="298" rx="10" fill="none" stroke="#cf222e" stroke-width="1.5" stroke-dasharray="5 4"/>
-  <text x="220" y="112" text-anchor="middle" font-size="14" font-weight="700" fill="#cf222e" letter-spacing="1">NATIVE MODEL</text>
-  <rect x="70" y="132" width="300" height="44" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
-  <text x="220" y="159" text-anchor="middle" font-size="13" font-family="ui-monospace, monospace" fill="#1f2328">allow: aws * describe-*</text>
-  <rect x="70" y="210" width="300" height="44" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
-  <text x="220" y="237" text-anchor="middle" font-size="13" font-family="ui-monospace, monospace" fill="#1f2328">deny: aws:*</text>
-  <rect x="115" y="312" width="210" height="52" rx="8" fill="#cf222e"/>
-  <text x="220" y="343" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">deny wins → BLOCKED</text>
-  <line x1="220" y1="254" x2="220" y2="310" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah2)"/>
-  <line x1="150" y1="176" x2="150" y2="312" stroke="#8c959f" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ah2d)"/>
-  <text x="120" y="250" text-anchor="middle" font-size="11" font-style="italic" fill="#8c959f">ignored</text>
+  <g text-anchor="middle">
+    <rect x="280" y="18" width="300" height="46" rx="10" fill="#eaeef2" stroke="#57606a" stroke-width="1.5"/>
+    <text x="430" y="47" class="m">aws ec2 describe-instances</text>
+  </g>
+  <path class="flow" d="M430 64 V82 Q430 92 420 92 H230 Q220 92 220 102 V112"/>
+  <path class="flow" d="M430 64 V82 Q430 92 440 92 H630 Q640 92 640 102 V112"/>
 
-  <rect x="440" y="86" width="400" height="298" rx="10" fill="none" stroke="#0969da" stroke-width="1.5"/>
-  <text x="640" y="112" text-anchor="middle" font-size="14" font-weight="700" fill="#0969da" letter-spacing="1">permcheck</text>
-  <rect x="490" y="132" width="300" height="44" rx="8" fill="#ddf4ff" stroke="#0969da" stroke-width="1.5"/>
-  <text x="640" y="159" text-anchor="middle" font-size="13" font-family="ui-monospace, monospace" fill="#1f2328">allow: aws * describe-*  ·  14</text>
-  <rect x="490" y="210" width="300" height="44" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
-  <text x="640" y="237" text-anchor="middle" font-size="13" font-family="ui-monospace, monospace" fill="#1f2328">deny: aws:*  ·  3</text>
-  <rect x="525" y="312" width="230" height="52" rx="8" fill="#1a7f37"/>
-  <text x="640" y="343" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">specific wins → ALLOWED</text>
-  <line x1="640" y1="176" x2="640" y2="310" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah2)"/>
-  <line x1="710" y1="254" x2="710" y2="312" stroke="#8c959f" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ah2d)"/>
-  <text x="740" y="288" text-anchor="middle" font-size="11" font-style="italic" fill="#8c959f">loses</text>
+  <rect x="30" y="118" width="380" height="392" rx="12" fill="none" stroke="#cf222e" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <rect x="450" y="118" width="380" height="392" rx="12" fill="none" stroke="#0969da" stroke-width="1.5"/>
+
+  <g text-anchor="middle">
+    <text x="220" y="147" font-size="13" font-weight="700" fill="#cf222e" letter-spacing="1.2">NATIVE MODEL</text>
+    <rect x="70" y="164" width="300" height="48" rx="10" fill="#ffffff" stroke="#cf222e" stroke-width="1.5"/>
+    <text x="220" y="186" class="m">deny: aws:*</text>
+    <text x="220" y="202" class="tag" fill="#cf222e">step 1 · matches · decides</text>
+
+    <rect x="70" y="242" width="300" height="48" rx="10" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="220" y="264" class="m-off">allow: aws * describe-*</text>
+    <text x="220" y="280" class="off">never reached</text>
+
+    <rect x="110" y="330" width="220" height="50" rx="10" fill="#f6f8fa" stroke="#57606a" stroke-width="1.5"/>
+    <text x="220" y="352" class="t">deny wins outright</text>
+    <text x="220" y="370" class="t">no exception considered</text>
+
+    <rect x="80" y="424" width="280" height="54" rx="10" fill="#cf222e"/>
+    <text x="220" y="456" class="w">BLOCKED</text>
+    <text x="220" y="470" font-size="11.5" fill="#ffd8d8">read-only inspection lost</text>
+  </g>
+  <path class="flow" d="M370 188 H382 Q392 188 392 198 V345 Q392 355 382 355 H340"/>
+  <path class="flow" d="M220 380 V414"/>
+  <text x="384" y="238" class="off" text-anchor="end">skipped</text>
+
+  <g text-anchor="middle">
+    <text x="640" y="147" font-size="13" font-weight="700" fill="#0969da" letter-spacing="1.2">permcheck</text>
+    <rect x="490" y="164" width="300" height="48" rx="10" fill="#ffffff" stroke="#cf222e" stroke-width="1.5"/>
+    <text x="640" y="186" class="m">deny: aws:*</text>
+    <text x="640" y="202" class="tag" fill="#cf222e">step 1 · matches · not final yet</text>
+
+    <rect x="490" y="242" width="300" height="48" rx="10" fill="#ddf4ff" stroke="#0969da" stroke-width="1.5"/>
+    <text x="640" y="264" class="m">allow: aws * describe-*</text>
+    <text x="640" y="280" class="tag" fill="#0969da">step 2 · matches · strictly narrower</text>
+
+    <rect x="530" y="330" width="220" height="50" rx="10" fill="#f6f8fa" stroke="#0969da" stroke-width="1.5"/>
+    <text x="640" y="352" class="t">allow ⊂ deny</text>
+    <text x="640" y="370" class="t">the deny does not hold</text>
+
+    <rect x="500" y="424" width="280" height="54" rx="10" fill="#1a7f37"/>
+    <text x="640" y="456" class="w">ALLOWED</text>
+    <text x="640" y="470" font-size="11.5" fill="#d3f2dc">mutation still denied</text>
+  </g>
+  <path class="flow" d="M640 212 V236"/>
+  <path class="flow" d="M640 290 V324"/>
+  <path class="flow" d="M640 380 V414"/>
+  <text x="628" y="312" class="step" text-anchor="end">step 3 · subset test</text>
 </svg>

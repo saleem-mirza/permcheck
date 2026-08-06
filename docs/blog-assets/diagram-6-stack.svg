@@ -1,16 +1,45 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 340" width="560" height="340" font-family="-apple-system, Segoe UI, Roboto, sans-serif" role="img" aria-label="Four stacked layers: prompt or agent intent, then the permcheck least-privilege overlay, then native Claude Code permissions, then the OS sandbox and managed-settings.json which is the real boundary.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 540" width="860" height="540" font-family="-apple-system, Segoe UI, Roboto, sans-serif" role="img" aria-label="Four stacked layers: prompt or agent intent, then the permcheck least-privilege overlay which blocks a call on deny, then native Claude Code permissions, then the OS sandbox and managed-settings.json, the real security boundary.">
   <title>Where permcheck sits in the defense stack</title>
-  <defs><marker id="ah6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#57606a"/></marker></defs>
-
-  <line x1="280" y1="66" x2="280" y2="96" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah6)"/>
-  <line x1="280" y1="146" x2="280" y2="176" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah6)"/>
-  <line x1="280" y1="226" x2="280" y2="256" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah6)"/>
+  <defs>
+    <marker id="ah6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#57606a"/></marker>
+    <style>
+      .flow { fill: none; stroke: #57606a; stroke-width: 1.5; marker-end: url(#ah6); }
+      .node { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.5; }
+      .t { font-size: 13px; fill: #1f2328; }
+      .sub { font-size: 11.5px; fill: #57606a; }
+      .w { font-size: 13px; font-weight: 700; fill: #ffffff; }
+      .note { font-size: 11px; font-style: italic; fill: #57606a; }
+    </style>
+  </defs>
 
   <g text-anchor="middle">
-    <rect x="100" y="18" width="360" height="48" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/><text x="280" y="47" font-size="13.5" fill="#1f2328">Prompt / agent intent</text>
-    <rect x="100" y="98" width="360" height="48" rx="8" fill="#0969da"/><text x="280" y="121" font-size="13.5" font-weight="700" fill="#fff">permcheck</text><text x="280" y="138" font-size="12" fill="#cfe6ff">least-privilege overlay</text>
-    <rect x="100" y="178" width="360" height="48" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/><text x="280" y="207" font-size="13.5" fill="#1f2328">Native Claude Code permissions</text>
-    <rect x="70" y="258" width="420" height="58" rx="8" fill="#57606a"/><text x="280" y="282" font-size="13.5" font-weight="700" fill="#fff">OS sandbox + managed-settings.json</text><text x="280" y="301" font-size="12" fill="#d0d7de">the real security boundary</text>
+    <rect class="node" x="300" y="86" width="340" height="56" rx="10"/>
+    <text x="470" y="112" class="t">Prompt / agent intent</text>
+    <text x="470" y="130" class="sub">the tool call the model wants to make</text>
+
+    <rect x="300" y="178" width="340" height="64" rx="10" fill="#0969da"/>
+    <text x="470" y="203" class="w">permcheck</text>
+    <text x="470" y="221" font-size="11.5" fill="#cfe6ff">least-privilege overlay</text>
+    <text x="470" y="236" font-size="11.5" fill="#cfe6ff">carve-outs the native model cannot express</text>
+
+    <rect x="70" y="300" width="170" height="44" rx="10" fill="#cf222e"/>
+    <text x="155" y="327" class="w">call blocked</text>
+
+    <rect class="node" x="300" y="278" width="340" height="56" rx="10"/>
+    <text x="470" y="304" class="t">Native Claude Code permissions</text>
+    <text x="470" y="322" class="sub">deny and ask stay terminal</text>
+
+    <rect x="280" y="370" width="380" height="64" rx="10" fill="#57606a"/>
+    <text x="470" y="395" class="w">OS sandbox + managed-settings.json</text>
+    <text x="470" y="413" font-size="11.5" fill="#d0d7de">the real security boundary</text>
+    <text x="470" y="428" font-size="11.5" fill="#d0d7de">nothing above this can bypass it</text>
   </g>
+
+  <path class="flow" d="M470 142 V172"/>
+  <path class="flow" d="M300 210 H165 Q155 210 155 220 V294"/>
+  <path class="flow" d="M470 242 V272"/>
+  <path class="flow" d="M470 334 V364"/>
+  <text x="170" y="262" class="note" text-anchor="start">on deny</text>
+  <text x="480" y="262" class="note" text-anchor="start">allow or ask continues down</text>
 </svg>

@@ -146,6 +146,18 @@
   }
   .post-meta .dot { color: var(--faint); }
 
+  .discussion {
+    margin: 2rem 0 0;
+    padding: 1rem 1.1rem;
+    color: var(--ink-soft);
+    background: var(--panel);
+    border: 1px solid var(--panel-line);
+    border-radius: 9px;
+    font-family: var(--sans);
+    font-size: 0.9rem;
+    line-height: 1.5;
+  }
+
   footer {
     margin-top: 3.4rem;
     padding-top: 1.4rem;
@@ -178,25 +190,19 @@
       <span class="tag">Claude Code</span>
       <span class="tag">Least privilege</span>
       <span class="dot">·</span>
-      <span>30 July 2026</span>
+      <span>Updated 5 August 2026</span>
       <span class="dot">·</span>
-      <span>22 min read</span>
+      <span>12 min read</span>
     </div>
-    <p>Claude Code resolves permission conflicts with a fixed rule: deny always wins. That makes a read-only cloud policy impossible to express. permcheck runs as a PreToolUse hook and lets a rule override a conflicting one when it is a strict subset of it, so a narrow allow carves out a broad deny. For people who run Claude Code, and for the people who answer for what it runs.</p>
+    <p>A poisoned issue can turn an allowed shell into an SSH-key exfiltration path. permcheck blocks the protected read while still letting a strict-subset exception cross a broader deny. A practical look at containment, shell decomposition, the limits of static analysis, and where the real security boundary belongs.</p>
   </article>
 
-  <!--
-    Discussion channel goes here. With a private source repo, GitHub Discussions
-    is unavailable; pick one of:
-      <p>Discuss this post on <a href="https://news.ycombinator.com/item?id=...">Hacker News</a>.</p>
-      <p>Questions: <a href="mailto:you@example.com">you@example.com</a>.</p>
-      <p>Discussions on the public <a href="https://github.com/saleem-mirza/marketplace/discussions">marketplace repo</a>.</p>
-  -->
+  <p class="discussion">Have a policy shape the native model cannot express? <a href="https://www.linkedin.com/feed/update/urn:li:share:7489364873362059264/">Join the discussion on LinkedIn</a> with the broad restriction, the exception you need, and the verdict you expect.</p>
 
   <footer>
     <span><a href="/feed.xml">RSS</a></span>
     <span class="dot">·</span>
-    <span>© 2026 Saleem Mirza</span>
+    <span>© 2026 <a href="https://www.linkedin.com/in/saleem-mirza/" rel="me">Saleem Mirza</a></span>
   </footer>
 
 </main>

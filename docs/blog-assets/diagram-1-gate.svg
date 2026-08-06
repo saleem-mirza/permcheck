@@ -1,24 +1,48 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 230" width="860" height="230" font-family="-apple-system, Segoe UI, Roboto, sans-serif" role="img" aria-label="A tool call passes through the PreToolUse hook, permcheck scores it, and the verdict is allow, ask, or deny.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 540" width="860" height="540" font-family="-apple-system, Segoe UI, Roboto, sans-serif" role="img" aria-label="A tool call passes through the PreToolUse hook, permcheck scores it against your rules, and the verdict is one of allow which runs, ask which prompts, or deny which blocks the call.">
   <title>permcheck as the PreToolUse gate</title>
-  <defs><marker id="ah1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#57606a"/></marker></defs>
-  <line x1="162" y1="115" x2="193" y2="115" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah1)"/>
-  <line x1="337" y1="115" x2="368" y2="115" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah1)"/>
-  <line x1="557" y1="115" x2="588" y2="115" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah1)"/>
-  <line x1="682" y1="108" x2="708" y2="60" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah1)"/>
-  <line x1="682" y1="115" x2="708" y2="115" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah1)"/>
-  <line x1="682" y1="122" x2="708" y2="170" stroke="#57606a" stroke-width="1.5" marker-end="url(#ah1)"/>
-  <g font-size="13" fill="#1f2328" text-anchor="middle">
-    <rect x="10" y="88" width="152" height="54" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
-    <text x="86" y="110">Claude wants</text><text x="86" y="127">to run a tool</text>
-    <rect x="193" y="88" width="144" height="54" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
-    <text x="265" y="119">PreToolUse hook</text>
-    <rect x="368" y="82" width="189" height="66" rx="8" fill="#ddf4ff" stroke="#0969da" stroke-width="1.5"/>
-    <text x="462" y="110">permcheck scores it</text><text x="462" y="127">against your rules</text>
-    <rect x="588" y="88" width="94" height="54" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
-    <text x="635" y="119">Verdict</text>
-    <rect x="708" y="38" width="142" height="44" rx="8" fill="#1a7f37"/><text x="779" y="65" fill="#fff">allow → runs</text>
-    <rect x="708" y="93" width="142" height="44" rx="8" fill="#9a6700"/><text x="779" y="120" fill="#fff">ask → prompt</text>
-    <rect x="708" y="148" width="142" height="44" rx="8" fill="#cf222e"/><text x="779" y="175" fill="#fff">deny → blocked</text>
+  <defs>
+    <marker id="ah1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#57606a"/></marker>
+    <style>
+      .flow { fill: none; stroke: #57606a; stroke-width: 1.5; marker-end: url(#ah1); }
+      .node { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.5; }
+      .t { font-size: 13px; fill: #1f2328; }
+      .sub { font-size: 11.5px; fill: #57606a; }
+      .w { font-size: 13px; font-weight: 700; fill: #ffffff; }
+    </style>
+  </defs>
+
+  <g text-anchor="middle">
+    <rect class="node" x="300" y="52" width="260" height="46" rx="10"/>
+    <text x="430" y="80" class="t">Claude wants to run a tool</text>
+
+    <rect class="node" x="300" y="134" width="260" height="46" rx="10"/>
+    <text x="430" y="162" class="t">PreToolUse hook</text>
+
+    <rect x="290" y="216" width="280" height="60" rx="10" fill="#ddf4ff" stroke="#0969da" stroke-width="1.5"/>
+    <text x="430" y="242" class="t">permcheck scores the call</text>
+    <text x="430" y="261" class="sub">against your rules file</text>
+
+    <rect class="node" x="350" y="312" width="160" height="46" rx="10"/>
+    <text x="430" y="340" class="t">one verdict</text>
+
+    <rect x="70" y="418" width="200" height="54" rx="10" fill="#1a7f37"/>
+    <text x="170" y="443" class="w">allow</text>
+    <text x="170" y="461" font-size="11.5" fill="#d3f2dc">the tool runs</text>
+
+    <rect x="330" y="418" width="200" height="54" rx="10" fill="#9a6700"/>
+    <text x="430" y="443" class="w">ask</text>
+    <text x="430" y="461" font-size="11.5" fill="#ffeec2">the user decides</text>
+
+    <rect x="590" y="418" width="200" height="54" rx="10" fill="#cf222e"/>
+    <text x="690" y="443" class="w">deny</text>
+    <text x="690" y="461" font-size="11.5" fill="#ffd8d8">the call never runs</text>
   </g>
+
+  <path class="flow" d="M430 98 V128"/>
+  <path class="flow" d="M430 180 V210"/>
+  <path class="flow" d="M430 276 V306"/>
+  <path class="flow" d="M430 358 V372 Q430 382 420 382 H180 Q170 382 170 392 V412"/>
+  <path class="flow" d="M430 358 V412"/>
+  <path class="flow" d="M430 358 V372 Q430 382 440 382 H680 Q690 382 690 392 V412"/>
 </svg>
