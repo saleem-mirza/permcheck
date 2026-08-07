@@ -310,7 +310,12 @@ selection per unit.
 
 If no rule matches, the decision is the rule set's **fall-back tier**, configured
 by `defaultMode`: `"ask"` makes an unlisted call **ask**, and otherwise (`"deny"`,
-missing, or any other value) it is **deny** (fail-closed default). This fall-back
+missing, or any other value) it is **deny** (fail-closed default). A value that is
+present but neither `"ask"` nor `"deny"` still resolves to `deny`, and the
+author-time linter reports it (§11.2): Claude Code's `permissions.defaultMode`
+accepts session modes such as `"dontAsk"` and `"acceptEdits"` under the same key
+name, so a value copied from `settings.json` would otherwise change the fall-back
+without saying so. This fall-back
 governs only the *no rule matched* case. It does **not** loosen the Bash
 file-access cross-check (§8), which still raises to `deny` on a hit, nor the
 error posture (§9.1): bad rules, unparseable input, a missing/empty tool name, or
@@ -673,7 +678,13 @@ correction backlog for the reference file.
    of a `deny` (the block silently becomes a prompt), and an `allow` whose match-set
    is a strict subset of a broader `ask` it outranks on specificity (the prompt
    silently becomes auto-allow). A narrow `allow` inside a `deny` is **not**
-   flagged: that is the intended read-only carve-out. The shipped reference set is
+   flagged: that is the intended read-only carve-out. It also reports an
+   **unrecognized `defaultMode`**: any value other than `"ask"` or `"deny"`, which
+   §6.4 resolves to `deny`. The key name and the enclosing `permissions` object are
+   the same shape Claude Code's `settings.json` uses, where `defaultMode` accepts
+   session modes (`"dontAsk"`, `"acceptEdits"`, `"plan"`, `"auto"`,
+   `"bypassPermissions"`, `"default"`). Such a value is fail-closed here but not
+   what the author asked for, so the linter names it. The shipped reference set is
    clean under the check.
 
 3. **Coverage gaps / asymmetries.** `Bash(cp -R:*)` is allowed but plain

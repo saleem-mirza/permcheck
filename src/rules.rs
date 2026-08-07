@@ -77,6 +77,10 @@ pub struct RuleSet {
     /// `defaultMode` field: `"ask"` → [`Tier::Ask`], otherwise (`"deny"`,
     /// missing, or any other value) → [`Tier::Deny`], fail-closed.
     pub default_tier: Tier,
+    /// The `defaultMode` value as written, when it is neither `"ask"` nor
+    /// `"deny"`. Held only so [`RuleSet::lint_warnings`] can name it (§11.2);
+    /// the tier above is already resolved fail-closed.
+    unknown_default_mode: Option<String>,
 }
 
 impl RuleSet {
@@ -101,8 +105,21 @@ impl RuleSet {
     /// prompt), or an `allow` contained in a broader `ask` that outranks it on
     /// specificity (a prompt silently becomes auto-allow). A narrower `allow`
     /// inside a `deny` is **not** flagged: that is the intended read-only carve-out.
+    ///
+    /// **Unrecognized `defaultMode`.** Any value other than `"ask"` or `"deny"`.
+    /// §6.4 resolves it to `deny`, so the policy is fail-closed, but the key name
+    /// and the enclosing `permissions` object match Claude Code's `settings.json`,
+    /// where `defaultMode` names a session mode (`"dontAsk"`, `"acceptEdits"`, …).
+    /// A value pasted across changes the fall-back without saying so (§11.2).
     pub fn lint_warnings(&self) -> Vec<String> {
         let mut out = Vec::new();
+
+        // Policy-wide warnings first, so the list reads top-down.
+        if let Some(value) = &self.unknown_default_mode {
+            out.push(format!(
+                "`defaultMode` is `{value}`, which is neither `ask` nor `deny`, so unmatched calls fall back to `deny`. Claude Code's `permissions.defaultMode` accepts session modes such as `dontAsk` under the same key name; this file is a permcheck policy, not `settings.json`.",
+            ));
+        }
 
         // Dead `cmd:*` rules with an interior `*`.
         for rule in &self.rules {
@@ -203,15 +220,26 @@ impl RuleSet {
 
         // Fall-back tier for unmatched calls (§6.4). `"ask"` opts into
         // asking; "deny", missing, or any other value stays fail-closed.
-        let default_tier = match permissions.get("defaultMode").and_then(Value::as_str) {
+        let configured = permissions.get("defaultMode");
+        let default_tier = match configured.and_then(Value::as_str) {
             Some("ask") => Tier::Ask,
             _ => Tier::Deny,
+        };
+        // A present-but-unrecognized value is fail-closed above and linted below
+        // (§11.2). Non-string JSON is rendered so the warning quotes what was
+        // written rather than an empty string.
+        let unknown_default_mode = match configured {
+            None => None,
+            Some(Value::String(s)) if s == "ask" || s == "deny" => None,
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(other) => Some(other.to_string()),
         };
 
         Ok(RuleSet {
             rules,
             index,
             default_tier,
+            unknown_default_mode,
         })
     }
 }
@@ -361,6 +389,42 @@ mod lint_tests {
         assert_eq!(w.len(), 1);
         assert!(w[0].contains("aws * --region east"));
         assert!(w[0].contains("matches nothing"));
+    }
+
+    #[test]
+    fn session_mode_as_default_mode_warns() {
+        // `dontAsk` is a Claude Code session mode, not a permcheck fall-back
+        // tier. It resolves to deny (fail-closed) and the lint names it (§6.4).
+        let rs =
+            RuleSet::load_str(r#"{"permissions":{"defaultMode":"dontAsk","allow":[]}}"#).unwrap();
+        assert_eq!(rs.default_tier, Tier::Deny);
+        let w = rs.lint_warnings();
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("dontAsk"));
+        assert!(w[0].contains("fall back to `deny`"));
+    }
+
+    #[test]
+    fn non_string_default_mode_warns_with_its_value() {
+        // A non-string value also misses both tiers; the warning quotes what was
+        // written rather than an empty string.
+        let rs = RuleSet::load_str(r#"{"permissions":{"defaultMode":true,"allow":[]}}"#).unwrap();
+        assert_eq!(rs.default_tier, Tier::Deny);
+        let w = rs.lint_warnings();
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("`true`"));
+    }
+
+    #[test]
+    fn recognized_and_missing_default_modes_do_not_warn() {
+        for text in [
+            r#"{"permissions":{"defaultMode":"ask","allow":[]}}"#,
+            r#"{"permissions":{"defaultMode":"deny","allow":[]}}"#,
+            r#"{"permissions":{"allow":[]}}"#,
+        ] {
+            let rs = RuleSet::load_str(text).unwrap();
+            assert!(rs.lint_warnings().is_empty(), "warned on {text}");
+        }
     }
 
     #[test]
