@@ -18,7 +18,7 @@
     ],
     "deny": [
       "Bash(sudo:*)",
-      "Bash(rm -f:*)",
+      "Bash(rm:*)",
       "Bash(aws:*)",
       "Bash(terraform:*)",
       "Bash(kubectl get secret:*)",

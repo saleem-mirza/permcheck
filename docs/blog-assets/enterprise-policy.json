@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "defaultMode": "ask",
+    "allow": [
+      "Bash(aws * describe-*)",
+      "Bash(aws * list-*)",
+      "Bash(kubectl get * --namespace prod)",
+      "Bash(terraform plan:*)"
+    ],
+    "deny": [
+      "Bash(aws:*)",
+      "Bash(kubectl:*)",
+      "Bash(kubectl get secret:*)",
+      "Bash(terraform:*)"
+    ]
+  }
+}

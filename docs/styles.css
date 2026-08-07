@@ -394,9 +394,9 @@ tr:last-child td { border-bottom: 0; }
   margin: 2rem auto 2.4rem;
 }
 .recipes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-/* The featured recipe stands alone above the collapsed rest, so it spans
-   the row instead of leaving half of it empty. */
-.recipes.featured { grid-template-columns: 1fr; margin-bottom: 1.4rem; }
+table.compact { min-width: 0; font-size: 0.86rem; }
+table.compact th,
+table.compact td { padding: 0.6rem 0.75rem; }
 .card {
   min-width: 0;
   min-height: 100%;
