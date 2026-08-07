@@ -2,7 +2,7 @@
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
     <title>Zethian</title>
-    <link>https://blogs.zethian.com/</link>
+    <link>https://blogs.zethian.com/when-deny-doesnt-win.html</link>
     <description>Permission models, least privilege, and security boundaries for coding agents.</description>
     <language>en</language>
     <atom:link href="https://blogs.zethian.com/feed.xml" rel="self" type="application/rss+xml"/>
