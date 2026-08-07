@@ -575,7 +575,7 @@
       <div class="rule-mark" aria-hidden="true"><span></span><span></span><span></span></div>
       <p class="dek">A poisoned issue can turn an allowed shell into an SSH-key exfiltration path. The hard part is blocking the protected read without blocking every legitimate command around it.</p>
       <div class="meta">
-        <span>By <a href="https://www.linkedin.com/in/saleem-mirza/" rel="me author">Saleem Mirza</a></span>
+        <span>By <a href="https://www.linkedin.com/in/saleem-mirza/" rel="me author noopener noreferrer" target="_blank">Saleem Mirza</a></span>
         <span>12 min read</span>
         <span>Updated August 5, 2026</span>
       </div>
@@ -624,7 +624,7 @@
       <pre><code>deny:  Bash(aws:*)
 allow: Bash(aws * describe-*)</code></pre>
 
-      <p><code>aws ec2 describe-instances</code> matches both rules. Under Claude Code's native fixed precedence, the deny wins, even though the allow is visibly narrower. Removing the deny admits destructive operations; keeping it blocks inspection. The same precedence rule blocks the mirror case: <a href="https://github.com/anthropics/claude-code/issues/6527">claude-code#6527</a> reports a narrow <code>ask</code> ignored whenever a broad <code>allow</code> matches, which rules out an "allow everything, confirm the destructive commands" policy.</p>
+      <p><code>aws ec2 describe-instances</code> matches both rules. Under Claude Code's native fixed precedence, the deny wins, even though the allow is visibly narrower. Removing the deny admits destructive operations; keeping it blocks inspection. The same precedence rule blocks the mirror case: <a href="https://github.com/anthropics/claude-code/issues/6527" rel="noopener noreferrer" target="_blank">claude-code#6527</a> reports a narrow <code>ask</code> ignored whenever a broad <code>allow</code> matches, which rules out an "allow everything, confirm the destructive commands" policy.</p>
     </section>
 
     <figure>
@@ -637,7 +637,7 @@ allow: Bash(aws * describe-*)</code></pre>
 
       <div class="callout">
         <p class="label">Try the opening example</p>
-        <p>Download <a href="blog-assets/sample-policy.json">sample-policy.json</a>, then run:</p>
+        <p>Download <a href="blog-assets/sample-policy.json" download="sample-policy.json">sample-policy.json</a>, then run:</p>
         <pre><code>permcheck Bash "aws ec2 describe-instances"  --rules sample-policy.json
 <span class="comment"># exit 0 · allow</span>
 
@@ -817,7 +817,7 @@ cat *.rs           <span class="comment"># allow in the sample policy</span></co
     </div>
 
     <div class="measure">
-      <p>The deny column sends the engineer to a terminal, so the agent loses the task and the audit trail leaves the tool. The allow column is what that policy becomes after the third complaint. The middle path of leaving calls unlisted so <code>defaultMode: ask</code> prompts moves the cost onto the operator: one report describes <a href="https://github.com/anthropics/claude-code/issues/76718">700 approvals over two days</a> on chains that mutate nothing. Approvals persist per repository and command, so the fatigue settles into an allow-list nobody reviewed.</p>
+      <p>The deny column sends the engineer to a terminal, so the agent loses the task and the audit trail leaves the tool. The allow column is what that policy becomes after the third complaint. The middle path of leaving calls unlisted so <code>defaultMode: ask</code> prompts moves the cost onto the operator: one report describes <a href="https://github.com/anthropics/claude-code/issues/76718" rel="noopener noreferrer" target="_blank">700 approvals over two days</a> on chains that mutate nothing. Approvals persist per repository and command, so the fatigue settles into an allow-list nobody reviewed.</p>
 
       <p>The permcheck column makes the tradeoff visible: three enumerated inspection commands run without a prompt; the destructive operations and secret read deny. The fourth denial, <code>aws s3 ls</code>, is a coverage gap rather than a dangerous call: <code>aws * list-*</code> does not match the <code>ls</code> alias. Adding <code>Bash(aws s3 ls:*)</code> fixes that one call while <code>aws s3 rm</code> keeps denying.</p>
 
@@ -826,7 +826,7 @@ cat *.rs           <span class="comment"># allow in the sample policy</span></co
       <pre><code>permcheck Bash "terraform plan"  --rules policy.json   <span class="comment"># exit 0, expected</span>
 permcheck Bash "terraform apply" --rules policy.json   <span class="comment"># exit 2, expected</span></code></pre>
 
-      <p>That loop produced every row above. For pipelines, pair it with <a href="https://code.claude.com/docs/en/permission-modes"><code>dontAsk</code> mode</a>, which never waits for an answer nobody is there to give.</p>
+      <p>That loop produced every row above. For pipelines, pair it with <a href="https://code.claude.com/docs/en/permission-modes" rel="noopener noreferrer" target="_blank"><code>dontAsk</code> mode</a>, which never waits for an answer nobody is there to give.</p>
 
       <div class="callout warn">
         <p class="label">Keep the floor separate from the exceptions</p>
@@ -838,7 +838,7 @@ permcheck Bash "terraform apply" --rules policy.json   <span class="comment"># e
       <div class="measure">
         <p class="section-kicker">The adjacent answer</p>
         <h2>Where auto mode fits</h2>
-        <p>Anthropic ships a different answer to the same prompt fatigue. In <a href="https://code.claude.com/docs/en/permission-modes#eliminate-prompts-with-auto-mode">auto mode</a>, a separate classifier model reviews each action and blocks what escalates beyond your request, targets unrecognized infrastructure, or looks driven by hostile content. It removes far more prompts than a rule file does, because it judges calls nobody enumerated.</p>
+        <p>Anthropic ships a different answer to the same prompt fatigue. In <a href="https://code.claude.com/docs/en/permission-modes#eliminate-prompts-with-auto-mode" rel="noopener noreferrer" target="_blank">auto mode</a>, a separate classifier model reviews each action and blocks what escalates beyond your request, targets unrecognized infrastructure, or looks driven by hostile content. It removes far more prompts than a rule file does, because it judges calls nobody enumerated.</p>
 
         <p>The layers compose rather than compete: rules resolve first in the documented decision order, and the classifier handles the rest. One detail matters for a policy author. Entering auto mode drops broad allow rules that grant arbitrary execution, such as <code>Bash(*)</code> and <code>Bash(python*)</code>, while narrow rules such as <code>Bash(npm test)</code> carry over. The narrow-exception style survives the transition; the blanket-allow style does not.</p>
       </div>
@@ -889,7 +889,7 @@ permcheck Bash "terraform apply" --rules policy.json   <span class="comment"># e
 
       <div class="callout warn">
         <p class="label">Trust before install</p>
-        <p>The matcher source is private today and may be published in the future. Until then, readers cannot audit the implementation or reproduce the executable from source. They can install the versioned artifact through Homebrew or the Claude Code plugin, inspect the plugin hook and policy in the <a href="https://github.com/saleem-mirza/marketplace">distribution repository</a>, and run the published decision cases against the installed executable. That verifies observable behavior, not the implementation, so the operating-system and enterprise controls described above remain the security boundary.</p>
+        <p>The matcher source is private today and may be published in the future. Until then, readers cannot audit the implementation or reproduce the executable from source. They can install the versioned artifact through Homebrew or the Claude Code plugin, inspect the plugin hook and policy in the <a href="https://github.com/saleem-mirza/marketplace" rel="noopener noreferrer" target="_blank">distribution repository</a>, and run the published decision cases against the installed executable. That verifies observable behavior, not the implementation, so the operating-system and enterprise controls described above remain the security boundary.</p>
       </div>
 
       <pre><code><span class="comment"># Claude Code plugin</span>
@@ -901,7 +901,7 @@ brew install saleem-mirza/tap/permcheck</code></pre>
 
       <p>Its bundled reference policy uses <code>defaultMode: ask</code>: known dangerous calls are denied, while unlisted calls prompt.</p>
 
-      <p>For a reproducible tour, download <a href="blog-assets/sample-policy.json">the teaching policy</a> and run these checks:</p>
+      <p>For a reproducible tour, download <a href="blog-assets/sample-policy.json" download="sample-policy.json">the teaching policy</a> and run these checks:</p>
 
       <pre><code>permcheck Bash "cat .env" --rules sample-policy.json
 <span class="comment"># exit 2 · Bash reader cross-check hits the Read deny</span>
@@ -922,7 +922,7 @@ permcheck Bash "kubectl get pods --namespace dev" --rules sample-policy.json
 
       <p>The bundled reference set protects the canonical <code>.claude</code> files and the project-local <code>.permcheck/**</code> override. The plugin also accepts an arbitrary absolute path through <code>$PERMCHECK_RULES</code>; no static list can protect every possible override target. Treat the hook environment and the selected override file as trusted operator configuration.</p>
 
-      <p><a href="https://code.claude.com/docs/en/permissions#extend-permissions-with-hooks">Native precedence remains terminal</a>. A permcheck <code>allow</code> cannot open a native <code>deny</code> or suppress a native <code>ask</code>. For a carve-out to work, both the broad deny and its narrow exception must live in the permcheck policy.</p>
+      <p><a href="https://code.claude.com/docs/en/permissions#extend-permissions-with-hooks" rel="noopener noreferrer" target="_blank">Native precedence remains terminal</a>. A permcheck <code>allow</code> cannot open a native <code>deny</code> or suppress a native <code>ask</code>. For a carve-out to work, both the broad deny and its narrow exception must live in the permcheck policy.</p>
     </section>
 
     <section id="recipes" class="wide-section">
@@ -1000,13 +1000,13 @@ permcheck Bash "kubectl get pods --namespace dev" --rules sample-policy.json
       <p class="section-kicker">The takeaway</p>
       <h2>Precision is useful when its boundary is explicit</h2>
       <p>“Deny always wins” is safe, but sometimes too coarse to express a bounded exception. permcheck adds a conservative carve-out: an exception can cross a deny only when containment is proven. Shell decomposition closes several common side doors, while the OS sandbox remains responsible for containment the hook cannot provide.</p>
-      <p>Where does your agent policy need a narrow exception, and which layer should provide the real boundary? <a href="https://www.linkedin.com/posts/saleem-mirza_when-deny-doesnt-win-share-7490953417008496640-pUVk/">Join the discussion on LinkedIn</a> with the broad restriction, the exception you need, and the verdict you expect.</p>
+      <p>Where does your agent policy need a narrow exception, and which layer should provide the real boundary? <a href="https://www.linkedin.com/posts/saleem-mirza_when-deny-doesnt-win-share-7490953417008496640-pUVk/" rel="noopener noreferrer" target="_blank">Join the discussion on LinkedIn</a> with the broad restriction, the exception you need, and the verdict you expect.</p>
     </section>
   </article>
 
   <footer class="site-foot measure">
     <span><a href="/feed.xml">RSS</a></span>
-    <span>By <a href="https://www.linkedin.com/in/saleem-mirza/" rel="me author">Saleem Mirza</a></span>
+    <span>By <a href="https://www.linkedin.com/in/saleem-mirza/" rel="me author noopener noreferrer" target="_blank">Saleem Mirza</a></span>
   </footer>
 </main>
 </body>
