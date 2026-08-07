@@ -39,6 +39,11 @@ CASES: list[tuple[str, dict, str, str]] = [
     ("Bash", {"command": "aws ec2 terminate-instances"}, "deny", "only the broad aws:* deny matches"),
     ("Bash", {"command": "aws s3api list-buckets"}, "deny", "only the broad aws:* deny matches"),
     ("Bash", {"command": "aws iam delete-user --user-name describe-me"}, "deny", "the * service slot is one token, so describe-* lands on the operation"),
+    # "Assert the policy before it ships": the exit codes the article prints.
+    ("Bash", {"command": "terraform plan"}, "allow", "terraform plan:* carves the terraform:* deny"),
+    ("Bash", {"command": "terraform plan -out tf.plan"}, "allow", "same carve-out, arguments included"),
+    ("Bash", {"command": "terraform apply"}, "deny", "only the broad terraform:* deny matches"),
+    ("Bash", {"command": "terraform apply tf.plan"}, "deny", "applying a saved plan is still the broad deny"),
     # Overlap is not containment: the longer allow reaches outside the deny.
     ("Bash", {"command": "kubectl get secret --namespace dev"}, "deny", "the namespace allow overlaps the secret deny without nesting in it"),
     ("Bash", {"command": "kubectl get pods --namespace dev"}, "allow", "same allow, and no deny matches"),

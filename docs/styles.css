@@ -333,6 +333,18 @@ figcaption {
   overflow-x: auto;
   border-radius: 12px;
 }
+/* The wrapper is focusable so a keyboard reaches the horizontal scroll. */
+.table-wrap:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+caption {
+  margin-bottom: 0.6rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  text-align: left;
+}
 table {
   width: 100%;
   min-width: 42rem;
@@ -382,6 +394,9 @@ tr:last-child td { border-bottom: 0; }
   margin: 2rem auto 2.4rem;
 }
 .recipes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* The featured recipe stands alone above the collapsed rest, so it spans
+   the row instead of leaving half of it empty. */
+.recipes.featured { grid-template-columns: 1fr; margin-bottom: 1.4rem; }
 .card {
   min-width: 0;
   min-height: 100%;

@@ -8,6 +8,7 @@
       "Bash(grep:*)",
       "Bash(python3 *)",
       "Bash(aws * describe-*)",
+      "Bash(terraform plan:*)",
       "Bash(kubectl get * --namespace dev)",
       "Read(/etc/passwd)",
       "WebFetch(domain:docs.internal.co)"
@@ -19,6 +20,7 @@
       "Bash(sudo:*)",
       "Bash(rm -f:*)",
       "Bash(aws:*)",
+      "Bash(terraform:*)",
       "Bash(kubectl get secret:*)",
       "Bash(python3 -c:*)",
       "Bash(git push --force:*)",
