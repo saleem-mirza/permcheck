@@ -559,16 +559,29 @@ decomposes it and takes the **most restrictive** verdict.
      spellings permits both.
 
    Additionally, if the unit begins with a **wrapper command** (`env`, `sudo`,
-   `timeout`, `nice`, `xargs`, …), peel the wrapper and its options / assignments
-   / numeric args and decide the wrapped command too, taking the most restrictive.
+   `timeout`, `nice`, `time`, `xargs`, …) or a **shell reserved word** (`{`, `!`,
+   `if`, `then`, `elif`, `else`, `while`, `until`, `do`), peel it and decide the
+   command behind it too, taking the most restrictive. A wrapper's options,
+   assignments, and numeric args are peeled with it; a reserved word takes no
+   options, so only the word itself is dropped, which leaves a condition's own
+   operands intact. The two interleave (`! time env sudo …`).
+
    This runs the wrapped command's own rules, so `env aws …` cannot ride in on a
-   broad `Bash(env:*)` allow and bypass an `aws` deny. Peeling reads the
+   broad `Bash(env:*)` allow and bypass an `aws` deny, and `{ sudo …; }` cannot
+   escape the `sudo` deny by wearing a group opener. Peeling reads the
    fully-normalized spelling from the pipeline above, so a disguised wrapper
    (`"env" aws …`) is still recognized as one.
 
+   The reserved-word list stops at words a command follows. `for`, `case`, and
+   `in` are excluded because a variable or pattern follows them, and `fi`, `done`,
+   `esac`, and `}` because nothing follows them. Words are matched after quote
+   removal, so `'{' cmd` peels here though the shell would treat the quoted `{` as
+   an ordinary command name. Peeling only raises a verdict, so that costs an
+   over-deny on a command the shell would fail to find.
+
 3. **File-access cross-check** (raises to `deny` only, never loosens): tokenize
-   the unit, peel wrapper commands (`sudo`, `env`, `timeout`, `nice`, `xargs`,
-   …), then:
+   the unit, peel wrapper commands (`sudo`, `env`, `timeout`, `nice`, `time`,
+   `xargs`, …) and leading reserved words, then:
    - if the command is a known **reader** (`cat`, `grep`, `sed`, `head`, …),
      check each non-option operand against the `Read` **deny** rules
      (pattern-first readers like `grep`/`sed`/`awk` skip their first operand,

@@ -45,11 +45,13 @@ pub fn decide_bash(command: &str, rs: &RuleSet, cwd: Option<&str>) -> Decision {
         let forms = identity_forms(cmd);
         let mut tier = unit_tier(rs, &forms, cwd);
         // A leading wrapper (`env`, `sudo`, `timeout`, …) executes the command
-        // that follows it, so the wrapped command's own decision must apply too.
-        // Otherwise `env aws …` would ride in on the wrapper's allow rule and
-        // bypass an `aws` deny. This can only raise the verdict (§8.3).
+        // that follows it, and a leading reserved word (`{`, `!`, `then`, `do`, …)
+        // introduces it, so that command's own decision must apply too. Otherwise
+        // `env aws …` would ride in on the wrapper's allow rule and bypass an
+        // `aws` deny, and `{ sudo …; }` would escape the `sudo` deny by wearing a
+        // group opener. This can only raise the verdict (§8.3).
         //
-        // Wrapper recognition uses the shared shell-word parser, so it sees
+        // Recognition uses the shared shell-word parser, so it sees
         // through quoting while the returned inner slice preserves the original
         // word boundaries needed by path-operand resolution.
         // Skip it once already at deny: the re-decision can only raise, so there is

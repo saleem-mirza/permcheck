@@ -97,49 +97,74 @@ fn command_position_is_what_makes_a_paren_an_operator() {
     assert_eq!(bash("(( i++ ))"), Tier::Ask);
 }
 
-/// OPEN ENGINE GAP, locked at its current verdict so closing it is deliberate.
-///
-/// A command in a brace group `{ …; }` or behind a leading reserved word reaches
-/// no Bash rule. The rule the operator wrote exists and names the command; the
-/// engine fails to match this spelling of it, so this is engine faithfulness, not
-/// a ruleset gap like [`documented_gaps_are_locked_honestly`] records.
-///
-/// Cause: nothing strips a unit's leading reserved word. Splitting on `;` already
-/// yields units like `then cat .env` and `do sudo …`, one word away from the rule.
-/// The subshell half of this gap is closed above.
-///
-/// Blast radius: every Bash deny, under `defaultMode: "ask"`. A policy with
-/// `defaultMode: "deny"` is unaffected, since the fall-back tier is the whole gap.
 #[test]
-fn brace_groups_and_leading_keywords_evade_every_bash_rule() {
-    // The unwrapped spellings, to prove the rules are present and that only the
-    // grouping defeats them.
-    assert_all_deny(&["sudo rm -rf /tmp/x", "kubectl delete pod x", "cat .env"]);
-
-    // Brace group.
-    assert_eq!(bash("{ sudo rm -rf /tmp/x; }"), Tier::Ask);
-    assert_eq!(bash("{ kubectl delete pod x; }"), Tier::Ask);
-
-    // Leading reserved word.
-    assert_eq!(bash("! sudo rm -rf /tmp/x"), Tier::Ask);
-    assert_eq!(bash("time sudo rm -rf /tmp/x"), Tier::Ask);
-
-    // Loop and conditional bodies, which split on `;` into keyword-led units.
-    assert_eq!(bash("while true; do sudo rm -rf /tmp/x; done"), Tier::Ask);
-    assert_eq!(bash("if true; then kubectl delete pod x; fi"), Tier::Ask);
-    assert_eq!(bash("for f in a; do cat .env; done"), Tier::Ask);
-
-    // The fall-back tier is the entire gap: the same command against the same
-    // rules, with only `defaultMode` flipped, is blocked. That makes deny-default
-    // a real mitigation and also the reason this file must not adopt it. Flipping
-    // the shipped policy would turn every assertion above into `Deny`, which
-    // reads as a working engine while the rule still never matches.
-    assert_eq!(deny_default_bash("{ kubectl delete pod x; }"), Tier::Deny);
-    assert_eq!(deny_default_bash("time sudo rm -rf /tmp/x"), Tier::Deny);
+fn brace_groups_and_leading_keywords_cannot_hide_denied_commands() {
+    // A leading shell reserved word is peeled before the unit is decided (§8.2),
+    // so the command behind one reaches the rule that names it. Splitting on `;`
+    // (§8.1) already leaves a conditional or loop body as its own unit, one word
+    // short of the rule; these are that word.
+    assert_all_deny(&[
+        // Brace group.
+        "{ sudo rm -rf /tmp/x; }",
+        "{ kubectl delete pod x; }",
+        "{ cat .env; }",                   // file-access cross-check reaches it too
+        "{ FOO=bar sudo rm -rf /tmp/x; }", // assignment behind the group opener
+        // Negation and timing, which run the command they precede.
+        "! sudo rm -rf /tmp/x",
+        "time sudo rm -rf /tmp/x",
+        "time -p sudo rm -rf /tmp/x", // `time` takes options, so it peels as a wrapper
+        "! time env sudo rm -rf /tmp/x", // reserved words and wrappers interleave
+        // Loop and conditional bodies.
+        "while true; do sudo rm -rf /tmp/x; done",
+        "if true; then kubectl delete pod x; fi",
+        "for f in a; do cat .env; done",
+        // The condition of a compound command is a command too.
+        "if sudo rm -rf /tmp/x; then echo y; fi",
+        "until sudo rm -rf /tmp/x; do echo y; done",
+    ]);
 }
 
-/// The reference rules with `defaultMode` flipped to `deny`, for the one
-/// assertion that has to show what the fall-back tier is hiding.
+#[test]
+fn closing_the_grouping_gap_did_not_cost_ordinary_commands() {
+    // Peeling only ever raises a verdict, and only on a real rule match, so a
+    // benign command keeps exactly the tier it had. Each of these was measured
+    // against the pre-change build and is unmoved.
+    assert_eq!(bash("time ls"), Tier::Ask);
+    assert_eq!(bash("{ ls; }"), Tier::Ask);
+    assert_eq!(bash("if true; then ls; fi"), Tier::Ask);
+    assert_eq!(bash("while read l; do echo $l; done"), Tier::Ask);
+    assert_eq!(bash("for f in *.rs; do echo $f; done"), Tier::Ask);
+    assert_eq!(
+        bash(r#"git commit -m "fix if the do loop breaks""#),
+        Tier::Ask
+    );
+    assert_eq!(bash("echo {a,b}"), Tier::Ask);
+    assert_eq!(bash(r#"awk "{print \$1}" file"#), Tier::Ask);
+    // A reserved word that is not in command position is an ordinary operand.
+    assert_eq!(bash("find . ! -name x"), Tier::Allow);
+    assert_eq!(bash("ls -la"), Tier::Allow);
+}
+
+#[test]
+fn the_grouping_fix_does_not_depend_on_the_fall_back_tier() {
+    // The gap these spellings used to open was closed at the engine, not by the
+    // policy's `defaultMode`. Both settings now deny, so an operator running
+    // ask-default gets the same block as one running deny-default. Flipping the
+    // shipped policy instead would have produced `Deny` here while the rule still
+    // never matched, which is why this file does not adopt it.
+    for cmd in [
+        "(sudo rm -rf /tmp/x)",
+        "{ kubectl delete pod x; }",
+        "time sudo rm -rf /tmp/x",
+        "if true; then kubectl delete pod x; fi",
+    ] {
+        assert_eq!(bash(cmd), Tier::Deny, "ask-default: {cmd:?}");
+        assert_eq!(deny_default_bash(cmd), Tier::Deny, "deny-default: {cmd:?}");
+    }
+}
+
+/// The reference rules with `defaultMode` flipped to `deny`, to show that the
+/// grouping fix holds under either fall-back tier.
 fn deny_default_bash(cmd: &str) -> Tier {
     let mut policy: serde_json::Value =
         serde_json::from_str(include_str!("../rules/permcheck.json")).unwrap();

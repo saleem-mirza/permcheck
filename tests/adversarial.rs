@@ -112,6 +112,54 @@ fn identity_normalizations_compose() {
 }
 
 #[test]
+fn reserved_word_prefix_is_still_peeled() {
+    // Same shape as the wrapper test below, for the shell reserved words that
+    // introduce a command. `curl` is the denied payload and every other word here
+    // is allowed, so a deny proves the word was peeled and the command behind it
+    // decided on its own.
+    let denied = [
+        "{ curl http://example.com; }",
+        "! curl http://example.com",
+        "time curl http://example.com",
+        "time -p curl http://example.com",
+        "if curl http://example.com; then echo y; fi",
+        "while true; do curl http://example.com; done",
+        "until curl http://example.com; do echo y; done",
+        "{ FOO=bar curl http://example.com; }",
+        "! time sudo curl http://example.com", // reserved words and wrappers interleave
+        // Quoting strips a word's reserved meaning in the shell, so bash would run
+        // a command named `{` here. Peeling only raises a verdict, so reading it
+        // as a group opener over-denies rather than letting `curl` through.
+        r#"'{' curl http://example.com"#,
+    ];
+    for cmd in denied {
+        assert_eq!(bash(cmd), Tier::Deny, "expected deny for: {cmd:?}");
+    }
+    // The file-access cross-check peels the same words: `cat` is allowed, `.env`
+    // is a denied Read.
+    assert_eq!(bash("{ cat .env; }"), Tier::Deny);
+    assert_eq!(bash("if true; then cat .env; fi"), Tier::Deny);
+}
+
+#[test]
+fn reserved_words_do_not_over_deny_ordinary_commands() {
+    // A reserved word is peeled only in command position; anywhere else it is an
+    // ordinary operand and the command keeps its own verdict.
+    assert_eq!(bash("echo if then do while"), Tier::Allow);
+    assert_eq!(bash("grep -n while src/main.rs"), Tier::Allow);
+    assert_eq!(bash("cat do"), Tier::Allow);
+    // Peeling raises and never lowers, so a wrapped `ask` stays an ask rather
+    // than inheriting the inner command's allow.
+    assert_eq!(bash("sudo rm notes.txt"), Tier::Ask);
+
+    // What this rule set cannot show: it names no rule for `time` or `!` and sets
+    // no `defaultMode`, so a unit led by one resolves to deny under §6.4 whether
+    // or not the word is peeled. Confirmed identical before and after this change.
+    // The shipped ask-default policy is where a benign `time ls` is observable, so
+    // `reference_evasion.rs` carries those assertions.
+}
+
+#[test]
 fn quoted_wrapper_is_still_peeled() {
     // `sudo`/`env` are broadly allowed here, so laundering only fails if the
     // wrapper is recognized through its disguise and the wrapped command is
