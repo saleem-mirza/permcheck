@@ -445,3 +445,93 @@ fn install_rules_does_not_swallow_flag() {
         .code(3)
         .stderr(predicates::str::contains("requires a path"));
 }
+
+// The policy writers create and never replace. Asking `exists()` first would not
+// give them that: a file appearing between the answer and the write gets
+// overwritten. These drive real concurrent processes at one path, so only a write
+// that binds the test to the creation can pass.
+#[test]
+fn concurrent_init_rules_produces_exactly_one_winner() {
+    use std::process::{Command as Proc, Stdio};
+
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("permcheck.json");
+    let bin = assert_cmd::cargo::cargo_bin("permcheck");
+
+    // Enough racers that the create-then-write window would be hit if it existed.
+    let children: Vec<_> = (0..16)
+        .map(|_| {
+            Proc::new(&bin)
+                .arg("--init-rules")
+                .arg(&target)
+                .current_dir(dir.path())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+
+    let mut winners = 0;
+    let mut refusals = 0;
+    for child in children {
+        let out = child.wait_with_output().unwrap();
+        if out.status.success() {
+            winners += 1;
+        } else {
+            assert_eq!(out.status.code(), Some(3), "expected a config-error exit");
+            assert!(
+                String::from_utf8_lossy(&out.stderr).contains("refusing to overwrite"),
+                "unexpected stderr: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            refusals += 1;
+        }
+    }
+    assert_eq!(winners, 1, "exactly one process may create the file");
+    assert_eq!(refusals, 15);
+
+    // The survivor is a whole, loadable policy, not a partially written one.
+    let text = fs::read_to_string(&target).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["permissions"]["defaultMode"], "ask");
+    permcheck::RuleSet::load_str(&text).unwrap();
+}
+
+// A smoke test for the `--install` seeding path, which writes the starter policy
+// under `.claude/` rather than at a path the caller named. Weaker than the test
+// above by construction: every racer writes byte-identical starter content, so a
+// clobber leaves no trace and only a torn or missing file can fail this. It still
+// guards that concurrent installs leave one loadable policy behind.
+#[test]
+fn concurrent_install_seeds_the_rules_file_once() {
+    use std::process::{Command as Proc, Stdio};
+
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let bin = assert_cmd::cargo::cargo_bin("permcheck");
+
+    let children: Vec<_> = (0..8)
+        .map(|_| {
+            Proc::new(&bin)
+                .arg("--install")
+                .env("HOME", home)
+                .env("USERPROFILE", home)
+                .env_remove("HOMEDRIVE")
+                .env_remove("HOMEPATH")
+                .current_dir(home)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    for child in children {
+        let _ = child.wait_with_output().unwrap();
+    }
+
+    // However the runs interleaved, the seeded policy is one intact file.
+    let seeded = home.join(".claude").join("permcheck.json");
+    let text = fs::read_to_string(&seeded).unwrap();
+    permcheck::RuleSet::load_str(&text).unwrap();
+}

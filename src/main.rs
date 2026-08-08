@@ -183,11 +183,42 @@ fn write_json_atomic(path: &Path, value: &serde_json::Value) -> std::io::Result<
     write_atomic(path, text.as_bytes())
 }
 
-/// Copy `src` to `dest` atomically. Policy files are small, so reading into
-/// memory keeps this on the single write path.
-fn copy_rules_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
+/// Write `bytes` to `path` only when nothing is there yet, returning
+/// [`std::io::ErrorKind::AlreadyExists`] otherwise.
+///
+/// The policy writers want "create, never replace", and asking `exists()` first
+/// and then writing does not give them that: the answer is stale the moment it
+/// returns, so a file appearing in the gap gets overwritten by the write that
+/// follows. `create_new` puts the test and the creation in one syscall, which is
+/// the only way the check binds. Every caller here is a create-if-absent path, so
+/// none of them wants [`write_atomic`]'s replacing `rename`; that one stays for
+/// `settings.json`, where replacing in place is the point.
+fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+/// Serialize `value` as pretty JSON and write it only if `path` is free.
+fn write_json_new(path: &Path, value: &serde_json::Value) -> std::io::Result<()> {
+    let mut text = serde_json::to_string_pretty(value).unwrap_or_default();
+    text.push('\n');
+    write_new(path, text.as_bytes())
+}
+
+/// Copy `src` to `dest`, refusing to replace an existing `dest`. Policy files are
+/// small, so reading into memory keeps this on the single write path.
+fn copy_rules_new(src: &Path, dest: &Path) -> std::io::Result<()> {
     let bytes = std::fs::read(src)?;
-    write_atomic(dest, &bytes)
+    write_new(dest, &bytes)
 }
 
 fn run_install(args: &[String]) {
@@ -322,12 +353,24 @@ fn install_copy_rules(src: &Path, dest: &Path) {
             );
             process::exit(3);
         }
+        // `dest` was free a moment ago. The write below still refuses to replace,
+        // so a file that lands in between is reported rather than clobbered.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            if let Err(e) = copy_rules_atomic(&abs_src, dest) {
-                eprintln!("error: cannot write {}: {e}", dest.display());
-                process::exit(3);
+            match copy_rules_new(&abs_src, dest) {
+                Ok(()) => println!("Copied rules → {}", dest.display()),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    eprintln!(
+                        "error: {} was created while this install was running; re-run to compare it against {}",
+                        dest.display(),
+                        abs_src.display()
+                    );
+                    process::exit(3);
+                }
+                Err(e) => {
+                    eprintln!("error: cannot write {}: {e}", dest.display());
+                    process::exit(3);
+                }
             }
-            println!("Copied rules → {}", dest.display());
         }
         Err(e) => {
             eprintln!("error: cannot read {}: {e}", dest.display());
@@ -354,10 +397,22 @@ fn install_seed_rules(dest: &Path) {
         println!("Using existing rules → {}", dest.display());
         return;
     }
+    // `dest` was free a moment ago; the write still refuses to replace, so a file
+    // that lands in between is adopted rather than overwritten.
     let rules = permcheck::rules::starter_rules();
-    if let Err(e) = write_json_atomic(dest, &rules) {
-        eprintln!("error: cannot write {}: {e}", dest.display());
-        process::exit(3);
+    match write_json_new(dest, &rules) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            eprintln!(
+                "error: {} was created while this install was running; re-run to use it",
+                dest.display()
+            );
+            process::exit(3);
+        }
+        Err(e) => {
+            eprintln!("error: cannot write {}: {e}", dest.display());
+            process::exit(3);
+        }
     }
     // The file we just wrote must load — a broken starter would deny everything.
     if let Err(e) = load_rules(dest) {
@@ -373,18 +428,23 @@ fn run_init_rules(args: &[String]) {
     // The path is optional; default to `permcheck.json` in the current directory.
     let path = init_rules_path(args).unwrap_or_else(|| PathBuf::from("permcheck.json"));
 
-    if path.exists() {
-        eprintln!(
-            "error: refusing to overwrite existing file {}",
-            path.display()
-        );
-        process::exit(3);
-    }
-
+    // The refusal is the write itself, not a preceding `exists()`: that answer is
+    // stale by the time the write runs, and a file created in the gap would be
+    // overwritten by the very call meant to protect it.
     let rules = permcheck::rules::starter_rules();
-    if let Err(e) = write_json_atomic(&path, &rules) {
-        eprintln!("error: cannot write {}: {e}", path.display());
-        process::exit(3);
+    match write_json_new(&path, &rules) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            eprintln!(
+                "error: refusing to overwrite existing file {}",
+                path.display()
+            );
+            process::exit(3);
+        }
+        Err(e) => {
+            eprintln!("error: cannot write {}: {e}", path.display());
+            process::exit(3);
+        }
     }
     // The file we just wrote must load — a broken starter would deny everything.
     if let Err(e) = load_rules(&path) {

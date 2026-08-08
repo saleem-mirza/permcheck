@@ -146,10 +146,16 @@ unrelated settings or other hooks.
   user's other hooks are left untouched (the marker is a heuristic: a command
   naming both `permcheck` and `--hook` matches, including a user's own wrapper
   around it). The baked `--rules` path is recognized quoted or bare, so the
-  re-point refusal above also covers a hand-wired hook. Writes are atomic: a
-  per-process temp file, flushed with `sync_all`, then `rename` over the target.
-  A missing/empty file starts from `{}`, and a present-but-non-object file is
-  refused rather than clobbered. Both exit `0` on success (or when already in
+  re-point refusal above also covers a hand-wired hook. Writes to `settings.json`
+  are atomic: a per-process temp file, flushed with `sync_all`, then `rename` over
+  the target. A missing/empty file starts from `{}`, and a present-but-non-object
+  file is refused rather than clobbered.
+
+  Writes to a **rules** file never replace, because every one of them is a
+  create-if-absent path (`--init-rules`, `--install` seeding, `--install --rules`
+  copying) whose whole point is to leave an existing policy alone. The refusal is
+  the creation itself rather than a preceding existence check, so a file that
+  appears between the two is reported (exit `3`) instead of overwritten. Both exit `0` on success (or when already in
   the desired state), `3` on a usage/IO error. These commands are portable across
   Linux, macOS, and Windows. Home resolution is per-platform: POSIX reads `$HOME`
   only, Windows tries `$HOME` → `%USERPROFILE%` → `%HOMEDRIVE%%HOMEPATH%`. The
