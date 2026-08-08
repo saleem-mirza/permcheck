@@ -317,7 +317,11 @@ rules.
 
 The subset test is **sound but conservative**: it reports a carve-out only when
 containment is proven, and otherwise keeps the deny, so an unprovable case fails
-toward `deny` (§9.2).
+toward `deny` (§9.2). One shape reaches that fall-back in practice: the test reads
+a deny's `**/` without the collapse-to-zero-directories rule §6.5 gives the
+matcher, so `Read(/b)` is not proven to sit inside `Read(/**/b)` even though the
+matcher agrees that it does, and the deny stands. Write the allow against the
+spelling the deny uses when the carve-out is intended.
 
 This selection is the **entire** decision for Path and Generic tools (Read,
 Write, Edit, Glob, Grep, NotebookEdit, WebFetch, WebSearch, MCP, …). Only `Bash`

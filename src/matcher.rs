@@ -818,6 +818,9 @@ fn tokens_subset(a: &[PToken], d: &[PToken], sep: u8) -> bool {
     if d.len() >= 127 || a.len() >= 127 {
         return false;
     }
+    if shortest_witness_rejected(a, d, sep) {
+        return false;
+    }
     let lits = d_literals(d);
     let fresh = fresh_byte(&lits, sep);
     // Representative characters an `a`-wildcard adversary may pick. The separator
@@ -838,6 +841,63 @@ fn tokens_subset(a: &[PToken], d: &[PToken], sep: u8) -> bool {
         budget: 100_000,
     };
     incl(a, 0, start, &mut ctx)
+}
+
+/// Reject a pair before [`incl`] builds its representative sets and visit table,
+/// which is the whole per-call allocation cost.
+///
+/// Takes the one string obtained by letting every `a` wildcard match empty, and
+/// asks whether `d` accepts it. Sound because that string is exactly what [`incl`]
+/// tries first at each `Star` and `DStar` (the "ends now" branch it conjoins with
+/// the others), stepped through the same [`step_d`] model, so a pair rejected here
+/// is one `incl` would reject after far more work.
+///
+/// Runs only when `a` has no `?`. A `Ques` has to consume a character, and picking
+/// one outside the representative set [`incl`] quantifies over would not be a
+/// string `incl` checks.
+///
+/// Worth its own pass because containment is tested for every ask-and-deny and
+/// allow-and-ask rule pair, and in a real policy almost none of them are related.
+fn shortest_witness_rejected(a: &[PToken], d: &[PToken], sep: u8) -> bool {
+    if a.iter().any(|token| matches!(token, PToken::Ques)) {
+        return false;
+    }
+    // Cheap gate first. Every `d` literal has to be consumed by that exact
+    // character, so any string `d` accepts carries `d`'s literals in order. This
+    // is two pointers over the token slices, where the walk below is a `u128`
+    // transition per `d` position per character.
+    if !d_literals_are_subsequence(a, d) {
+        return true;
+    }
+    let mut dstate = closure_d(d, 1u128);
+    for token in a {
+        if let PToken::Lit(c) = token {
+            dstate = step_d(d, dstate, *c, sep);
+            if dstate == 0 {
+                return true; // `d` is dead: it rejects a string `a` accepts.
+            }
+        }
+    }
+    dstate & (1u128 << d.len()) == 0
+}
+
+/// Are `d`'s literal bytes an ordered subsequence of `a`'s? Necessary for `d` to
+/// accept the witness above, and so for `L(a) ⊆ L(d)`.
+fn d_literals_are_subsequence(a: &[PToken], d: &[PToken]) -> bool {
+    let mut wanted = d.iter().filter_map(|token| match token {
+        PToken::Lit(c) => Some(*c),
+        _ => None,
+    });
+    let mut next = wanted.next();
+    for token in a {
+        let Some(c) = next else {
+            return true;
+        };
+        if *token == PToken::Lit(c) {
+            next = wanted.next();
+        }
+    }
+    next.is_none()
 }
 
 struct InclCtx<'a> {

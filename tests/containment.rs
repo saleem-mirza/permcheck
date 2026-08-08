@@ -191,3 +191,83 @@ fn windows_carve_out_survives_backslash_traversal() {
         Tier::Deny
     );
 }
+
+// The containment test rejects most rule pairs with a cheap pre-pass before its
+// automaton runs (`shortest_witness_rejected`): it takes the string `a` produces
+// when every wildcard matches empty and asks whether `d` accepts it. That pass is
+// an optimization and must never cost a carve-out, so these pin the shapes where
+// it comes closest to rejecting a real one.
+#[test]
+fn containment_prepass_keeps_every_genuine_carve_out() {
+    // Each pair is `(allow, deny, payload)` where the allow is a true subset of
+    // the deny, so the payload must come back `Allow`.
+    let carve_outs = [
+        // `**` matching empty at both ends, which is the witness the pre-pass builds.
+        ("Read(/a/b)", "Read(/**/b)", "/a/b"),
+        ("Read(/a/b)", "Read(/a/**)", "/a/b"),
+        ("Read(/a/b)", "Read(/**)", "/a/b"),
+        // Wildcard on the allow side, so the witness drops characters the deny
+        // still has to match.
+        ("Read(/a/*)", "Read(/a/**)", "/a/z"),
+        ("Read(/a/**)", "Read(/**)", "/a/b/c"),
+        // `?` on the allow side turns the pre-pass off entirely.
+        ("Read(/a/?)", "Read(/a/**)", "/a/z"),
+        ("Read(/a/?/c)", "Read(/a/**)", "/a/z/c"),
+        // Bash family: space is the separator, and the pre-pass runs there too.
+        (
+            "Bash(git push origin)",
+            "Bash(git push *)",
+            "git push origin",
+        ),
+        ("Bash(git push *)", "Bash(git *)", "git push origin"),
+    ];
+    for (allow, deny, payload) in carve_outs {
+        let rs = RuleSet::load_str(&format!(
+            r#"{{"defaultMode":"ask","allow":["{allow}"],"deny":["{deny}"]}}"#
+        ))
+        .unwrap();
+        let tier = if allow.starts_with("Bash") {
+            decide_bash(payload, &rs, None).tier
+        } else {
+            decide_payload(&rs, "Read", payload, None).tier
+        };
+        assert_eq!(tier, Tier::Allow, "carve-out lost: {allow} inside {deny}");
+    }
+}
+
+// The mirror: pairs that merely overlap must still leave the deny standing. A
+// pre-pass that accepted too much would show up here as a lost deny.
+#[test]
+fn containment_prepass_does_not_invent_carve_outs() {
+    let overlaps = [
+        ("Read(/**/passwd)", "Read(/etc/**)", "/etc/passwd"),
+        (
+            "Read(/etc/*.conf)",
+            "Read(/etc/secret*)",
+            "/etc/secret.conf",
+        ),
+        ("Read(/a/**)", "Read(/a/*)", "/a/b"),
+        ("Bash(git *)", "Bash(git push *)", "git push origin"),
+        // Pre-existing incompleteness, unchanged by the pre-pass and asserted here
+        // so it stays visible: the containment check models the deny without the
+        // `**/`-collapses-to-zero-directories rule that the matcher itself applies,
+        // so `/b` is not *proven* to be inside `/**/b` even though the matcher
+        // agrees it is. An unproven containment keeps the deny, which is the safe
+        // direction §6.3 commits to. Both spellings were verified to give the same
+        // verdict before and after the pre-pass.
+        ("Read(/b)", "Read(/**/b)", "/b"),
+        ("Read(x)", "Read(**/x)", "x"),
+    ];
+    for (allow, deny, payload) in overlaps {
+        let rs = RuleSet::load_str(&format!(
+            r#"{{"defaultMode":"ask","allow":["{allow}"],"deny":["{deny}"]}}"#
+        ))
+        .unwrap();
+        let tier = if allow.starts_with("Bash") {
+            decide_bash(payload, &rs, None).tier
+        } else {
+            decide_payload(&rs, "Read", payload, None).tier
+        };
+        assert_eq!(tier, Tier::Deny, "deny lost: {allow} against {deny}");
+    }
+}
