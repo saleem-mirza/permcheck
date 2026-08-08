@@ -822,7 +822,9 @@ fn tokens_subset(a: &[PToken], d: &[PToken], sep: u8) -> bool {
         return false;
     }
     let lits = d_literals(d);
-    let fresh = fresh_byte(&lits, sep);
+    let Some(fresh) = fresh_byte(&lits, sep) else {
+        return false;
+    };
     // Representative characters an `a`-wildcard adversary may pick. The separator
     // (`/` for paths, space for Bash) is kept separate because `?`/`*` reject it
     // while `**` accepts it.
@@ -986,10 +988,20 @@ fn d_literals(d: &[PToken]) -> Vec<u8> {
 /// A byte that is neither the separator nor any of `d`'s literals — one
 /// representative for "every other character", which all of `d`'s tokens treat
 /// identically.
-fn fresh_byte(lits: &[u8], sep: u8) -> u8 {
-    (1u8..=255)
-        .find(|b| *b != sep && !lits.contains(b))
-        .unwrap_or(0)
+///
+/// `None` when `d`'s literals leave no such byte. [`tokens_subset`] fails closed
+/// on that instead of substituting a byte `d` already names, which would quantify
+/// the `a`-wildcard adversary over a strictly smaller alphabet and could prove a
+/// containment that does not hold. A false positive there neutralizes a deny, the
+/// one direction this procedure never guesses at, so it joins the length and
+/// budget bounds either side of it in answering `false`.
+///
+/// Unreachable through a rule file today, and kept as a bound rather than an
+/// assertion for that reason: a specifier arrives as `&str`, so its literals are
+/// valid UTF-8 and `0xC0`, `0xC1`, and `0xF5..=0xFF` can never appear among them.
+/// A matcher compiled from raw bytes would not carry that guarantee.
+fn fresh_byte(lits: &[u8], sep: u8) -> Option<u8> {
+    (0u8..=255).find(|b| *b != sep && !lits.contains(b))
 }
 
 /// Epsilon-closure of a `d` state: nullable tokens (`*`, `**`) let a live position
@@ -1175,6 +1187,37 @@ mod subset_tests {
         assert!(matcher_subset(&a, &d));
         // The prefix is not a subset of the narrower glob.
         assert!(!matcher_subset(&d, &a));
+    }
+
+    #[test]
+    fn fresh_byte_is_absent_only_when_the_alphabet_is_exhausted() {
+        // The representative for "every other character". Present for any ordinary
+        // deny pattern, including one whose literals cover the whole of ASCII.
+        assert!(fresh_byte(&[], b'/').is_some());
+        assert!(fresh_byte(&b"/etc/passwd"[..], b'/').is_some());
+        let ascii: Vec<u8> = (0u8..128).collect();
+        assert!(fresh_byte(&ascii, b'/').is_some());
+
+        // Absent only when every byte but the separator is already a literal. A
+        // rule file cannot reach this, because a specifier arrives as `&str` and
+        // its literals are therefore valid UTF-8, so the bound is asserted on the
+        // helper directly.
+        let all_but_sep: Vec<u8> = (0u8..=255).filter(|&b| b != b'/').collect();
+        assert_eq!(fresh_byte(&all_but_sep, b'/'), None);
+        // The separator itself is never offered as the fresh byte.
+        assert_eq!(fresh_byte(&all_but_sep, b' '), Some(b'/'));
+    }
+
+    #[test]
+    fn exhausted_alphabet_keeps_the_deny() {
+        // With no fresh representative, containment is unprovable and the subset
+        // test answers `false`, which leaves the deny standing (§6.3).
+        let a = [PToken::Star];
+        let d: Vec<PToken> = (0u8..=255)
+            .filter(|&b| b != b'/')
+            .map(PToken::Lit)
+            .collect();
+        assert!(!tokens_subset(&a, &d, b'/'));
     }
 
     #[test]
