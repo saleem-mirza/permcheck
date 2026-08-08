@@ -420,7 +420,8 @@ table.compact td { padding: 0.6rem 0.75rem; }
 }
 .coverage strong { color: var(--ink-soft); }
 
-.recipe-details > summary {
+.recipe-details > summary,
+.more-details > summary {
   padding: 1.15rem 1.3rem;
   color: var(--accent-dark);
   background: var(--accent-soft);
@@ -430,7 +431,8 @@ table.compact td { padding: 0.6rem 0.75rem; }
   font-family: var(--sans);
   font-weight: 750;
 }
-.recipe-details[open] > summary { margin-bottom: 2rem; }
+.recipe-details[open] > summary,
+.more-details[open] > summary { margin-bottom: 2rem; }
 
 .author-note {
   max-width: var(--content);
@@ -583,7 +585,8 @@ table.compact td { padding: 0.6rem 0.75rem; }
   .card,
   .callout,
   .brief,
-  .recipe-details > summary {
+  .recipe-details > summary,
+  .more-details > summary {
     background: none;
     border-radius: 0;
     box-shadow: none;
