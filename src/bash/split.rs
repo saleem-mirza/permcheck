@@ -59,6 +59,38 @@ fn scan(s: &str, start: usize, end: usize, ctx: &mut ScanCtx) {
             b'<' | b'>' if i + 1 < end && b[i + 1] == b'(' => {
                 i = handle_paren(s, i + 2, end, ctx);
             }
+            // A `(` in command position opens a subshell and `)` closes one. Both
+            // delimit a command the shell runs, so they bound a unit exactly as
+            // `;` does. Without this the whole subshell stays one unit whose first
+            // word is `(sudo`, and the `Bash(sudo:*)` deny that names the command
+            // never matches — while `$(sudo …)` and `` `sudo …` ``, the same
+            // command in the two spellings handled above, are caught. The three
+            // arms above claim their own parens first, so a substitution's
+            // delimiters never reach here.
+            //
+            // Command position is what makes `(` an operator: bash rejects an
+            // unquoted one anywhere else, so the test mirrors the `#` arm below.
+            // Elsewhere the byte is word content, which keeps an array assignment
+            // (`arr=(a b)`) and a format specifier (`--format=%(refname)`) intact
+            // rather than splitting them into units that match no rule.
+            //
+            // A bare `((…))` arithmetic command therefore yields its interior as a
+            // unit. That reaches no rule and falls to `defaultMode`, the same
+            // verdict the undivided spelling already got, and an unterminated
+            // `((sudo …` still exposes the command instead of hiding it behind a
+            // wholesale skip.
+            b'(' if i == start
+                || matches!(b[i - 1], b' ' | b'\t' | b'\n' | b';' | b'&' | b'|' | b'(') =>
+            {
+                ctx.out.push((unit_start, i));
+                i += 1;
+                unit_start = i;
+            }
+            b')' => {
+                ctx.out.push((unit_start, i));
+                i += 1;
+                unit_start = i;
+            }
             b'<' => {
                 i += 1;
                 if i < end && b[i] == b'&' {

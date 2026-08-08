@@ -30,6 +30,43 @@ fn extracts_from_backticks_and_process_substitution() {
 }
 
 #[test]
+fn subshell_parens_bound_a_unit() {
+    // A `(` in command position and every `)` are unit boundaries, so the
+    // subshell's contents are decided as their own command.
+    assert_eq!(split("(rm -rf /)"), ["rm -rf /"]);
+    assert_eq!(split("( rm -rf / )"), ["rm -rf /"]);
+    assert_eq!(split("echo a | (rm -rf /)"), ["echo a", "rm -rf /"]);
+    assert_eq!(split("(cd /tmp && rm -rf x)"), ["cd /tmp", "rm -rf x"]);
+    // Unterminated: the command is still a unit rather than being swallowed.
+    assert_eq!(split("((rm -rf /"), ["rm -rf /"]);
+    // A `)` closing a case pattern exposes the branch body the same way.
+    assert_eq!(
+        split("case x in a) rm -rf /;; esac"),
+        ["case x in a", "rm -rf /", "esac"]
+    );
+}
+
+#[test]
+fn a_paren_outside_command_position_is_word_content() {
+    // Only a `(` the shell would read as a subshell opener splits. Anywhere else
+    // it belongs to the word, so an array assignment and a format specifier keep
+    // their shape instead of fragmenting into units that match no rule.
+    assert_eq!(split("arr=(a b c)"), ["arr=(a b c"]);
+    assert_eq!(
+        split("git log --format=%(refname)"),
+        ["git log --format=%(refname"]
+    );
+    assert_eq!(split(r"find . \( -name a \)"), [r"find . \( -name a \)"]);
+    assert_eq!(split(r#"echo "(quoted)""#), [r#"echo "(quoted)""#]);
+    assert_eq!(split("echo '(quoted)'"), ["echo '(quoted)'"]);
+    // The three substitution forms claim their own parens before this arm runs,
+    // so each keeps yielding the inner command plus the undivided outer text.
+    assert_eq!(split("echo $(id)"), ["id", "echo $(id)"]);
+    assert_eq!(split("diff <(cat a) b"), ["cat a", "diff <(cat a) b"]);
+    assert_eq!(split("echo $((1 + 2))"), ["echo $((1 + 2))"]);
+}
+
+#[test]
 fn redirection_amp_is_not_a_background_split() {
     // `2>&1` and `>file` must not split the command.
     assert_eq!(split("cmd arg 2>&1"), ["cmd arg 2>&1"]);

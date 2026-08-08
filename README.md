@@ -295,7 +295,7 @@ A leading `//` in a Path specifier is a root marker: permcheck normalizes it to 
 
 A single `Bash` command often chains several commands, so it gets extra scrutiny (see [`specs/SPEC.md`](specs/SPEC.md) §8):
 
-- **Split into units** on shell operators (`&&`, `||`, `|`, `;`, `&`, newlines), pulling inner commands out of `$(…)`, backticks, and `<(…)` / `>(…)`. The verdict is the **most restrictive** unit: if any sub-command is denied, the whole command is denied.
+- **Split into units** on shell operators (`&&`, `||`, `|`, `;`, `&`, newlines, and the subshell delimiters `(` and `)`), pulling inner commands out of `$(…)`, backticks, and `<(…)` / `>(…)`. The verdict is the **most restrictive** unit: if any sub-command is denied, the whole command is denied.
 - **File-access cross-check**: readers (`cat`, `grep`, …), writers (`tee`, `truncate`), `dd` (`if=`/`of=`), the `curl`/`wget` file-read forms (`curl --data-binary @/repo/.env`, `wget --post-file`), and redirection targets are checked against `Read`/`Write`/`Edit` **deny** rules. This catches `cat .env` even though `Bash(cat:*)` is allowed. It only ever *raises* a verdict to `deny`. Tools outside this fixed set (`scp`, `tar`, `git`) are not followed.
 - **Wrapper re-decision**: a leading wrapper (`env`, `sudo`, `timeout`, `nice`, …) runs the command after it, so the wrapped command's rules apply too. This stops `env aws …` from laundering a denied command through a broad `Bash(env:*)` allow.
 

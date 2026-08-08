@@ -448,9 +448,23 @@ A single Bash `tool_input.command` often contains several commands. The engine
 decomposes it and takes the **most restrictive** verdict.
 
 1. **Split into units** on shell operators outside quotes: `&&`, `||`, `|`, `;`,
-   `&`, and newlines. Pull inner commands out of command substitutions
+   `&`, newlines, and the subshell delimiters `(` and `)`. Pull inner commands out
+   of command substitutions
    `$(…)`, backticks `` `…` ``, and process substitutions `<(…)` / `>(…)`,
-   including inside double quotes. `$((…))` arithmetic is literal. Single quotes
+   including inside double quotes. `$((…))` arithmetic is literal.
+
+   A `(` is a delimiter only in **command position** (at unit start, or after
+   whitespace or another operator), which is the only place bash reads one as a
+   subshell opener. Elsewhere it is word content, so an array assignment
+   (`arr=(a b)`) and a format specifier (`--format=%(refname)`) keep their shape
+   instead of fragmenting into units that match no rule. A `)` always closes a
+   unit. Without this, a subshell stayed one unit whose first word was `(sudo`,
+   and every Bash deny was one paren away from being evaded, while the same
+   command written `$(sudo …)` was caught. A bare `((…))` arithmetic *command*
+   therefore contributes its interior as a unit, which reaches no rule and lands
+   on `defaultMode`, the verdict the undivided spelling already got.
+
+   Single quotes
    suppress expansion. An unquoted `#` that starts a word (at unit start or after
    whitespace or an operator) opens a comment; it and the rest of the line are
    dropped, as bash does, so a comment cannot feed matched text. A `#` inside a
