@@ -103,6 +103,43 @@ fn mcp_tool_names_parse() {
 }
 
 #[test]
+fn terminal_star_tool_selectors_parse_as_bare_rules() {
+    let rs = load(r#"{"allow":["mcp__serena__*","*"]}"#).unwrap();
+    assert_eq!(rs.rules[0].tool, "mcp__serena__*");
+    assert_eq!(rs.rules[0].specificity, 0);
+    assert_eq!(rs.rules[1].tool, "*");
+}
+
+#[test]
+fn wildcard_tool_selectors_are_narrow_and_bare_only() {
+    for src in [
+        r#"{"allow":["mcp__*__tool"]}"#,
+        r#"{"allow":["mcp__serena__*(query)"]}"#,
+        r#"{"allow":["*x"]}"#,
+    ] {
+        assert!(matches!(load(src), Err(LoadError::MalformedRule(_))));
+    }
+}
+
+#[test]
+fn unusual_bash_prefix_is_valid_but_linted() {
+    for src in [
+        r#"{"deny":["Bash(rm *--force*:*)"]}"#,
+        r#"{"deny":["Bash(curl :*)"]}"#,
+    ] {
+        let rs = load(src).unwrap();
+        assert_eq!(rs.lint_warnings().len(), 1);
+    }
+}
+
+#[test]
+fn oversized_rule_is_a_load_error() {
+    let rule = format!("WebFetch({})", "x".repeat(1_025));
+    let src = serde_json::json!({"deny": [rule]}).to_string();
+    assert!(matches!(load(&src), Err(LoadError::LimitExceeded(_))));
+}
+
+#[test]
 fn order_index_is_file_order_allow_then_ask_then_deny() {
     let rs = load(r#"{"deny":["Bash(a:*)"],"ask":["Bash(b:*)"],"allow":["Bash(c:*)"]}"#).unwrap();
     let idx = |t: Tier| rs.rules.iter().find(|r| r.tier == t).unwrap().order_index;

@@ -1,6 +1,7 @@
 //! Environment-assignment and wrapper-prefix handling (§8.2).
 
 use super::split::{skip_quoted, skip_single};
+use super::tokenize::shell_words;
 
 /// Wrapper commands whose leading options are peeled to reach the real command.
 const WRAPPERS: &[&str] = &[
@@ -81,46 +82,51 @@ pub(super) fn peel_wrappers<'a, 'b>(mut words: &'a [&'b str]) -> &'a [&'b str] {
     words
 }
 
+#[cfg(not(windows))]
 pub(super) fn basename(word: &str) -> &str {
     word.rsplit('/').next().unwrap_or(word)
 }
 
+#[cfg(windows)]
+pub(super) fn basename(word: &str) -> &str {
+    word.rsplit(['/', '\\']).next().unwrap_or(word)
+}
+
 /// Strip leading wrapper commands and return the wrapped command string.
 pub(super) fn strip_leading_wrappers(cmd: &str) -> Option<&str> {
-    let b = cmd.as_bytes();
-    let skip_ws = |mut i: usize| {
-        while i < b.len() && (b[i] == b' ' || b[i] == b'\t') {
-            i += 1;
-        }
-        i
-    };
-
-    let mut i = skip_ws(0);
+    let words: Vec<_> = shell_words(cmd)
+        .into_iter()
+        .filter(|word| word.redirect.is_none())
+        .collect();
+    let mut i = 0;
+    while words.get(i).is_some_and(|word| is_assignment(&word.value)) {
+        i += 1;
+    }
     let mut peeled = false;
-    loop {
-        let start = i;
-        let end = skip_word(b, start);
-        if end == start || !WRAPPERS.contains(&basename(&cmd[start..end])) {
-            break;
-        }
-        i = end;
+    while let Some(word) = words.get(i)
+        && WRAPPERS.contains(&basename(&word.value))
+    {
         peeled = true;
-        loop {
-            let ws = skip_ws(i);
-            let we = skip_word(b, ws);
-            if we == ws {
-                i = ws;
-                break;
-            }
-            if is_wrapper_arg(&cmd[ws..we]) {
-                i = we;
-            } else {
-                i = ws;
-                break;
-            }
+        i += 1;
+        while words.get(i).is_some_and(|word| is_wrapper_arg(&word.value)) {
+            i += 1;
         }
     }
 
-    let rest = cmd[skip_ws(i)..].trim_end();
+    let rest = words
+        .get(i)
+        .map(|word| cmd[word.range.start..].trim_end())
+        .unwrap_or("");
     (peeled && !rest.is_empty()).then_some(rest)
+}
+
+pub(super) fn is_assignment(word: &str) -> bool {
+    let Some((name, _)) = word.split_once('=') else {
+        return false;
+    };
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }

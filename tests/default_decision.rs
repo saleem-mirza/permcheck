@@ -97,3 +97,44 @@ fn empty_bash_command_uses_fallback_tier() {
         Tier::Deny
     );
 }
+
+#[test]
+fn wildcard_tool_rule_covers_mcp_tools_but_not_other_prefixes() {
+    let rules = r#"{"defaultMode":"ask","deny":["mcp__serena__*"]}"#;
+    assert_eq!(tier(rules, "mcp__serena__read_file", "x"), Tier::Deny);
+    assert_eq!(tier(rules, "mcp__github__read_file", "x"), Tier::Ask);
+}
+
+#[test]
+fn exact_tool_rule_carves_out_wildcard_tool_deny() {
+    let rules = r#"{
+        "allow":["mcp__serena__read_file"],
+        "deny":["mcp__serena__*"]
+    }"#;
+    assert_eq!(tier(rules, "mcp__serena__read_file", "x"), Tier::Allow);
+    assert_eq!(tier(rules, "mcp__serena__delete_file", "x"), Tier::Deny);
+}
+
+#[test]
+fn universal_tool_ask_yields_to_exact_tool_allow() {
+    let rules = r#"{"allow":["TodoWrite"],"ask":["*"]}"#;
+    assert_eq!(tier(rules, "TodoWrite", ""), Tier::Allow);
+    assert_eq!(tier(rules, "ExitPlanMode", ""), Tier::Ask);
+}
+
+#[test]
+fn oversized_payload_fails_closed() {
+    let rules = r#"{"allow":["*"]}"#;
+    assert_eq!(
+        tier(rules, "mcp__db__query", &"x".repeat(32_769)),
+        Tier::Deny
+    );
+    assert_eq!(tier(rules, "Bash", &"x".repeat(32_769)), Tier::Deny);
+}
+
+#[test]
+fn matcher_work_budget_fails_closed() {
+    let pattern = format!("{}*", "x".repeat(1_000));
+    let rules = serde_json::json!({"allow": [format!("WebSearch({pattern})")]}).to_string();
+    assert_eq!(tier(&rules, "WebSearch", &"x".repeat(3_000)), Tier::Deny);
+}

@@ -12,6 +12,11 @@ use std::sync::OnceLock;
 /// wildcard at all, so a literal specifier outranks any wildcard one (§6.1).
 pub const EXACT_MATCH_BONUS: u32 = 1000;
 
+/// Maximum dynamic-programming/NFA state visits for one matcher invocation.
+/// The engine turns exhaustion into `deny`; the public boolean compatibility
+/// method returns `false`, which never grants a match on its own.
+const MAX_MATCH_STATES: usize = 2_000_000;
+
 /// The home directory, read once and cached for the process lifetime, in a
 /// POSIX-anchored form (see [`normalize_root`]).
 pub(crate) fn home_dir() -> &'static str {
@@ -207,13 +212,34 @@ pub enum Matcher {
 impl Matcher {
     /// Test one candidate form of the payload against this matcher.
     pub fn matches(&self, candidate: &str) -> bool {
+        self.matches_checked(candidate).unwrap_or(false)
+    }
+
+    /// Matcher test with explicit resource exhaustion for the decision engine.
+    pub(crate) fn matches_checked(&self, candidate: &str) -> Result<bool, ()> {
         match self {
-            Matcher::Bare => true,
-            Matcher::Bash(m) => m.matches(candidate),
-            Matcher::Path(m) => m.matches(candidate),
-            Matcher::Generic(m) => m.matches(candidate),
+            Matcher::Bare => Ok(true),
+            Matcher::Bash(BashMatcher::Prefix(prefix)) => Ok(prefix_covers(prefix, candidate)),
+            Matcher::Bash(BashMatcher::Glob(glob)) => {
+                bounded_work(candidate.len(), glob.toks.len())?;
+                Ok(tokens_match(candidate.as_bytes(), &glob.toks, b' '))
+            }
+            Matcher::Path(path) => {
+                bounded_work(candidate.len(), path.0.len())?;
+                Ok(path.matches(candidate))
+            }
+            Matcher::Generic(generic) => {
+                bounded_work(candidate.len(), generic.0.len())?;
+                Ok(generic.matches(candidate))
+            }
         }
     }
+}
+
+fn bounded_work(text_len: usize, pattern_len: usize) -> Result<(), ()> {
+    (text_len.saturating_mul(pattern_len) <= MAX_MATCH_STATES)
+        .then_some(())
+        .ok_or(())
 }
 
 /// Compile a specifier for the given family into a `(matcher, specificity)`
@@ -300,16 +326,6 @@ pub struct BashGlob {
     toks: Vec<PToken>,
 }
 
-impl BashMatcher {
-    fn matches(&self, cmd: &str) -> bool {
-        match self {
-            BashMatcher::Prefix(prefix) => prefix_covers(prefix, cmd),
-            // Space is the token separator: `Star` stops at it, `DStar` spans it.
-            BashMatcher::Glob(g) => tokens_match(cmd.as_bytes(), &g.toks, b' '),
-        }
-    }
-}
-
 /// Compile a Bash glob specifier into tokens. A `*` (or a run of them) becomes a
 /// single-token `Star` only when a space fences it on both sides — the
 /// `aws * describe-*` "argument slot" idiom — so it cannot swallow whitespace and
@@ -348,31 +364,52 @@ fn bash_glob_tokens(spec: &str) -> Vec<PToken> {
 /// single-token `Star` that stops at `sep`. Plain backtracking over trusted,
 /// short rule patterns (§9.2).
 fn tokens_match(text: &[u8], toks: &[PToken], sep: u8) -> bool {
-    match toks.first() {
-        None => text.is_empty(),
-        Some(PToken::Lit(c)) => {
-            !text.is_empty() && text[0] == *c && tokens_match(&text[1..], &toks[1..], sep)
-        }
-        Some(PToken::Ques) => {
-            !text.is_empty() && text[0] != sep && tokens_match(&text[1..], &toks[1..], sep)
-        }
-        Some(PToken::Star) => {
-            let rest = &toks[1..];
-            let mut i = 0;
-            loop {
-                if tokens_match(&text[i..], rest, sep) {
-                    return true;
-                }
-                if i < text.len() && text[i] != sep {
-                    i += 1;
-                } else {
-                    return false;
-                }
+    nfa_match(text, toks, sep)
+}
+
+/// Stackless glob evaluation by NFA state propagation. Each `(text, token)`
+/// state is visited at most once per input byte, eliminating the recursive
+/// backtracking blow-up formerly reachable through interacting wildcards.
+fn nfa_match(text: &[u8], toks: &[PToken], sep: u8) -> bool {
+    if let Some(matches) = literal_tokens_match(toks, text) {
+        return matches;
+    }
+    let mut current = vec![false; toks.len() + 1];
+    let mut next = vec![false; toks.len() + 1];
+    current[0] = true;
+    epsilon_closure(&mut current, toks);
+
+    for &ch in text {
+        next.fill(false);
+        for (i, tok) in toks.iter().copied().enumerate() {
+            if !current[i] {
+                continue;
+            }
+            match tok {
+                PToken::Lit(expected) if expected == ch => next[i + 1] = true,
+                PToken::Ques if ch != sep => next[i + 1] = true,
+                PToken::Star if ch != sep => next[i] = true,
+                PToken::DStar => next[i] = true,
+                PToken::Lit(_) | PToken::Ques | PToken::Star => {}
             }
         }
-        Some(PToken::DStar) => {
-            let rest = &toks[1..];
-            (0..=text.len()).any(|i| tokens_match(&text[i..], rest, sep))
+        epsilon_closure(&mut next, toks);
+        if !next.iter().any(|state| *state) {
+            return false;
+        }
+        std::mem::swap(&mut current, &mut next);
+    }
+    current[toks.len()]
+}
+
+/// Add transitions that consume no input: either wildcard may end immediately.
+fn epsilon_closure(states: &mut [bool], toks: &[PToken]) {
+    for i in 0..toks.len() {
+        if !states[i] {
+            continue;
+        }
+        if matches!(toks[i], PToken::Star | PToken::DStar) {
+            states[i + 1] = true;
         }
     }
 }
@@ -584,14 +621,17 @@ impl<'a> PathProbe<'a> {
         Self { raw, operand_glob }
     }
 
-    pub(crate) fn hits(&self, matcher: &Matcher) -> bool {
-        if matcher.matches(self.raw) {
-            return true;
+    pub(crate) fn hits(&self, matcher: &Matcher) -> Result<bool, ()> {
+        if matcher.matches_checked(self.raw)? {
+            return Ok(true);
         }
         match (matcher, self.operand_glob.as_deref()) {
-            (Matcher::Path(path), Some(operand)) => globs_can_intersect(&path.0, operand),
-            (Matcher::Bare, Some(_)) => true,
-            _ => false,
+            (Matcher::Path(path), Some(operand)) => {
+                bounded_work(path.0.len(), operand.len())?;
+                Ok(globs_can_intersect(&path.0, operand))
+            }
+            (Matcher::Bare, Some(_)) => Ok(true),
+            _ => Ok(false),
         }
     }
 }
@@ -687,16 +727,6 @@ pub(crate) fn matcher_subset(a: &Matcher, d: &Matcher) -> bool {
         // practice; conservatively not a subset.
         _ => false,
     }
-}
-
-/// True when `a` is a strict carve-out of `d`: `L(a) ⊆ L(d)` and not the reverse
-/// (§6.3). Equal specifiers are not carve-outs, which keeps `deny > ask > allow`
-/// for the same specifier.
-///
-/// Shared by winner selection and the author-time lint, so a warning cannot
-/// disagree with the decision it describes.
-pub(crate) fn is_strict_carve_out(a: &Matcher, d: &Matcher) -> bool {
-    matcher_subset(a, d) && !matcher_subset(d, a)
 }
 
 /// Does this matcher accept every possible payload?
@@ -955,51 +985,79 @@ fn step_d(d: &[PToken], bits: u128, ch: u8, sep_byte: u8) -> u128 {
 
 /// Anchored, full-string glob match with `/`-aware wildcards (§6.5).
 ///
-/// Plain recursive backtracking. Path specifiers come from the operator-authored
-/// rule set (`permcheck.json` is the source of truth), so they are trusted and
-/// short — at most a few spanning wildcards — and paths are bounded, making this
-/// fast in practice. It is deliberately **not** hardened against adversarial
-/// patterns with many interacting wildcards; that is a documented non-goal
-/// (§9.2), since the rules are trusted config, not attacker input. Semantics:
+/// Stackless state propagation visits each pattern position at most once per
+/// input byte, avoiding recursive backtracking and stack growth. Semantics:
 /// `*` spans a run of non-`/` bytes, `?` one non-`/` byte, `**` any run including
 /// `/`, and `**/` collapses to zero directories (so `/**/.env` matches `/.env`
 /// and `**/x` matches a bare `x`).
 fn path_match(pat: &[PToken], text: &[u8]) -> bool {
-    match pat.first() {
-        None => text.is_empty(),
-        Some(PToken::DStar) => {
-            let rest = &pat[1..];
-            // `**` matches any suffix boundary, separators included.
-            if (0..=text.len()).any(|i| path_match(rest, &text[i..])) {
-                return true;
-            }
-            // Collapse `**/` to zero directories, so `/**/.env` matches `/.env`
-            // and `**/x` matches a bare `x`.
-            if let Some(PToken::Lit(b'/')) = rest.first() {
-                return path_match(&rest[1..], text);
-            }
-            false
-        }
-        Some(PToken::Star) => {
-            let rest = &pat[1..];
-            // `*` matches a run of non-separator bytes (including empty).
-            let mut i = 0;
-            loop {
-                if path_match(rest, &text[i..]) {
-                    return true;
-                }
-                if i < text.len() && text[i] != b'/' {
-                    i += 1;
-                } else {
-                    return false;
+    if let Some(matches) = literal_tokens_match(pat, text) {
+        return matches;
+    }
+    let mut current = vec![false; pat.len() + 1];
+    let mut looped = vec![false; pat.len() + 1];
+    let mut next = vec![false; pat.len() + 1];
+    let mut next_looped = vec![false; pat.len() + 1];
+    current[0] = true;
+    path_epsilon_closure(&mut current, &looped, pat);
+
+    for &ch in text {
+        next.fill(false);
+        next_looped.fill(false);
+        for (i, tok) in pat.iter().copied().enumerate() {
+            if current[i] {
+                match tok {
+                    PToken::Lit(expected) if expected == ch => next[i + 1] = true,
+                    PToken::Ques if ch != b'/' => next[i + 1] = true,
+                    PToken::Star if ch != b'/' => next[i] = true,
+                    PToken::DStar => next_looped[i] = true,
+                    PToken::Lit(_) | PToken::Ques | PToken::Star => {}
                 }
             }
+            if looped[i] && tok == PToken::DStar {
+                next_looped[i] = true;
+            }
         }
-        Some(PToken::Ques) => {
-            !text.is_empty() && text[0] != b'/' && path_match(&pat[1..], &text[1..])
+        path_epsilon_closure(&mut next, &next_looped, pat);
+        if !next.iter().any(|state| *state) && !next_looped.iter().any(|state| *state) {
+            return false;
         }
-        Some(PToken::Lit(c)) => {
-            !text.is_empty() && text[0] == *c && path_match(&pat[1..], &text[1..])
+        std::mem::swap(&mut current, &mut next);
+        std::mem::swap(&mut looped, &mut next_looped);
+    }
+    path_epsilon_closure(&mut current, &looped, pat);
+    current[pat.len()]
+}
+
+fn literal_tokens_match(toks: &[PToken], text: &[u8]) -> Option<bool> {
+    toks.iter()
+        .all(|tok| matches!(tok, PToken::Lit(_)))
+        .then(|| {
+            toks.len() == text.len()
+                && toks
+                    .iter()
+                    .zip(text)
+                    .all(|(tok, byte)| matches!(tok, PToken::Lit(expected) if expected == byte))
+        })
+}
+
+/// Path `**/` has one extra epsilon transition, but only before that `**` has
+/// consumed a character. Keeping consumed `**` states separate preserves the
+/// established rule that the slash may collapse for zero directories without
+/// letting a pattern match midway through a filename segment.
+fn path_epsilon_closure(states: &mut [bool], looped: &[bool], toks: &[PToken]) {
+    for i in 0..toks.len() {
+        if looped[i] && toks[i] == PToken::DStar {
+            states[i + 1] = true;
+        }
+        if !states[i] {
+            continue;
+        }
+        if matches!(toks[i], PToken::Star | PToken::DStar) {
+            states[i + 1] = true;
+        }
+        if toks[i] == PToken::DStar && toks.get(i + 1) == Some(&PToken::Lit(b'/')) {
+            states[i + 2] = true;
         }
     }
 }

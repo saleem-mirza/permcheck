@@ -142,6 +142,23 @@ fn quoted_flags_reach_the_escalation_forms() {
 }
 
 #[test]
+fn single_flag_escalation_preserves_operands() {
+    let rs = load_rules_str(r#"{"allow":["Bash(rm:*)"],"deny":["Bash(rm -f /:*)"]}"#).unwrap();
+    for cmd in ["rm -rf /", "rm -fr /", "rm -r -f /"] {
+        assert_eq!(
+            evaluate(&rs, "Bash", &json!({"command": cmd}), Some(CWD)).tier,
+            Tier::Deny,
+            "operand-bearing flag form should deny: {cmd}"
+        );
+    }
+    // No `-f` means no escalation to the force rule.
+    assert_eq!(
+        evaluate(&rs, "Bash", &json!({"command": "rm -r /"}), Some(CWD)).tier,
+        Tier::Allow
+    );
+}
+
+#[test]
 fn quoting_strip_stays_anchored_at_the_command_word() {
     // Stripping quotes merges quoted text into the matched string. Matching is
     // anchored (§6.5), so denied text sitting inside an argument must not turn a
@@ -404,4 +421,100 @@ fn a_quoted_path_cannot_launder_a_denied_binary_through_an_allowed_name() {
     assert_eq!(d(r#"'/tmp/git evil/bin/rm' -rf /tmp/data"#), Tier::Deny);
     // The allow it tried to ride still works for real git.
     assert_eq!(d("git status"), Tier::Allow);
+}
+
+// ANSI-C quoting is still one shell word. It used to bypass the parsed-basename
+// form because that helper only recognized a literal quote in byte zero:
+// quote-stripping then split the spaced executable and invented the allowed
+// basename `my`, while the real executable was `rm`.
+#[test]
+fn ansi_c_quoted_path_cannot_launder_a_denied_binary() {
+    let rs =
+        load_rules_str(r#"{"defaultMode":"ask","allow":["Bash(my:*)"],"deny":["Bash(rm:*)"]}"#)
+            .unwrap();
+    let d = |cmd: &str| evaluate(&rs, "Bash", &json!({ "command": cmd }), Some(CWD)).tier;
+
+    assert_eq!(d(r#"$'/tmp/my tool/bin/rm' -rf x"#), Tier::Deny);
+}
+
+// A backslash inside single quotes is a literal POSIX filename character, not a
+// separator. Treating it as `/` invented the allowed basename `git` and hid the
+// actual basename `bin\git` from its deny.
+#[cfg(not(windows))]
+#[test]
+fn posix_quoted_backslash_does_not_invent_a_basename() {
+    let rs = load_rules_str(
+        r#"{"defaultMode":"ask","allow":["Bash(git:*)"],"deny":["Bash(bin\\git:*)"]}"#,
+    )
+    .unwrap();
+    let d = |cmd: &str| evaluate(&rs, "Bash", &json!({ "command": cmd }), Some(CWD)).tier;
+
+    assert_eq!(d(r#"'/tmp/foo evil/bin\git' status"#), Tier::Deny);
+}
+
+// Path rewriting must use shell words, not whitespace runs. The quoted directory
+// is one operand; after collapsing `..` it leaves the allowed tree and lands on
+// `/w/src`, where the broad absolute deny must hold. Wrapper peeling must retain
+// the same raw word boundary for the inner decision.
+#[test]
+fn quoted_spaced_operand_resolves_as_one_word() {
+    const POLICY: &str = r#"{
+      "defaultMode": "ask",
+      "allow": [
+        "Bash(rm -rf \"scratch dir\"/*)",
+        "Bash(rm -rf /w/scratch dir/*)",
+        "Bash(sudo:*)"
+      ],
+      "deny": ["Bash(rm -rf /*)"]
+    }"#;
+    let rs = load_rules_str(POLICY).unwrap();
+    let d = |cmd: &str| evaluate(&rs, "Bash", &json!({ "command": cmd }), Some("/w")).tier;
+
+    assert_eq!(d(r#"rm -rf "scratch dir"/file"#), Tier::Allow);
+    assert_eq!(d(r#"rm -rf "scratch dir"/../src"#), Tier::Deny);
+    assert_eq!(d(r#"sudo rm -rf "scratch dir"/../src"#), Tier::Deny);
+}
+
+// A long option can carry a path in the same word. Resolve the value after `=`
+// while preserving the option name, so traversal cannot ride a relative allow
+// past the equivalent absolute deny.
+#[test]
+fn attached_long_option_path_is_resolved() {
+    const POLICY: &str = r#"{
+      "defaultMode": "ask",
+      "allow": [
+        "Bash(tar --directory=.scratch/*)",
+        "Bash(tar --directory=/w/.scratch/*)"
+      ],
+      "deny": ["Bash(tar --directory=/*)"]
+    }"#;
+    let rs = load_rules_str(POLICY).unwrap();
+    let d = |cmd: &str| evaluate(&rs, "Bash", &json!({ "command": cmd }), Some("/w")).tier;
+
+    assert_eq!(d("tar --directory=.scratch/build archive.tar"), Tier::Allow);
+    assert_eq!(d("tar --directory=.scratch/../src archive.tar"), Tier::Deny);
+}
+
+// Windows drive-relative words have no separator (`C:secret.txt`) but still name
+// a path. The Bash operand gate must let them reach the same same-drive resolution
+// already used by Path payloads.
+#[cfg(windows)]
+#[test]
+fn windows_drive_relative_bash_operand_uses_the_cwd() {
+    let rs = load_rules_str(
+        r#"{"defaultMode":"ask","allow":["Bash(cat:*)"],"deny":["Bash(cat /C:/work/**)"]}"#,
+    )
+    .unwrap();
+    let at = |cwd: &str| {
+        evaluate(
+            &rs,
+            "Bash",
+            &json!({ "command": "cat C:secret.txt" }),
+            Some(cwd),
+        )
+        .tier
+    };
+
+    assert_eq!(at(r"C:\work"), Tier::Deny);
+    assert_eq!(at(r"D:\work"), Tier::Allow);
 }

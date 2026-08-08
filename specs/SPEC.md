@@ -205,19 +205,29 @@ Both of these parse identically:
 
 A rule is one string, in one of two forms:
 
-- **Bare rule**: `Tool` matches any payload for that tool.
+- **Bare rule**: `Tool` matches any payload for that tool. `Tool` may be an
+  exact name, a terminal-star prefix selector (`mcp__serena__*`), or `*`.
 - **Specifier rule**: `Tool(specifier)` matches payloads of that tool per the
   tool's matching semantics (§6).
 
 Rules:
 
-- **Tool name** matches `[A-Za-z][A-Za-z0-9_]*`. This covers built-in tools
-  (`Bash`, `Read`, `WebFetch`, …) and MCP tools (`mcp__server__tool`).
+- An exact **tool name** matches `[A-Za-z][A-Za-z0-9_]*`. A bare rule may use
+  one terminal `*`, including `*` by itself. Tool wildcards are prefix-only and
+  bare: `mcp__*__read` and `mcp__serena__*(path)` are load errors. This narrow
+  grammar covers Claude Code's MCP grouping idiom without applying one payload
+  matcher across several tool families.
 - **Specifier** is everything between the first `(` and the final `)`, and it must be
   at least one character. `Tool()` (empty specifier) is a **load error**: an
   operator who writes a deny that way must be told, not silently ignored.
 - A specifier that cannot be compiled into a matcher (§6) is a **load error →
   deny**. Bad rules fail at load, never at decision time.
+- A `Bash(cmd:*)` prefix with edge whitespace or an interior `*` remains valid
+  and is evaluated literally. The author-time linter warns because those forms
+  are often mistakes, but the engine neither rewrites nor rejects valid rules
+  based on inferred intent.
+- Policies are bounded at 1 MiB, 4,096 rules, and 1,024 bytes per rule. Exceeding
+  a bound is a load error.
 
 ## 5. Tool taxonomy and payload extraction
 
@@ -241,9 +251,9 @@ Routing rules:
   the names themselves. It is not whichever field a JSON map happens to yield
   first, so the payload a tool call resolves to does not depend on how the JSON
   object is built or ordered.
-- A rule's tool name must equal the call's tool name exactly, so
-  `mcp__github__create_issue(...)` rules apply only to that MCP tool, and
-  `NotebookEdit` is not covered by a bare `Edit` rule (different tool name).
+- An exact selector must equal the call's tool name. A terminal-star selector
+  matches names with that prefix, so `mcp__serena__*` covers Serena's tools but
+  not `mcp__github__read_file`. `NotebookEdit` is not covered by bare `Edit`.
 - **Tools with no string payload** (e.g. `TodoWrite`, `ExitPlanMode`) extract the
   empty string, so only a **bare** rule (`TodoWrite`) matches them. Absent one
   they take the **`defaultMode` fall-back** (§6.4). Give always-on benign tools an
@@ -272,8 +282,15 @@ specificity = (count of literal, non-wildcard characters in the specifier)
   is a strict subset of that deny. So `allow Read(/**/passwd)` does **not**
   override `deny Read(/etc/**)` — the two overlap without one refining the other —
   and `/etc/passwd` is denied. A literal `allow Read(/etc/passwd)`, a strict
-  subset of the deny, does override it. The only load-time check is the
-  dead-`cmd:*` lint (§11.2).
+  subset of the deny, does override it. Grammar and resource checks happen at
+  load (§4); containment remains conservative at decision time.
+
+Tool selectors carry a separate, leading specificity component: an exact tool
+name gets the exact-match bonus and outranks a matching terminal-star selector;
+among terminal-star selectors, the longer literal prefix is more specific. This
+component matters only when exact and wildcard tool rules overlap. Containment
+and carve-outs include both the selector language and payload language, so an
+exact MCP-tool rule is a strict subset of a matching `mcp__server__*` bare rule.
 
 ### 6.2 Tier ordering
 
@@ -293,7 +310,8 @@ rules.
 2. **Deny survives.** If any matching deny is not carved out by some matching
    allow/ask, the decision is `deny`.
 3. **Otherwise pick the winner** among the matching allow/ask rules by
-   `(specificity, tier)`, maximal lexicographically: higher specificity, then
+   `(tool specificity, payload specificity, tier)`, maximal lexicographically:
+   a narrower selector first, then higher payload specificity, then
    higher tier (`ask` over `allow`), then the first rule in file order for a
    stable, deterministic decision.
 
@@ -476,7 +494,8 @@ decomposes it and takes the **most restrictive** verdict.
    - **Escalation** forms are each decided on their own and can only *raise* the
      verdict, and only on a real rule match — so they respect `defaultMode` and
      never invent a deny. A clustered/reordered/split **short-flag** set maps onto
-     its single-flag rule (`rm -Rf` / `rm -fr` / `rm -r -f` → `rm -f`), and an
+     its single-flag rule while retaining later operands (`rm -Rf /` / `rm -fr /`
+     / `rm -r -f /` → `rm -f /`), and an
      **interpreter inline-code** invocation is canonicalized to `<interp> <flag>`
      (`python3 -cimport` / `python3 -W ignore -c` / `perl -we` / `node --eval` /
      `deno eval` → `python3 -c` / `perl -e` / `node -e` / `deno eval`) so every
@@ -490,12 +509,16 @@ decomposes it and takes the **most restrictive** verdict.
 
      A **path-operand** form resolves every operand that names a path to the path
      it really names, exactly as a Path payload is resolved (§7.1, §7.2), and
-     re-decides the rebuilt command. An operand names a path when it starts like a
-     filename (so options, redirections, and operators are skipped), is not a
-     `scheme://host/path` URL, and either carries a `.`/`..` segment or contains a
-     separator or a leading `~`. Anything else is left exactly as written, so an
-     ordinary command produces no extra form. The form needs no per-command
-     vocabulary, so it covers `rm`, `tar`, and every other command alike.
+     re-decides the rebuilt command. The shared shell-word lexer retains raw spans
+     alongside dequoted values, so a quoted operand containing whitespace remains
+     one path while the command is rebuilt. An operand names a path when it starts
+     like a filename, is not a `scheme://host/path` URL, and either carries a
+     `.`/`..` segment, a separator, a leading `~`, or (on Windows) a drive prefix.
+     A long `--option=value` word resolves a path-like `value` while retaining the
+     option name. Other options, redirections, and operators are skipped. Anything
+     else is left exactly as written, so an ordinary command produces no extra
+     form. The form needs no per-command vocabulary, so it covers `rm`, `tar`, and
+     every other command alike.
 
      It closes two gaps a text-only match leaves open.
 
@@ -636,6 +659,11 @@ out of scope and left to the OS sandbox and enterprise denies:
   that value in the operand stream, where it is checked as if it were a path.
   That direction over-denies rather than under-denies, so an option is added to
   the table only when its value is mandatory and separable on every platform.
+- Generic path-operand normalization understands positional path words and long
+  `--option=path` forms. A command-specific attached short form such as `-Cpath`
+  is not split generically because the same short flag has different arity and
+  meaning across programs; use its separate-value or long form in policies that
+  rely on path normalization, or cover the attached spelling explicitly.
 - An unquoted `#` starting a word opens a comment, which the splitter strips
   through end of line (§8.1) — matching bash, so a comment cannot smuggle a
   substring into the matched text. Heredoc bodies are not modeled; an unterminated
@@ -646,13 +674,12 @@ out of scope and left to the OS sandbox and enterprise denies:
   non-dotfile filename-pattern deny. `cat *rsa` resolves to allow even though a
   shell expands `*rsa` onto `id_rsa`, which `Read(//**/id_rsa*)` denies. A deny
   targeting a directory (`.ssh/**`) still catches it.
-- **Path-glob matching is not hardened against catastrophic backtracking.** The
-  matcher is a plain recursive backtracker. A specifier with many interacting
-  wildcards (e.g. `/*a*a*a*a*a*a*a*b`) grows super-linearly in the path length.
-  This is acceptable because rule specifiers are **trusted operator config**, not
-  attacker input. The rule file is the source of truth. Payloads (paths) are
-  bounded and realistic rules use at most a few wildcards, so matching stays in
-  microseconds.
+- Matcher execution is bounded: Bash and Path globs use stackless NFA state
+  propagation rather than recursive backtracking; tool payloads over 32,768 bytes
+  deny before normalization/matching; Bash commands over 1,024 split units deny;
+  a glob evaluation over two million text/pattern state visits denies. These
+  bounds are intentionally family-agnostic and do not interpret command option
+  semantics.
 
 Unsupported constructs receive no special interpretation beyond whatever units
 and forms the analyzer can extract. They remain governed by literal rule
@@ -732,18 +759,16 @@ correction backlog for the reference file.
    `Bash([ ! -d * ] && gh repo clone *)` contains `&&`, and §8 splits on `&&`
    before matching, so no unit ever contains it and the rule never fires.
    (The reference set previously shipped such rules, since removed.) A second
-   dead-rule form: a `Bash(cmd:*)` specifier with a `*` before the `:*` compiles
-   to a literal-asterisk prefix and matches nothing (the `cmd:*` form has no
-   interior wildcard; use the glob form `Bash(cmd …)` instead). A third: a
-   `Bash(cmd:*)` specifier padded with whitespace. `Bash(curl :*)` strips to the
-   prefix `curl `, and prefix matching requires the byte after the prefix to be
-   whitespace, so it fires only on a *double*-spaced `curl  x` and never on the
-   ordinary spelling. A leading space can never match at all, since a unit is
-   trimmed before matching.
+   suspect-rule form is a `Bash(cmd:*)` prefix with an interior `*` (literal in
+   prefix form) or edge whitespace. `Bash(curl :*)` would fire only on a
+   double-spaced `curl  x`, while a leading space cannot match a trimmed unit.
+   These forms remain valid and retain their literal behavior; the linter warns
+   without changing the result. The policy author chooses whether to use Bash
+   glob form for an interior wildcard or remove edge padding.
 
    `RuleSet::lint_warnings` is the author-time linter, printed to stderr by the
-   CLI checker and `--install` (never in hook mode). It reports the dead-rule
-   form above, plus two **weakening carve-outs** that loosen a broader restriction
+   CLI checker and `--install` (never in hook mode). It reports two
+   **weakening carve-outs** that loosen a broader restriction
    and are easy to write by accident: an `ask` whose match-set is a strict subset
    of a `deny` (the block silently becomes a prompt), and an `allow` whose match-set
    is a strict subset of a broader `ask` it outranks on specificity (the prompt
@@ -759,9 +784,9 @@ correction backlog for the reference file.
 
 3. **Coverage gaps / asymmetries.** `Bash(cp -R:*)` is allowed but plain
    `cp a b` matches no rule and takes the `defaultMode: "ask"` fall-back. Short
-   destructive-flag variants are now normalized onto their single-flag rule
-   (§8 step 2), so `rm -fr`, `rm -Rf`, `rm -r -f` all match `Bash(rm -f:*)` and
-   deny. The **long-form** flags are still not mapped to their short equivalents
+   destructive-flag variants are normalized onto their single-flag rule while
+   retaining operands (§8 step 2), so `rm -fr /`, `rm -Rf /`, and `rm -r -f /`
+   all produce `rm -f /`. The **long-form** flags are still not mapped to their short equivalents
    by the engine (that pairing is per-utility and not standardized), so the
    reference set carries an explicit `Bash(rm *--force*)` deny instead;
    `rm --recursive` without force stays `ask`, symmetric with `rm -r`.

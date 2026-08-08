@@ -17,6 +17,34 @@ fn words_and_quotes() {
 }
 
 #[test]
+fn ansi_c_and_locale_quotes_keep_spaced_words_together() {
+    assert_eq!(
+        tokenize(r#"$'/tmp/my tool/bin/rm' -rf x"#),
+        vec![
+            Token::Word("/tmp/my tool/bin/rm".into()),
+            Token::Word("-rf".into()),
+            Token::Word("x".into()),
+        ]
+    );
+    assert_eq!(
+        tokenize(r#"$"/tmp/my tool/bin/rm" -rf x"#),
+        vec![
+            Token::Word("/tmp/my tool/bin/rm".into()),
+            Token::Word("-rf".into()),
+            Token::Word("x".into()),
+        ]
+    );
+    assert_eq!(
+        tokenize(r#""/tmp/a\" b/bin/rm" -rf x"#),
+        vec![
+            Token::Word("/tmp/a\" b/bin/rm".into()),
+            Token::Word("-rf".into()),
+            Token::Word("x".into()),
+        ]
+    );
+}
+
+#[test]
 fn redirection_targets() {
     let toks = tokenize("cat < in.txt > out.txt >> log");
     assert!(toks.contains(&Token::Redirect(RedirectKind::In, "in.txt".into())));

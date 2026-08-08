@@ -9,7 +9,16 @@ use crate::types::{Family, Tier};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::fmt;
+use std::io::Read;
 use std::path::Path;
+
+/// Hard bounds on trusted policy input and untrusted call payloads. These keep
+/// configuration mistakes and hostile hook input from turning one short-lived
+/// checker invocation into unbounded work (§9.1).
+pub(crate) const MAX_RULE_FILE_BYTES: usize = 1_048_576;
+pub(crate) const MAX_RULES: usize = 4_096;
+pub(crate) const MAX_RULE_BYTES: usize = 1_024;
+pub(crate) const MAX_PAYLOAD_BYTES: usize = 32_768;
 
 /// Everything that can go wrong loading a rule file (§3, §4).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +45,8 @@ pub enum LoadError {
     /// variant is a deliberate, forward-compatible placeholder so that adding a
     /// fallible matcher later fails at **load**, never at decision time (§4).
     BadSpecifier(String),
+    /// A policy exceeded a documented resource bound.
+    LimitExceeded(String),
 }
 
 impl fmt::Display for LoadError {
@@ -49,6 +60,7 @@ impl fmt::Display for LoadError {
             LoadError::MalformedRule(r) => write!(f, "malformed rule: {r}"),
             LoadError::EmptySpecifier(r) => write!(f, "empty specifier in rule: {r}"),
             LoadError::BadSpecifier(r) => write!(f, "uncompilable specifier in rule: {r}"),
+            LoadError::LimitExceeded(detail) => write!(f, "policy limit exceeded: {detail}"),
         }
     }
 }
@@ -66,13 +78,50 @@ pub struct CompiledRule {
     pub tier: Tier,
     pub order_index: usize,
     pub source: String,
+    selector: ToolSelector,
+    tool_specificity: u32,
 }
 
-/// A loaded rule set with a tool-name index for O(1) candidate lookup.
+/// The deliberately narrow tool-name glob grammar: exact names, a terminal `*`
+/// prefix selector, or `*` itself. Wildcard selectors are bare rules, so one
+/// payload matcher can never straddle several tool families.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ToolSelector {
+    Exact(String),
+    Prefix(String),
+}
+
+impl ToolSelector {
+    fn matches(&self, tool: &str) -> bool {
+        match self {
+            Self::Exact(exact) => tool == exact,
+            Self::Prefix(prefix) => tool.starts_with(prefix),
+        }
+    }
+
+    fn is_subset_of(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Exact(a), Self::Exact(b)) => a == b,
+            (Self::Exact(a), Self::Prefix(b)) => a.starts_with(b),
+            (Self::Prefix(a), Self::Prefix(b)) => a.starts_with(b),
+            (Self::Prefix(_), Self::Exact(_)) => false,
+        }
+    }
+
+    fn specificity(&self) -> u32 {
+        match self {
+            Self::Exact(name) => matcher::EXACT_MATCH_BONUS + name.len() as u32,
+            Self::Prefix(prefix) => prefix.len() as u32,
+        }
+    }
+}
+
+/// A loaded rule set with an exact-name index plus a small wildcard-selector list.
 #[derive(Debug, Clone)]
 pub struct RuleSet {
     pub rules: Vec<CompiledRule>,
     index: HashMap<String, Vec<usize>>,
+    wildcard_indices: Vec<usize>,
     /// Tier applied when a call matches **no** rule (§6.4). Configured by the
     /// `defaultMode` field: `"ask"` → [`Tier::Ask`], otherwise (`"deny"`,
     /// missing, or any other value) → [`Tier::Deny`], fail-closed.
@@ -91,13 +140,30 @@ impl RuleSet {
         self.index.get(tool).map(Vec::as_slice).unwrap_or(&[])
     }
 
-    /// Author-time lint warnings that do **not** block loading (a flagged rule is
-    /// inert, not dangerous). The binary prints these to stderr in the CLI-check
-    /// and `--install` paths, never in hook mode.
-    ///
-    /// **Dead rule.** A Bash `cmd:*` specifier whose prefix contains `*`. The
-    /// `cmd:*` form matches `cmd` literally, so an interior `*` is a literal
-    /// asterisk and the rule matches nothing (§11.2).
+    /// Indices of exact and wildcard selectors matching `tool`, in global
+    /// tier/file order.
+    pub(crate) fn matching_rule_indices(&self, tool: &str) -> Vec<usize> {
+        let exact = self.index.get(tool).map(Vec::as_slice).unwrap_or(&[]);
+        let mut out = Vec::with_capacity(exact.len() + self.wildcard_indices.len());
+        out.extend_from_slice(exact);
+        out.extend(
+            self.wildcard_indices
+                .iter()
+                .copied()
+                .filter(|&idx| self.rules[idx].selector.matches(tool)),
+        );
+        out.sort_unstable();
+        out
+    }
+
+    /// Rule-language containment includes both the tool selector and payload
+    /// matcher, so exact-tool exceptions can refine broader selectors safely.
+    pub(crate) fn is_strict_carve_out(&self, narrow: &CompiledRule, broad: &CompiledRule) -> bool {
+        rule_subset(narrow, broad) && !rule_subset(broad, narrow)
+    }
+
+    /// Author-time lint warnings that do **not** block loading. The binary prints
+    /// these to stderr in the CLI-check and `--install` paths, never in hook mode.
     ///
     /// **Weakening carve-out.** A narrower rule that punches through a broader one
     /// in the direction that *loosens* the decision, which is easy to write by
@@ -121,52 +187,46 @@ impl RuleSet {
             ));
         }
 
-        // Dead `cmd:*` rules: an interior `*`, or whitespace padding.
+        // Unusual but valid `cmd:*` prefixes retain literal semantics. Warn about
+        // likely authoring mistakes without changing or rejecting the rule.
         for rule in &self.rules {
             let Matcher::Bash(matcher::BashMatcher::Prefix(prefix)) = &rule.matcher else {
                 continue;
             };
             if prefix.contains('*') {
                 out.push(format!(
-                    "rule `{}` has `*` before `:*`; the `cmd:*` form matches `cmd` literally, so the `*` is a literal asterisk and this rule matches nothing. For a mid-command wildcard use the glob form (no `:*`).",
+                    "rule `{}` has `*` before `:*`; prefix form treats it as a literal asterisk. If wildcard matching was intended, use the Bash glob form (no `:*`).",
                     rule.source,
                 ));
             }
-            // A prefix ends at a word boundary, so a trailing space demands a
-            // second one in the command (`curl  x`), and a leading space can
-            // never appear in a trimmed unit. Either way the rule is inert, which
-            // is silent and dangerous when the author meant it as a deny.
             let leading = prefix.starts_with(char::is_whitespace);
             if leading || prefix.ends_with(char::is_whitespace) {
                 let trimmed = prefix.trim();
-                // A leading space never matches: units are trimmed first. A
-                // trailing space demands a second one in the command.
                 let detail = if leading {
-                    "a unit is trimmed before matching, so a leading space matches nothing at all"
+                    "a unit is trimmed before matching, so the leading whitespace makes this rule match nothing"
                         .to_string()
                 } else {
                     format!(
-                        "a trailing space requires a second one (`{trimmed} x` never matches, `{trimmed}  x` does)"
+                        "the trailing whitespace requires another boundary (`{trimmed} x` does not match, `{trimmed}  x` does)"
                     )
                 };
                 out.push(format!(
-                    "rule `{}` pads `{prefix}` with whitespace before `:*`: {detail}. Write `Bash({trimmed}:*)`.",
+                    "rule `{}` has edge whitespace in its `cmd:*` prefix: {detail}. If that was unintended, write `Bash({trimmed}:*)`.",
                     rule.source,
                 ));
             }
         }
 
         // Weakening carve-outs: a narrower rule that loosens a broader restriction.
-        // Only same-tool rules interact, so pair within each tool bucket. File
-        // order on the outer loop keeps the warning list deterministic.
-        let strict_subset = matcher::is_strict_carve_out;
+        // Wildcard selectors can interact with exact names, so compare all pairs;
+        // the cheap selector-containment gate rejects unrelated tools before the
+        // matcher containment work. File order keeps warnings deterministic.
         for narrow in &self.rules {
-            for &broad_idx in self.rules_for(&narrow.tool) {
-                let broad = &self.rules[broad_idx];
+            for broad in &self.rules {
                 // An `ask` inside a `deny` downgrades a hard block to a prompt.
                 if narrow.tier == Tier::Ask
                     && broad.tier == Tier::Deny
-                    && strict_subset(&narrow.matcher, &broad.matcher)
+                    && self.is_strict_carve_out(narrow, broad)
                 {
                     out.push(format!(
                         "ask rule `{}` is a subset of deny rule `{}`, so it carves out the deny: matching calls prompt instead of being blocked, and a prompt can be approved. Drop the ask, or narrow the deny, if the block was intended.",
@@ -177,8 +237,8 @@ impl RuleSet {
                 // specificity and drops the prompt for that subset.
                 if narrow.tier == Tier::Allow
                     && broad.tier == Tier::Ask
-                    && narrow.specificity > broad.specificity
-                    && strict_subset(&narrow.matcher, &broad.matcher)
+                    && specificity_key(narrow) > specificity_key(broad)
+                    && self.is_strict_carve_out(narrow, broad)
                 {
                     out.push(format!(
                         "allow rule `{}` is a subset of ask rule `{}` and outranks it on specificity, so matching calls are allowed without the prompt. Confirm the prompt was not meant to cover them.",
@@ -193,12 +253,22 @@ impl RuleSet {
 
     /// Load and compile a rule set from a file path.
     pub fn load(path: &Path) -> Result<RuleSet, LoadError> {
-        let text = std::fs::read_to_string(path).map_err(|e| LoadError::Io(e.to_string()))?;
+        let file = std::fs::File::open(path).map_err(|e| LoadError::Io(e.to_string()))?;
+        let mut text = String::new();
+        file.take((MAX_RULE_FILE_BYTES + 1) as u64)
+            .read_to_string(&mut text)
+            .map_err(|e| LoadError::Io(e.to_string()))?;
         RuleSet::load_str(&text)
     }
 
     /// Load and compile a rule set from an in-memory JSON string.
     pub fn load_str(text: &str) -> Result<RuleSet, LoadError> {
+        if text.len() > MAX_RULE_FILE_BYTES {
+            return Err(LoadError::LimitExceeded(format!(
+                "rules file is {} bytes; maximum is {MAX_RULE_FILE_BYTES}",
+                text.len()
+            )));
+        }
         let value: Value =
             serde_json::from_str(text).map_err(|e| LoadError::Json(e.to_string()))?;
         let obj = value.as_object().ok_or(LoadError::NotObject)?;
@@ -213,6 +283,7 @@ impl RuleSet {
 
         let mut rules = Vec::new();
         let mut index: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut wildcard_indices = Vec::new();
         // Fixed tier order gives a deterministic file order for tie-breaking,
         // independent of JSON object key ordering.
         for (key, tier) in [
@@ -224,12 +295,23 @@ impl RuleSet {
                 continue; // missing array is treated as empty
             };
             let arr = entry.as_array().ok_or(LoadError::NotObject)?;
-            rules.reserve(arr.len());
+            rules.reserve(arr.len().min(MAX_RULES.saturating_sub(rules.len())));
             for item in arr {
+                if rules.len() >= MAX_RULES {
+                    return Err(LoadError::LimitExceeded(format!(
+                        "more than {MAX_RULES} rules"
+                    )));
+                }
                 let s = item.as_str().ok_or(LoadError::RuleNotString)?;
-                let (tool, m, specificity) = parse_rule(s)?;
+                let (tool, selector, m, specificity) = parse_rule(s)?;
                 let order_index = rules.len();
-                index.entry(tool.clone()).or_default().push(order_index);
+                match &selector {
+                    ToolSelector::Exact(exact) => {
+                        index.entry(exact.clone()).or_default().push(order_index);
+                    }
+                    ToolSelector::Prefix(_) => wildcard_indices.push(order_index),
+                }
+                let tool_specificity = selector.specificity();
                 rules.push(CompiledRule {
                     tool,
                     matcher: m,
@@ -237,6 +319,8 @@ impl RuleSet {
                     tier,
                     order_index,
                     source: s.to_string(),
+                    selector,
+                    tool_specificity,
                 });
             }
         }
@@ -261,6 +345,7 @@ impl RuleSet {
         Ok(RuleSet {
             rules,
             index,
+            wildcard_indices,
             default_tier,
             unknown_default_mode,
         })
@@ -317,8 +402,22 @@ pub fn starter_rules() -> Value {
 }
 
 /// Parse one rule string into `(tool, matcher, specificity)` (§4).
-pub(crate) fn parse_rule(s: &str) -> Result<(String, Matcher, u32), LoadError> {
+fn parse_rule(s: &str) -> Result<(String, ToolSelector, Matcher, u32), LoadError> {
+    if s.len() > MAX_RULE_BYTES {
+        return Err(LoadError::LimitExceeded(format!(
+            "rule is {} bytes; maximum is {MAX_RULE_BYTES}: {s}",
+            s.len()
+        )));
+    }
     let bytes = s.as_bytes();
+    if bytes == b"*" {
+        return Ok((
+            s.to_string(),
+            ToolSelector::Prefix(String::new()),
+            Matcher::Bare,
+            0,
+        ));
+    }
     if bytes.is_empty() || !bytes[0].is_ascii_alphabetic() {
         return Err(LoadError::MalformedRule(s.to_string()));
     }
@@ -328,9 +427,24 @@ pub(crate) fn parse_rule(s: &str) -> Result<(String, Matcher, u32), LoadError> {
     }
     let tool = &s[..i];
 
+    // Tool-name globs are terminal-star, bare selectors. Keeping specifiers off
+    // wildcard names prevents one payload matcher from crossing tool families.
+    if bytes.get(i) == Some(&b'*') {
+        if i + 1 != s.len() {
+            return Err(LoadError::MalformedRule(s.to_string()));
+        }
+        return Ok((
+            s.to_string(),
+            ToolSelector::Prefix(tool.to_string()),
+            Matcher::Bare,
+            0,
+        ));
+    }
+    let selector = ToolSelector::Exact(tool.to_string());
+
     // Bare rule: the whole string is a valid tool name.
     if i == s.len() {
-        return Ok((tool.to_string(), Matcher::Bare, 0));
+        return Ok((tool.to_string(), selector, Matcher::Bare, 0));
     }
 
     // Otherwise it must be `Tool(specifier)`.
@@ -345,7 +459,24 @@ pub(crate) fn parse_rule(s: &str) -> Result<(String, Matcher, u32), LoadError> {
     let family = Family::from_tool(tool);
     let (m, specificity) =
         matcher::compile(family, spec).map_err(|_| LoadError::BadSpecifier(s.to_string()))?;
-    Ok((tool.to_string(), m, specificity))
+    Ok((tool.to_string(), selector, m, specificity))
+}
+
+fn rule_subset(a: &CompiledRule, d: &CompiledRule) -> bool {
+    a.selector.is_subset_of(&d.selector) && matcher::matcher_subset(&a.matcher, &d.matcher)
+}
+
+pub(crate) fn selection_key(rule: &CompiledRule) -> (u32, u32, Tier, std::cmp::Reverse<usize>) {
+    (
+        rule.tool_specificity,
+        rule.specificity,
+        rule.tier,
+        std::cmp::Reverse(rule.order_index),
+    )
+}
+
+fn specificity_key(rule: &CompiledRule) -> (u32, u32) {
+    (rule.tool_specificity, rule.specificity)
 }
 
 #[cfg(test)]
@@ -404,14 +535,15 @@ mod lint_tests {
     use super::*;
 
     #[test]
-    fn dead_prefix_rule_with_interior_star_warns() {
-        // `Bash(aws * --region east:*)` compiles to a literal-asterisk prefix, so
-        // it matches nothing -- a silently dead rule the lint must flag.
-        let rs = RuleSet::load_str(r#"{"deny":["Bash(aws * --region east:*)"]}"#).unwrap();
-        let w = rs.lint_warnings();
-        assert_eq!(w.len(), 1);
-        assert!(w[0].contains("aws * --region east"));
-        assert!(w[0].contains("matches nothing"));
+    fn unusual_prefix_rules_load_and_warn_without_changing_semantics() {
+        for rule in [
+            "Bash(aws * --region east:*)",
+            "Bash(curl :*)",
+            "Bash( curl:*)",
+        ] {
+            let rs = RuleSet::load_str(&format!(r#"{{"deny":["{rule}"]}}"#)).unwrap();
+            assert_eq!(rs.lint_warnings().len(), 1, "rule: {rule}");
+        }
     }
 
     #[test]
@@ -462,7 +594,7 @@ mod lint_tests {
 
     #[test]
     fn reference_set_has_no_lint_warnings() {
-        // The shipped policy has no dead rules and no weakening carve-outs.
+        // The shipped policy has no weakening carve-outs or other warnings.
         let rs = RuleSet::load_str(DEFAULT_RULES).unwrap();
         assert!(
             rs.lint_warnings().is_empty(),
@@ -493,6 +625,17 @@ mod lint_tests {
         let w = rs.lint_warnings();
         assert_eq!(w.len(), 1, "{w:?}");
         assert!(w[0].contains("allowed without the prompt"));
+    }
+
+    #[test]
+    fn exact_tool_allow_inside_wildcard_ask_warns() {
+        let rs =
+            RuleSet::load_str(r#"{"allow":["mcp__serena__read_file"],"ask":["mcp__serena__*"]}"#)
+                .unwrap();
+        let warnings = rs.lint_warnings();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("mcp__serena__read_file"));
+        assert!(warnings[0].contains("mcp__serena__*"));
     }
 
     #[test]

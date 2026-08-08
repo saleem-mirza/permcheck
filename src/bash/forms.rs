@@ -6,7 +6,8 @@ use crate::engine;
 use crate::rules::RuleSet;
 use crate::types::Tier;
 
-use super::prefix::{basename, strip_env_assignments};
+use super::prefix::{basename, is_assignment, strip_env_assignments};
+use super::tokenize::{ShellWord, dequote_words, shell_words};
 
 /// The normalization pipeline behind the identity forms (§8 step 2), in order.
 /// Each stage runs on the **previous stage's output**, and every intermediate
@@ -31,7 +32,7 @@ const STAGES: [fn(&str) -> Option<String>; 5] = [
 ];
 
 /// Upper bound on identity forms: the raw unit, one per pipeline stage, plus the
-/// off-chain quoted-basename form ([`quoted_command_basename`]).
+/// off-chain parsed-basename form ([`command_basename_form`]).
 const MAX_FORMS: usize = STAGES.len() + 2;
 
 /// The identity forms of one unit (§8 step 2): every spelling decided together
@@ -85,7 +86,7 @@ impl<'a> Forms<'a> {
     }
 
     /// Add a candidate that sits **off** the pipeline, leaving `canonical` where
-    /// the chain left it. Used by [`quoted_command_basename`], whose output is an
+    /// the chain left it. Used by [`command_basename_form`], whose output is an
     /// alternative reading of the unit rather than a further reduction of it.
     fn push_off_chain(&mut self, form: String) {
         let keep = self.canonical;
@@ -108,8 +109,9 @@ pub(super) fn identity_forms(cmd: &str) -> Forms<'_> {
             forms.push(next);
         }
     }
-    // Read the raw unit, not the chain: the quotes this needs are gone by now.
-    if let Some(basenamed) = quoted_command_basename(cmd) {
+    // Read the raw unit, not the chain: its parsed word boundaries preserve an
+    // executable path containing spaces after the quote-removal stage runs.
+    if let Some(basenamed) = command_basename_form(cmd) {
         forms.push_off_chain(basenamed);
     }
     forms
@@ -133,7 +135,7 @@ pub(super) fn unit_tier(rs: &RuleSet, forms: &Forms<'_>, cwd: Option<&str>) -> T
         raise(rs, &mut tier, &candidate);
     }
     if tier != Tier::Deny {
-        for_each_path_candidate(canonical, forms.raw(), cwd, |candidate| {
+        for_each_path_candidate(forms.raw(), cwd, |candidate| {
             raise(rs, &mut tier, candidate)
         });
     }
@@ -152,8 +154,8 @@ fn raise(rs: &RuleSet, tier: &mut Tier, candidate: &str) -> bool {
     *tier != Tier::Deny
 }
 
-/// Reduce a **quoted** leading executable path to its basename, reading the raw
-/// unit (§8 step 2).
+/// Reduce a leading executable path to its basename using the parsed first shell
+/// word, reading the raw unit (§8 step 2).
 ///
 /// Quotes are the only thing marking a path that contains spaces as a single word,
 /// so once [`strip_shell_quoting`] has run,
@@ -168,25 +170,18 @@ fn raise(rs: &RuleSet, tier: &mut Tier, candidate: &str) -> bool {
 /// spellings have to remain candidates, so this contributes one extra form and
 /// leaves the pipeline's own output untouched.
 ///
-/// Returns `None` unless the unit opens with a quote whose contents look like a
-/// path, which leaves every ordinary command untouched.
-fn quoted_command_basename(cmd: &str) -> Option<String> {
-    let trimmed = cmd.trim_start();
-    let quote = trimmed.chars().next().filter(|c| *c == '"' || *c == '\'')?;
-    let rest = &trimmed[quote.len_utf8()..];
-    let close = rest.find(quote)?;
-    let (word, tail) = rest.split_at(close);
-    // Only a path is worth reducing; a quoted bare word is already its basename,
-    // and reducing it would just duplicate the `strip_shell_quoting` form.
-    if !word.contains(['/', '\\']) {
+/// Parsing rather than searching for a matching quote covers ordinary, ANSI-C,
+/// and locale quoting and keeps POSIX backslashes as filename characters.
+fn command_basename_form(cmd: &str) -> Option<String> {
+    let command = shell_words(cmd)
+        .into_iter()
+        .filter(|word| word.redirect.is_none())
+        .find(|word| !is_assignment(&word.value))?;
+    let base = basename(&command.value);
+    if base.is_empty() || base == command.value {
         return None;
     }
-    let slashed = word.replace('\\', "/");
-    let base = basename(&slashed);
-    if base.is_empty() {
-        return None;
-    }
-    Some(format!("{base}{}", &tail[quote.len_utf8()..]))
+    Some(format!("{base}{}", &cmd[command.range.end..]))
 }
 
 /// Remove shell quoting and escaping, leaving the characters the shell passes to
@@ -202,55 +197,7 @@ fn quoted_command_basename(cmd: &str) -> Option<String> {
 /// The escape sequences inside `$'…'` are not decoded (§9.2), and a backslash
 /// inside double quotes stays literal, matching what `super::tokenize` does.
 fn strip_shell_quoting(cmd: &str) -> Option<String> {
-    if !cmd.bytes().any(|b| matches!(b, b'\'' | b'"' | b'\\')) {
-        return None;
-    }
-    let b = cmd.as_bytes();
-    let mut out = String::with_capacity(cmd.len());
-    let mut i = 0;
-    while i < b.len() {
-        match b[i] {
-            // An unquoted backslash escapes the next character; append it
-            // verbatim and advance a whole UTF-8 char. A trailing one is dropped.
-            b'\\' => {
-                i += 1;
-                if let Some(ch) = cmd[i..].chars().next() {
-                    out.push(ch);
-                    i += ch.len_utf8();
-                }
-            }
-            // `$'…'` (ANSI-C) and `$"…"` (locale) quoting: the `$` is part of the
-            // quoting, not of the word, so drop it and let the quote arm run.
-            b'$' if matches!(b.get(i + 1), Some(b'\'') | Some(b'"')) => i += 1,
-            // A quoted run is copied verbatim up to its close; an unterminated
-            // one runs to the end of the unit, as the splitter also assumes.
-            quote @ (b'\'' | b'"') => {
-                i += 1;
-                let start = i;
-                while i < b.len() && b[i] != quote {
-                    i += 1;
-                }
-                out.push_str(&cmd[start..i]);
-                if i < b.len() {
-                    i += 1;
-                }
-            }
-            _ => {
-                let start = i;
-                while i < b.len() && !matches!(b[i], b'\'' | b'"' | b'\\' | b'$') {
-                    i += 1;
-                }
-                if i == start {
-                    // A `$` not opening a quoted run: keep it and move on.
-                    out.push('$');
-                    i += 1;
-                } else {
-                    out.push_str(&cmd[start..i]);
-                }
-            }
-        }
-    }
-    (out != cmd).then_some(out)
+    dequote_words(cmd)
 }
 
 /// The unit with leading `NAME=value` environment assignments removed, for the
@@ -410,85 +357,117 @@ fn inline_exec_candidate(cmd: &str) -> Option<String> {
 /// Visit the command with every path operand resolved to the path it really
 /// names (§7.2, §8 step 2).
 ///
-/// Each whitespace-separated token goes through [`engine::resolve_operand`], which
-/// returns `None` for a word that names no path and for one that already resolves
-/// to itself. A word naming a *relative* path is the common trigger, not the rare
-/// traversal one: `cat src/main.rs` and `python3 scripts/build.py` both resolve,
-/// because absolutizing against `cwd` is what makes a directory-anchored rule mean
-/// what it says. Nothing is allocated until the first token actually resolves, so
-/// a command that mentions no path costs one pass over its words.
+/// Each parsed shell word goes through [`engine::resolve_operand`], which returns
+/// `None` for a word that names no path and for one that already resolves to
+/// itself. Parsed boundaries are load-bearing: `"scratch dir"/../src` is one
+/// operand even though its dequoted value contains whitespace.
 ///
 /// This is the form that stops a traversal spelling from riding a narrow allow
 /// past a broad deny. Being an escalation form is load-bearing: decided on its
 /// own it cannot be carved out by an allow that matched the raw spelling, which
 /// is exactly what an identity form would allow to happen.
 ///
-/// On Windows the command is resolved twice, from the fully-normalized spelling
-/// and from the raw unit. A backslash is both a path separator and the shell's
-/// escape character, and [`strip_shell_quoting`] runs first and reads it as an
-/// escape, so `C:\proj\..\src` has already become `C:proj..src` by the time the
-/// canonical spelling is built. Which reading is right depends on the shell, so
-/// both are offered; escalation forms only ever raise a verdict, so carrying the
-/// extra reading cannot loosen a decision (§9.2).
-fn for_each_path_candidate(
-    canonical: &str,
-    raw: &str,
-    cwd: Option<&str>,
-    mut visit: impl FnMut(&str) -> bool,
-) {
-    let resolve_one = |cmd: &str| -> Option<String> {
-        // The buffer is created by the first token that resolves, and seeded with
-        // the words already passed over. A command whose operands all resolve to
-        // themselves (`cat /etc/passwd`) therefore allocates nothing at all.
-        let mut out: Option<String> = None;
-        for (i, tok) in cmd.split_ascii_whitespace().enumerate() {
-            let resolved = engine::resolve_operand(tok, cwd);
-            let buf = match (&mut out, &resolved) {
-                (None, None) => continue,
-                (Some(buf), _) => buf,
-                (slot @ None, Some(first)) => slot.insert(seed(cmd, i, first.len())),
-            };
-            buf.push_str(resolved.as_deref().unwrap_or(tok));
-            buf.push(' ');
-        }
-        out.map(|mut joined| {
-            joined.pop();
-            joined
-        })
-    };
-
-    // Only the Windows build has a second reading of the raw unit to offer; on
-    // POSIX `cfg!` is a constant `false`, so the canonical spelling is the whole
-    // story and the second arm folds away.
-    let second_reading = (cfg!(windows) && raw != canonical).then_some(raw);
-    for cmd in [Some(canonical), second_reading].into_iter().flatten() {
-        if let Some(candidate) = resolve_one(cmd)
-            && !visit(&candidate)
-        {
-            return;
+/// On Windows an unquoted backslash can be read either as shell escaping or as a
+/// path separator, depending on the caller's shell. Both readings are offered and
+/// escalation remains monotone, so the ambiguity can only make the verdict more
+/// restrictive (§9.2).
+fn for_each_path_candidate(cmd: &str, cwd: Option<&str>, mut visit: impl FnMut(&str) -> bool) {
+    let mut seen = Vec::new();
+    let raw_windows = (cfg!(windows) && cmd.contains('\\')).then_some(true);
+    for windows_raw in std::iter::once(false).chain(raw_windows) {
+        if let Some(candidate) = resolved_command(cmd, cwd, windows_raw) {
+            if seen.contains(&candidate) {
+                continue;
+            }
+            if !visit(&candidate) {
+                return;
+            }
+            seen.push(candidate);
         }
     }
 }
 
-/// A rebuild buffer holding the first `skip` words of `cmd` verbatim, sized for
-/// the whole command plus the growth the first resolved operand brings.
-fn seed(cmd: &str, skip: usize, first_resolved_len: usize) -> String {
-    let mut buf = String::with_capacity(cmd.len() + first_resolved_len);
-    for word in cmd.split_ascii_whitespace().take(skip) {
-        buf.push_str(word);
-        buf.push(' ');
+/// Rebuild one command with path-bearing operands resolved. Unchanged words are
+/// dequoted from the same lexical pass, while the command word is reduced to its
+/// basename so a path-qualified executable still reaches ordinary Bash rules.
+fn resolved_command(cmd: &str, cwd: Option<&str>, windows_raw: bool) -> Option<String> {
+    let words = shell_words(cmd);
+    let command = words
+        .iter()
+        .enumerate()
+        .filter(|(_, word)| word.redirect.is_none())
+        .find(|(_, word)| !is_assignment(&word.value))
+        .map(|(i, _)| i)?;
+
+    let mut replacements: Vec<Option<String>> = vec![None; words.len()];
+    let mut changed = false;
+    for (i, word) in words.iter().enumerate().skip(command + 1) {
+        if word.redirect.is_some() {
+            continue;
+        }
+        let reading = word_reading(cmd, word, windows_raw);
+        if let Some(resolved) = resolve_word(reading, cwd) {
+            replacements[i] = Some(resolved);
+            changed = true;
+        }
     }
-    buf
+    if !changed {
+        return None;
+    }
+
+    let mut out = String::with_capacity(cmd.len());
+    let mut cursor = 0;
+    for (i, word) in words.iter().enumerate() {
+        out.push_str(&cmd[cursor..word.range.start]);
+        let reading = word_reading(cmd, word, windows_raw);
+        if i == command {
+            out.push_str(basename(reading));
+        } else if let Some(resolved) = &replacements[i] {
+            out.push_str(resolved);
+        } else {
+            out.push_str(reading);
+        }
+        cursor = word.range.end;
+    }
+    out.push_str(&cmd[cursor..]);
+
+    // Apply the established pipeline after rewriting so whitespace, assignments,
+    // and git global options retain exactly their previous normalization rules.
+    Some(identity_forms(&out).canonical().to_string())
+}
+
+/// Resolve an ordinary path word or the value portion of a long `--name=value`
+/// option, retaining the option name in the latter candidate.
+fn resolve_word(word: &str, cwd: Option<&str>) -> Option<String> {
+    if let Some((option, value)) = word.split_once('=')
+        && option.starts_with("--")
+    {
+        return engine::resolve_operand(value, cwd).map(|path| format!("{option}={path}"));
+    }
+    engine::resolve_operand(word, cwd)
+}
+
+/// Select the POSIX-shell reading, or on Windows the additional raw-backslash
+/// reading for an unquoted word.
+fn word_reading<'a>(cmd: &'a str, word: &'a ShellWord, windows_raw: bool) -> &'a str {
+    if windows_raw {
+        let raw = &cmd[word.range.clone()];
+        if raw.contains('\\') && !raw.contains(['\'', '"']) {
+            return raw;
+        }
+    }
+    &word.value
 }
 
 /// Visit the canonical candidates for a clustered or reordered short-flag set.
 fn for_each_flag_candidate(cmd: &str, mut visit: impl FnMut(&str) -> bool) {
-    let mut toks = cmd.split_ascii_whitespace();
-    let Some(cmd_word) = toks.next() else {
+    let toks: Vec<_> = cmd.split_ascii_whitespace().collect();
+    let Some(&cmd_word) = toks.first() else {
         return;
     };
     let mut flags = Vec::new();
-    for tok in toks {
+    let mut option_words = 0usize;
+    for &tok in &toks[1..] {
         let b = tok.as_bytes();
         if b.len() < 2 || b[0] != b'-' || b[1] == b'-' {
             break;
@@ -501,12 +480,18 @@ fn for_each_flag_candidate(cmd: &str, mut visit: impl FnMut(&str) -> bool) {
                 flags.push(flag);
             }
         }
+        option_words += 1;
     }
     if flags.len() < 2 {
         return;
     }
+    let operands = toks[1 + option_words..].join(" ");
     for flag in flags {
-        let candidate = format!("{cmd_word} -{}", flag as char);
+        let candidate = if operands.is_empty() {
+            format!("{cmd_word} -{}", flag as char)
+        } else {
+            format!("{cmd_word} -{} {operands}", flag as char)
+        };
         if !visit(&candidate) {
             break;
         }

@@ -161,7 +161,7 @@ For a given tool call, permcheck gathers *every* matching rule. A matching `deny
 
 1. **A carve-out overrides a deny.** An `allow`/`ask` carves out a matching `deny` only when its match-set is a **strict subset** of that deny (`allow ⊆ deny` and `deny ⊄ allow`). An identical specifier in a lower tier is not a carve-out, so `deny > ask > allow` still holds for the same specifier.
 2. **Any un-carved deny wins.** If a matching deny is not carved out by some matching allow/ask, the call is `deny`.
-3. **Otherwise the winner is the allow/ask with the highest `(specificity, tier)`.** Specificity = the count of literal, non-wildcard characters in the specifier, `+1000` if it has no wildcard at all; a bare rule (e.g. `Read`) scores `0`. Equal specificity takes the more restrictive tier (`ask` over `allow`); a full tie takes the first rule in file order. At *unequal* specificity, a more-specific `allow` beats a broader `ask` and drops the prompt, so keep a guard `ask` clear of any narrower `allow` that overlaps it.
+3. **Otherwise the most specific allow/ask wins.** Exact tool selectors outrank terminal-star selectors; within the same selector, specificity is the count of literal, non-wildcard characters in the specifier, `+1000` when it has no wildcard. Equal specificity takes the more restrictive tier (`ask` over `allow`); a full tie takes the first rule in file order. At *unequal* specificity, a more-specific `allow` beats a broader `ask` and drops the prompt, so keep a guard `ask` clear of any narrower `allow` that overlaps it.
 4. **If nothing matches, the `defaultMode` fall-back applies:** `deny` by default (fail-closed), or set `"defaultMode": "ask"` in the rules file to prompt on unlisted calls instead. The Bash file-access cross-check and error paths always `deny` regardless.
 
 The consequence, and the whole reason permcheck exists, is that a narrow rule beats a broad one **in either direction**:
@@ -231,13 +231,14 @@ permcheck <Tool> [payload] --rules <path> [--json]
 
 `--json` prints the same decision object as hook mode instead of using the exit code. `--rules` accepts either `--rules <path>` or `--rules=<path>`. An unrecognized long flag is a usage error (exit `3`), never silently ignored. Run `permcheck --version` to print the version, `permcheck --help` for full usage (help goes to stdout; running with no arguments prints it to stderr and exits `3`).
 
-The CLI check and `--install` also print author-time lint warnings to stderr (never in hook mode). A flagged rule still loads; the lint names rules that are inert or that quietly loosen a restriction:
+The CLI check and `--install` also print author-time lint warnings to stderr (never in hook mode). A flagged rule still loads and is evaluated exactly as written; the lint names potentially surprising behavior, including rules that quietly loosen a restriction:
 
-- **Dead rule.** A `Bash(cmd:*)` specifier with a `*` before the `:*` compiles to a literal asterisk and matches nothing. Use the glob form `Bash(cmd …)` for a mid-command wildcard.
 - **Weakening carve-out: `ask` inside `deny`.** An `ask` whose match-set is a strict subset of a `deny` carves that deny out, so a block silently becomes a prompt, and a prompt can be approved.
 - **Weakening carve-out: `allow` inside `ask`.** An `allow` that is a strict subset of a broader `ask` and outranks it on specificity drops the prompt for that subset.
 
 A narrow `allow` inside a `deny` is **not** flagged: that is the intended read-only carve-out.
+
+Unusual `Bash(cmd:*)` forms remain valid and are evaluated literally, but the linter calls them out: edge whitespace (`Bash(curl :*)`) changes the command boundary, while an interior `*` is literal in prefix form. Permcheck never rewrites or rejects those rules based on inferred intent; the policy author decides whether to keep them, remove the padding, or use Bash glob form.
 
 ```sh
 permcheck Bash "cat notes.txt"          --rules rules/permcheck.json   # exit 0 (allow)
@@ -274,7 +275,9 @@ Each entry is a rule string in one of two forms:
 - **Bare rule** (`Tool`): matches any payload for that tool (specificity `0`).
 - **Specifier rule** (`Tool(specifier)`): matches per the tool's family semantics.
 
-A tool name matches `[A-Za-z][A-Za-z0-9_]*`, covering built-ins (`Bash`, `Read`, …) and MCP tools (`mcp__server__tool`). A malformed rule, an empty specifier (`Tool()`), or an uncompilable specifier is a **load error** → `deny` (hook) / exit `3` (CLI). Bad rules fail at load, never at decision time.
+An exact tool name matches `[A-Za-z][A-Za-z0-9_]*`, covering built-ins (`Bash`, `Read`, …) and MCP tools (`mcp__server__tool`). A bare selector may instead end in one `*` (`mcp__serena__*`) or be `*` by itself. Tool globs are deliberately prefix-only and bare: `mcp__*__read` and `mcp__serena__*(path)` are load errors. Exact rules are narrower than matching wildcard rules, so an exact allow/ask can carve out a wildcard deny safely.
+
+A malformed rule, an empty specifier (`Tool()`), or an uncompilable specifier is a **load error** → `deny` (hook) / exit `3` (CLI). Unusual but valid rules still load and retain their documented literal meaning. Bad rules fail at load, never at decision time.
 
 ### Tool families
 
@@ -300,7 +303,7 @@ The Bash analyzer is a best-effort scanner, not a full shell parser. Unsupported
 
 ## Flag spellings are your responsibility
 
-permcheck enforces the rules you write; it does not author them. To keep an evasion from dodging a rule, the engine matches each command in normalized form as well as verbatim: it reduces a path-qualified binary to its basename (`/usr/bin/aws` → `aws`), exposes a git subcommand hidden behind global options (`git -c x=y config` → `git config`), splits and reorders clustered short flags (`rm -rf`, `rm -fr`, `rm -Rf` all reduce to `rm -f`), and canonicalizes interpreter inline-code flags (`perl -we` → `perl -e`, `node --eval` → `node -e`).
+permcheck enforces the rules you write; it does not author them. To keep an evasion from dodging a rule, the engine matches each command in normalized form as well as verbatim: it reduces a path-qualified binary to its basename (`/usr/bin/aws` → `aws`), exposes a git subcommand hidden behind global options (`git -c x=y config` → `git config`), splits and reorders clustered short flags (`rm -rf /`, `rm -fr /`, `rm -Rf /` all produce the escalation form `rm -f /`), and canonicalizes interpreter inline-code flags (`perl -we` → `perl -e`, `node --eval` → `node -e`). Short-flag escalation retains the remaining operands, so operand-bearing rules keep working across clustering and reordering.
 
 It does **not** treat a long option and its short form as equivalent. `--force` and `-f` are not linked, because that pairing is not standardized: each program defines it in its own option table, the same short letter means different things across tools (`-f` is force for `rm`, a pattern file for `grep`), and BSD/macOS utilities often reject the GNU long forms. So you write rules in the flag forms the target utility supports. To block both spellings, write both:
 
@@ -308,11 +311,15 @@ It does **not** treat a long option and its short form as equivalent. `--force` 
 "deny": ["Bash(rm -f:*)", "Bash(rm --force:*)"]
 ```
 
-The engine covers the clustering and ordering variants of the short flags you write. It never invents the long or short form you left out.
+The engine covers the clustering and ordering variants of the short flags you write. It never invents the long or short form you left out, enumerates flag subsets, or infers which options consume values.
+
+## Resource bounds
+
+Policies are limited to 1 MiB, 4,096 rules, and 1,024 bytes per rule. A tool payload is limited to 32,768 bytes, a Bash command to 1,024 split units, and one glob match to two million text/pattern state visits. Exceeding a policy bound is a load error; exceeding a runtime bound returns `deny`. Bash and Path globs use stackless state propagation, so interacting wildcards have bounded polynomial work rather than recursive backtracking.
 
 ## Path spellings are your responsibility
 
-**The engine normalizes the call, never your rule.** A specifier compiles as you wrote it, apart from the grammar itself (`~` expansion and the `//` root marker). What gets resolved is the incoming call: a path operand is expanded, absolutized against the call's `cwd`, and collapsed, so your rule is compared against the path the command really touches rather than one spelling of it.
+**The engine normalizes the call, never your rule.** A specifier compiles as you wrote it, apart from the grammar itself (`~` expansion and the `//` root marker). What gets resolved is the incoming call: a path operand is expanded, absolutized against the call's `cwd`, and collapsed, so your rule is compared against the path the command really touches rather than one spelling of it. Shell word boundaries are retained while doing this, so a quoted operand containing spaces stays one path; a path carried by a long `--option=value` form is resolved while the option name is preserved.
 
 That resolved form can only *raise* a verdict, never grant one, which produces an asymmetry worth knowing before you write a rule:
 

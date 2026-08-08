@@ -5,6 +5,7 @@
 //! cross-check that can only raise a unit to `deny`, and aggregates the
 //! most-restrictive verdict. The splitter is total: it never errors.
 
+use crate::rules::MAX_PAYLOAD_BYTES;
 use crate::rules::RuleSet;
 use crate::types::{Decision, Tier};
 
@@ -21,10 +22,17 @@ pub use tokenize::{RedirectKind, Token, tokenize};
 
 /// Decide a Bash command by aggregating per-unit verdicts (§8).
 pub fn decide_bash(command: &str, rs: &RuleSet, cwd: Option<&str>) -> Decision {
+    const MAX_UNITS: usize = 1_024;
+    if command.len() > MAX_PAYLOAD_BYTES {
+        return Decision::deny_msg("bash: command exceeds the 32768-byte safety limit");
+    }
     let (units, too_deep) = split::units(command);
     // Incomplete units could miss a denied inner command, so fail closed (§9.1).
     if too_deep {
         return Decision::deny_msg("bash: substitution nesting too deep");
+    }
+    if units.len() > MAX_UNITS {
+        return Decision::deny_msg("bash: command contains more than 1024 units");
     }
     if units.is_empty() {
         // Empty / whitespace-only command matches no Bash rule -> fall-back tier.
@@ -41,15 +49,14 @@ pub fn decide_bash(command: &str, rs: &RuleSet, cwd: Option<&str>) -> Decision {
         // Otherwise `env aws …` would ride in on the wrapper's allow rule and
         // bypass an `aws` deny. This can only raise the verdict (§8.3).
         //
-        // Peel from the canonical spelling rather than the raw unit: a disguised
-        // wrapper (`"env" aws …`) is invisible to the raw string, and every
-        // pipeline stage leaves the leading word easier to recognize, never
-        // harder.
+        // Wrapper recognition uses the shared shell-word parser, so it sees
+        // through quoting while the returned inner slice preserves the original
+        // word boundaries needed by path-operand resolution.
         // Skip it once already at deny: the re-decision can only raise, so there is
         // nothing left for it to add, and it would re-resolve every path operand
         // and re-scan the rule index to learn that.
         if tier != Tier::Deny
-            && let Some(inner) = strip_leading_wrappers(forms.canonical())
+            && let Some(inner) = strip_leading_wrappers(cmd)
         {
             let inner_tier = unit_tier(rs, &identity_forms(inner), cwd);
             if inner_tier > tier {

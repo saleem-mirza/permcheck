@@ -5,8 +5,10 @@
 //! is the whole decision for Path and Generic tools; Bash adds the compound step
 //! in [`crate::bash`].
 
-use crate::matcher::{is_absolute, normalize_root};
-use crate::rules::{CompiledRule, RuleSet};
+use crate::matcher::is_absolute;
+#[cfg(windows)]
+use crate::matcher::normalize_root;
+use crate::rules::{CompiledRule, MAX_PAYLOAD_BYTES, RuleSet};
 use crate::types::{Decision, Family, Tier};
 use std::borrow::Cow;
 
@@ -25,6 +27,12 @@ pub(crate) fn decide_tier<S: AsRef<str>>(
     tool: &str,
     candidates: &[S],
 ) -> Option<Tier> {
+    if candidates
+        .iter()
+        .any(|candidate| candidate.as_ref().len() > MAX_PAYLOAD_BYTES)
+    {
+        return Some(Tier::Deny);
+    }
     // Loaded rule indices are tier-ordered Allow -> Ask -> Deny. Record only the
     // matching non-denies; when a deny matches, every possible carve-out has
     // already been seen, so an uncarved deny can terminate immediately.
@@ -36,17 +44,25 @@ pub(crate) fn decide_tier<S: AsRef<str>>(
     let mut spill: Vec<&CompiledRule> = Vec::new();
     let mut best_carve: Option<&CompiledRule> = None;
     let mut last_tier = Tier::Allow;
-    for &idx in rs.rules_for(tool) {
+    for idx in rs.matching_rule_indices(tool) {
         let rule = &rs.rules[idx];
         debug_assert!(
             last_tier <= rule.tier,
             "rule index must remain tier-ordered"
         );
         last_tier = rule.tier;
-        if !candidates
-            .iter()
-            .any(|candidate| rule.matcher.matches(candidate.as_ref()))
-        {
+        let mut matched = false;
+        for candidate in candidates {
+            match rule.matcher.matches_checked(candidate.as_ref()) {
+                Ok(true) => {
+                    matched = true;
+                    break;
+                }
+                Ok(false) => {}
+                Err(()) => return Some(Tier::Deny),
+            }
+        }
+        if !matched {
             continue;
         }
         if rule.tier == Tier::Deny {
@@ -55,7 +71,7 @@ pub(crate) fn decide_tier<S: AsRef<str>>(
                 .flatten()
                 .copied()
                 .chain(spill.iter().copied())
-                .any(|carve| crate::matcher::is_strict_carve_out(&carve.matcher, &rule.matcher));
+                .any(|carve| rs.is_strict_carve_out(carve, rule));
             if !carved {
                 return Some(Tier::Deny);
             }
@@ -79,16 +95,15 @@ pub(crate) fn decide_tier<S: AsRef<str>>(
 /// Winner-selection ordering (§6.3): maximize specificity, then tier (`ask` over
 /// `allow`), then earliest in file order — `Reverse` puts that last field in the
 /// same maximize direction.
-fn selection_key(rule: &CompiledRule) -> (u32, Tier, std::cmp::Reverse<usize>) {
-    (
-        rule.specificity,
-        rule.tier,
-        std::cmp::Reverse(rule.order_index),
-    )
+fn selection_key(rule: &CompiledRule) -> (u32, u32, Tier, std::cmp::Reverse<usize>) {
+    crate::rules::selection_key(rule)
 }
 
 /// The complete decision for a Path or Generic tool (§6.3, §7).
 pub fn decide_payload(rs: &RuleSet, tool: &str, payload: &str, cwd: Option<&str>) -> Decision {
+    if payload.len() > MAX_PAYLOAD_BYTES {
+        return Decision::deny_msg("payload exceeds the 32768-byte safety limit");
+    }
     let candidates = match Family::from_tool(tool) {
         Family::Path => path_candidates(payload, cwd),
         _ => generic_candidates(payload),
@@ -103,57 +118,8 @@ pub fn decide_payload(rs: &RuleSet, tool: &str, payload: &str, cwd: Option<&str>
 pub(crate) fn path_candidates<'a>(payload: &'a str, cwd: Option<&str>) -> Vec<Cow<'a, str>> {
     let mut v = Vec::with_capacity(4);
     v.push(Cow::Borrowed(payload));
-
-    // A Windows payload arrives drive-letter-rooted with backslashes
-    // (`D:\proj\.env`); its POSIX-anchored form (`/D:/proj/.env`) is what the
-    // `/`-based Path globs match. POSIX needs no such candidate — the raw
-    // payload above is already anchored — so this whole step compiles out there.
-    #[cfg(windows)]
-    push_unique(&mut v, Cow::Owned(normalize_root(payload)));
-
-    // A drive-relative payload (`C:notes.txt`) names the current directory on
-    // that drive, which only the cwd can supply. `normalize_root` above already
-    // anchored it at the drive root; this adds the exact form when the cwd is on
-    // the same drive.
-    #[cfg(windows)]
-    if let Some(dir) = cwd
-        && let Some(joined) = crate::matcher::drive_relative_join(payload, dir)
-    {
-        push_unique(&mut v, Cow::Owned(joined));
-    }
-
-    if let Some(expanded) = crate::matcher::expand_tilde(payload) {
-        push_unique(&mut v, Cow::Owned(expanded));
-    }
-
-    // Relative payloads are absolutized against cwd (§7.2). An already-absolute
-    // payload (`/`-rooted, or a Windows drive-letter root) is left to its
-    // normalized form above and must not be joined onto cwd.
-    if !is_absolute(payload)
-        && !payload.starts_with('~')
-        && let Some(dir) = cwd
-    {
-        // Only the cwd base needs Windows normalization (`D:\proj` -> `/D:/proj`);
-        // on POSIX `dir` is already `/`-rooted and is used as-is, allocation-free.
-        #[cfg(windows)]
-        let dir = normalize_root(dir);
-        let rel = payload.strip_prefix("./").unwrap_or(payload);
-        push_unique(
-            &mut v,
-            Cow::Owned(format!("{}/{}", dir.trim_end_matches('/'), rel)),
-        );
-    }
-
-    // Lexically collapse `.`/`..` in each candidate so a traversal spelling cannot
-    // route around a directory-anchored deny (`/tmp/../etc/shadow` -> `/etc/shadow`
-    // still hits `Read(/etc/**)`, §7.2). Resolution is purely lexical: no symlink
-    // following, which stays a non-goal (§9.2). Additive — a new candidate only
-    // ever adds a match, preserving the fail-closed bias. The bound is the length
-    // captured before the loop, so the pushes below are not re-scanned.
-    for i in 0..v.len() {
-        if let Some(norm) = lexical_normalize(v[i].as_ref()) {
-            push_unique(&mut v, Cow::Owned(norm));
-        }
+    for form in resolve_path(payload, cwd).forms {
+        push_unique(&mut v, form);
     }
     v
 }
@@ -183,46 +149,66 @@ pub(crate) fn resolve_operand(token: &str, cwd: Option<&str>) -> Option<String> 
     if !names_a_path(&folded) {
         return None;
     }
+    resolve_path(token, cwd).resolved
+}
 
-    // A `/`-rooted operand with nothing to collapse resolves to itself, so bail
-    // before allocating. This is the common absolute operand (`/tmp`,
-    // `/etc/passwd`), and skipping it is the difference between one allocation per
-    // operand and none. The test is platform-neutral: `normalize_root` returns
-    // `/`-rooted input unchanged and `drive_relative_join` declines it, so the
-    // whole ladder below really is the identity here.
-    if folded.as_ref() == token && folded.starts_with('/') && !has_dot_segment(&folded) {
-        return None;
+/// Every additive path spelling shared by Path payloads and Bash operands, in
+/// resolution order: Windows root anchoring, same-drive joining, tilde expansion,
+/// CWD absolutization, then lexical `.`/`..` collapse of each prior form. The raw
+/// spelling is used as the seed but omitted from `forms`; `resolved` explicitly
+/// carries the real final spelling so callers never depend on candidate order.
+struct PathResolution<'a> {
+    forms: Vec<Cow<'a, str>>,
+    resolved: Option<String>,
+}
+
+fn resolve_path<'a>(path: &'a str, cwd: Option<&str>) -> PathResolution<'a> {
+    let mut forms = vec![Cow::Borrowed(path)];
+    let folded = crate::matcher::fold_separators(path);
+    if folded.as_ref() != path {
+        push_unique(&mut forms, folded.clone());
+    }
+    let mut primary = folded;
+
+    #[cfg(windows)]
+    {
+        let drive_joined =
+            cwd.and_then(|dir| crate::matcher::drive_relative_join(primary.as_ref(), dir));
+        let rooted = normalize_root(primary.as_ref());
+        push_unique(&mut forms, Cow::Owned(rooted.clone()));
+        primary = Cow::Owned(rooted);
+        if let Some(joined) = drive_joined {
+            push_unique(&mut forms, Cow::Owned(joined.clone()));
+            primary = Cow::Owned(joined);
+        }
     }
 
-    // A drive-relative operand (`C:src\..\etc`) resolves against the cwd only when
-    // the cwd names the same drive; otherwise it falls through to the ladder and
-    // `normalize_root` anchors it at the drive root.
-    #[cfg(windows)]
-    let drive_joined = cwd.and_then(|dir| crate::matcher::drive_relative_join(&folded, dir));
-    #[cfg(not(windows))]
-    let drive_joined: Option<String> = None;
-
-    let expanded: String = if let Some(joined) = drive_joined {
-        joined
-    } else if let Some(home) = crate::matcher::expand_tilde(&folded) {
-        home
-    } else if !is_absolute(&folded)
-        && !folded.starts_with('~')
+    if let Some(expanded) = crate::matcher::expand_tilde(primary.as_ref()) {
+        push_unique(&mut forms, Cow::Owned(expanded.clone()));
+        primary = Cow::Owned(expanded);
+    } else if !is_absolute(primary.as_ref())
+        && !primary.starts_with('~')
         && let Some(dir) = cwd
     {
-        // `~user` is excluded from the join, mirroring `path_candidates`: it names
-        // that user's home, not a file under the cwd. Only the cwd base needs
-        // Windows normalization (`D:\proj` -> `/D:/proj`); on POSIX `dir` is
-        // already `/`-rooted and is used as-is, allocation-free.
         #[cfg(windows)]
         let dir = normalize_root(dir);
-        format!("{}/{}", dir.trim_end_matches('/'), folded)
-    } else {
-        normalize_root(&folded)
-    };
+        let rel = primary.strip_prefix("./").unwrap_or(primary.as_ref());
+        let joined = format!("{}/{}", dir.trim_end_matches('/'), rel);
+        push_unique(&mut forms, Cow::Owned(joined.clone()));
+        primary = Cow::Owned(joined);
+    }
 
-    let resolved = lexical_normalize(&expanded).unwrap_or(expanded);
-    (resolved != token).then_some(resolved)
+    let unnormalized = forms.len();
+    for i in 0..unnormalized {
+        if let Some(normalized) = lexical_normalize(forms[i].as_ref()) {
+            push_unique(&mut forms, Cow::Owned(normalized));
+        }
+    }
+
+    let resolved = lexical_normalize(primary.as_ref()).unwrap_or_else(|| primary.into_owned());
+    let resolved = (resolved != path).then_some(resolved);
+    forms.remove(0);
+    PathResolution { forms, resolved }
 }
 
 /// Could this command word name a file, and is it worth resolving?
@@ -247,7 +233,11 @@ pub(crate) fn names_a_path(word: &str) -> bool {
     // A word with no separator can only be a dot segment: splitting it on `/` would
     // yield the word itself, so the general scan reduces to these two equalities.
     // The `://` scan runs last so an ordinary argument never pays for it.
-    (word.starts_with('~') || word.contains('/') || word == "." || word == "..")
+    (word.starts_with('~')
+        || word.contains('/')
+        || word == "."
+        || word == ".."
+        || (cfg!(windows) && is_absolute(word)))
         && !word.contains("://")
 }
 
@@ -336,15 +326,21 @@ fn url_host_ref(s: &str) -> Option<&str> {
 /// Candidates are prepared once into [`PathProbe`]s and reused across rules; a
 /// candidate with no glob metacharacter reduces to a plain matcher test.
 pub(crate) fn path_hits_deny(rs: &RuleSet, tools: &[&str], path: &str, cwd: Option<&str>) -> bool {
+    if path.len() > MAX_PAYLOAD_BYTES {
+        return true;
+    }
     let candidates = path_candidates(path, cwd);
     let probes: Vec<_> = candidates
         .iter()
         .map(|candidate| crate::matcher::PathProbe::new(candidate.as_ref()))
         .collect();
     tools.iter().any(|&tool| {
-        rs.rules_for(tool).iter().any(|&idx| {
+        rs.matching_rule_indices(tool).iter().any(|&idx| {
             let rule = &rs.rules[idx];
-            rule.tier == Tier::Deny && probes.iter().any(|probe| probe.hits(&rule.matcher))
+            rule.tier == Tier::Deny
+                && probes
+                    .iter()
+                    .any(|probe| probe.hits(&rule.matcher).unwrap_or(true))
         })
     })
 }
