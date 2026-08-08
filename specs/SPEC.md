@@ -381,23 +381,48 @@ Denies hold unless an allow/ask carves them out:
 
 ## 7. Evaluation details
 
-### 7.1 Candidate forms (Path and Generic)
+### 7.1 Candidate forms
 
 To match reliably regardless of how the caller wrote the payload, the engine
 matches the specifier against **candidate forms** of the payload, and a hit on
 any form counts:
 
-- **Path**: the raw payload, its `~`-expanded form, and its `cwd`-absolutized
-  form (so a bare `.env` matches a rule written for an absolute path).
+- **Path**: the raw payload, its `~`-expanded form, its `cwd`-absolutized form
+  (so a bare `.env` matches a rule written for an absolute path), and each of
+  those with `.` and `..` segments lexically collapsed (§7.2).
 - **Generic/URL**: the raw payload and the host extracted from a
   `scheme://[user@]host[:port]/…` URL (plus a lowercased host, since domains are
   case-insensitive).
+- **Bash**: the identity and escalation forms of each unit (§8 step 2), which
+  include a form with every path operand resolved the same way a Path payload is.
 
-### 7.2 Relative paths
+Only the **payload** is resolved. A rule specifier compiles exactly as written,
+because a wildcard in a specifier matches arbitrary text, and cancelling a `..`
+against text that could be anything is unsound.
+
+### 7.2 Relative paths and traversal
 
 A relative path payload is resolved against the hook event's `cwd` (or the
 process CWD in CLI mode) before Path matching, so bare filenames are matched via
-their absolute form.
+their absolute form. A `~`-leading payload is excluded from that join: `~` and
+`~/…` expand via `$HOME` (§6.5), and `~user` stays literal, because it names
+that user's home, not a file under the `cwd`, and the engine has no way to
+learn another user's home. Bash path operands (§8 step 2) follow the same rule.
+
+`.` and `..` segments are then collapsed **lexically**, so a traversal spelling
+cannot route around a directory-anchored rule: `/tmp/../etc/shadow` still hits
+`Read(/etc/**)`. An absolute path stays rooted and a `..` at the root is dropped;
+a relative path keeps a leading `..` it cannot cancel. Resolution never touches
+the filesystem, so symlinks are not followed (§9.2).
+
+On Windows, `\` folds onto `/` and a drive-letter root gains a leading `/`, so
+`D:\proj\.env` matches a rule written `/**/.env*`. A **drive-relative** payload
+(`C:notes.txt`, which Windows reads as `notes.txt` under the current directory on
+drive C, not as `C:\notes.txt`) anchors under `/C:/` rather than as `/C:notes.txt`,
+which would match no `/C:/**` rule at all. Its exact directory is knowable only
+from the call's `cwd`, so when that `cwd` names the same drive it contributes the
+resolved form as an additional candidate; a `cwd` on a different drive contributes
+nothing.
 
 ## 8. Bash compound decision
 
@@ -462,6 +487,39 @@ decomposes it and takes the **most restrictive** verdict.
      The interpreter+flag vocabulary is an engine table (`python`, `perl`, `ruby`,
      `node`, `deno`, `php`, `bun`, `lua`, `Rscript`, …); the policy stays in the
      rules.
+
+     A **path-operand** form resolves every operand that names a path to the path
+     it really names, exactly as a Path payload is resolved (§7.1, §7.2), and
+     re-decides the rebuilt command. An operand names a path when it starts like a
+     filename (so options, redirections, and operators are skipped), is not a
+     `scheme://host/path` URL, and either carries a `.`/`..` segment or contains a
+     separator or a leading `~`. Anything else is left exactly as written, so an
+     ordinary command produces no extra form. The form needs no per-command
+     vocabulary, so it covers `rm`, `tar`, and every other command alike.
+
+     It closes two gaps a text-only match leaves open.
+
+     - A **traversal** spelling riding a narrow allow past a broad deny.
+       `rm -rf /w/.scratch/../src` matches an allow written for `/w/.scratch/*` as
+       raw text, but its resolved form is `rm -rf /w/src`, which the allow does not
+       match and a deny on the tree does.
+     - A **relative** rule meaning more than it says. A Bash specifier matches
+       command text, so `Bash(rm -rf .scratch/*)` matches `rm -rf .scratch/x` from
+       any directory, granting deletion of every `.scratch` on the machine rather
+       than the project's. Absolutizing the operand against the call's `cwd` puts
+       the real target in front of the rules, so the same command resolves to
+       `/w/.scratch/x` inside the project and to `/tmp/.scratch/x` outside it,
+       where a deny on the tree catches it.
+
+     Because this is an escalation form it only ever raises a verdict, so an
+     operand the resolver misjudges costs a wasted candidate, never a false allow.
+
+     That also decides what a specifier's own path spelling covers, which is the
+     rule author's choice to make. A deny anchored at an absolute path reaches both
+     spellings, because the resolved operand lands on it. An `allow` reaches only
+     the spelling it names, because resolution can raise a verdict and never grant
+     one: a relative command does not reach an absolute allow. Naming both
+     spellings permits both.
 
    Additionally, if the unit begins with a **wrapper command** (`env`, `sudo`,
    `timeout`, `nice`, `xargs`, …), peel the wrapper and its options / assignments
@@ -554,6 +612,13 @@ out of scope and left to the OS sandbox and enterprise denies:
 - Non-POSIX shells (PowerShell, `cmd.exe`): the splitter, reader vocabulary, and
   env-stripping model POSIX syntax and do not apply there, though Windows
   binaries ship.
+- Path resolution (§7.2) is purely **lexical**. Symlinks are not followed, so a
+  link pointing out of an allowed directory reaches its target unseen, and a path
+  the shell builds at runtime is resolved as the literal text it was written as.
+  On Windows a backslash is both a path separator and the shell's escape
+  character, and which one it is depends on the shell the command runs under.
+  The engine resolves the command under both readings and takes the most
+  restrictive, so the ambiguity over-denies rather than under-denies.
 - File reads by tools outside the covered set (readers, `dd`, `curl`, `wget`,
   `cp`/`mv`): `scp`, `tar`, `git`, `rsync`, and editors reading a secret are not
   followed.
@@ -669,7 +734,12 @@ correction backlog for the reference file.
    (The reference set previously shipped such rules, since removed.) A second
    dead-rule form: a `Bash(cmd:*)` specifier with a `*` before the `:*` compiles
    to a literal-asterisk prefix and matches nothing (the `cmd:*` form has no
-   interior wildcard; use the glob form `Bash(cmd …)` instead).
+   interior wildcard; use the glob form `Bash(cmd …)` instead). A third: a
+   `Bash(cmd:*)` specifier padded with whitespace. `Bash(curl :*)` strips to the
+   prefix `curl `, and prefix matching requires the byte after the prefix to be
+   whitespace, so it fires only on a *double*-spaced `curl  x` and never on the
+   ordinary spelling. A leading space can never match at all, since a unit is
+   trimmed before matching.
 
    `RuleSet::lint_warnings` is the author-time linter, printed to stderr by the
    CLI checker and `--install` (never in hook mode). It reports the dead-rule

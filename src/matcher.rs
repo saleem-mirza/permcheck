@@ -5,6 +5,7 @@
 //! microseconds — the binary is a fresh short-lived process per tool call.
 
 use crate::types::Family;
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 /// Bonus added to a specifier's literal-character count when it contains no
@@ -16,6 +17,18 @@ pub const EXACT_MATCH_BONUS: u32 = 1000;
 pub(crate) fn home_dir() -> &'static str {
     static HOME: OnceLock<String> = OnceLock::new();
     HOME.get_or_init(|| normalize_root(&raw_home().unwrap_or_default()))
+}
+
+/// Expand a leading `~` that names the caller's own home: `~` alone and `~/rest`.
+/// `~user` stays literal, since the engine has no way to learn another user's
+/// home (§7.2). One definition shared by specifier compilation and both payload
+/// resolvers, so they agree by construction.
+pub(crate) fn expand_tilde(path: &str) -> Option<String> {
+    if path == "~" {
+        return Some(home_dir().to_string());
+    }
+    path.strip_prefix("~/")
+        .map(|rest| format!("{}/{}", home_dir(), rest))
 }
 
 /// The home directory as the environment reports it, before normalization.
@@ -68,13 +81,81 @@ pub fn normalize_root(dir: &str) -> String {
     if dir.starts_with('/') {
         return dir.to_string();
     }
-    let slashed = dir.replace('\\', "/");
+    let slashed = fold_separators(dir);
     let b = slashed.as_bytes();
-    // A Windows drive-letter root (`X:/…`) needs a leading `/` to anchor.
     if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
-        format!("/{slashed}")
+        // `X:/…` is drive-*rooted* and only needs the leading `/`.
+        //
+        // `X:rest` with no separator is drive-*relative*: Windows reads it as
+        // `rest` under the current directory on drive X, not as `X:\rest`. It
+        // still has to anchor under `/X:/`, because anchoring it as `/X:rest`
+        // leaves it matching no `/X:/**` rule at all, which fails open. The
+        // drive's current directory is unknowable from the payload alone, so
+        // this anchors at the drive root and [`drive_relative_join`] supplies
+        // the exact form when the call's cwd is on the same drive.
+        if b.get(2) == Some(&b'/') {
+            format!("/{slashed}")
+        } else {
+            format!("/{}/{}", &slashed[..2], &slashed[2..])
+        }
     } else {
-        slashed
+        slashed.into_owned()
+    }
+}
+
+/// Resolve a Windows drive-relative payload (`C:notes.txt`) against `cwd`, which
+/// is the only way to learn the current directory on that drive.
+///
+/// Returns `None` unless the payload really is drive-relative and `cwd` names the
+/// same drive; a different drive says nothing about where `C:notes.txt` lands, so
+/// no candidate is invented. Purely additive on top of the drive-root form
+/// [`normalize_root`] already produces, so it can only add a match.
+#[cfg(windows)]
+pub(crate) fn drive_relative_join(payload: &str, cwd: &str) -> Option<String> {
+    let p = payload.as_bytes();
+    let is_drive_relative = p.len() >= 2
+        && p[0].is_ascii_alphabetic()
+        && p[1] == b':'
+        && !matches!(p.get(2), Some(b'/' | b'\\'));
+    if !is_drive_relative {
+        return None;
+    }
+    // `normalize_root` anchors the cwd as `/C:/work`, so the drive letter sits
+    // between the leading slash and the colon.
+    let base = normalize_root(cwd);
+    let same_drive =
+        matches!(base.as_bytes(), [b'/', drive, b':', ..] if drive.eq_ignore_ascii_case(&p[0]));
+    if !same_drive {
+        return None;
+    }
+    let rest = fold_separators(&payload[2..]);
+    Some(format!("{}/{}", base.trim_end_matches('/'), rest))
+}
+
+/// Fold platform path separators onto `/`, the separator every specifier is
+/// written with.
+///
+/// POSIX has only one separator, so this is the identity function and the whole
+/// transform compiles out; the Windows twin below is the only real work. Kept
+/// beside [`normalize_root`] because the two run together: fold first, then
+/// anchor the drive root.
+#[cfg(not(windows))]
+#[inline]
+pub(crate) fn fold_separators(path: &str) -> Cow<'_, str> {
+    Cow::Borrowed(path)
+}
+
+/// A Windows path separates with `\` (`C:\proj\..\src`), often mixed with `/`
+/// from a tool that wrote the path POSIX-style. Fold `\` onto `/` so segment
+/// splitting sees the real segments. A UNC root (`\\server\share`) becomes
+/// `//server/share` and an extended-length prefix (`\\?\C:\…`) becomes `//?/C:/…`;
+/// both stay `/`-rooted, which [`normalize_root`] then leaves alone.
+#[cfg(windows)]
+pub(crate) fn fold_separators(path: &str) -> Cow<'_, str> {
+    if path.contains('\\') {
+        Cow::Owned(path.replace('\\', "/"))
+    } else {
+        Cow::Borrowed(path)
     }
 }
 
@@ -86,9 +167,12 @@ pub(crate) fn is_absolute(path: &str) -> bool {
     path.starts_with('/')
 }
 
-/// On Windows a payload is also absolute when it is drive-letter-rooted
-/// (`X:\…` or `X:/…`); such a path is normalized by [`normalize_root`], not
-/// absolutized against the CWD.
+/// On Windows any drive-qualified payload answers `true`, whether it is
+/// drive-rooted (`X:\…`, `X:/…`) or drive-relative (`X:rest`). The predicate
+/// means "do not join this onto the CWD", and joining a drive-qualified path onto
+/// a CWD that may name a different drive is wrong in both cases.
+/// [`normalize_root`] anchors them, and [`drive_relative_join`] handles the
+/// drive-relative form when the CWD does name the same drive.
 #[cfg(windows)]
 pub(crate) fn is_absolute(path: &str) -> bool {
     if path.starts_with('/') {
@@ -356,11 +440,8 @@ impl PathMatcher {
     fn compile(spec: &str) -> PathMatcher {
         // Root markers and `~` expansion happen before tokenizing.
         let owned;
-        let normalized: &str = if spec == "~" {
-            owned = home_dir().to_string();
-            &owned
-        } else if let Some(rest) = spec.strip_prefix("~/") {
-            owned = format!("{}/{}", home_dir(), rest);
+        let normalized: &str = if let Some(expanded) = expand_tilde(spec) {
+            owned = expanded;
             &owned
         } else if let Some(rest) = spec.strip_prefix("//") {
             // Leading `//` root marker: strip one slash, leaving an

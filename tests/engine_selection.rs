@@ -137,3 +137,54 @@ fn generic_matches_host_not_substring() {
         Tier::Deny
     );
 }
+
+// Windows-only: `C:notes.txt` with no separator is *drive-relative* — Windows
+// reads it as `notes.txt` under the current directory on drive C, not as
+// `C:\notes.txt`. It used to anchor as `/C:notes.txt`, which matches no `/C:/**`
+// rule at all, so a deny on the drive missed it entirely. It must now anchor
+// under `/C:/`.
+#[cfg(windows)]
+#[test]
+fn windows_drive_relative_payload_anchors_under_the_drive() {
+    let rs = RuleSet::load_str(r#"{"deny":["Read(/C:/**)"]}"#).unwrap();
+    assert_eq!(
+        decide_payload(&rs, "Read", "C:notes.txt", None).tier,
+        Tier::Deny
+    );
+    // The drive-rooted spellings were already covered and must not regress.
+    assert_eq!(
+        decide_payload(&rs, "Read", r"C:\notes.txt", None).tier,
+        Tier::Deny
+    );
+    assert_eq!(
+        decide_payload(&rs, "Read", "C:/notes.txt", None).tier,
+        Tier::Deny
+    );
+}
+
+// Windows-only: the drive root is only a fallback. When the cwd names the same
+// drive it supplies the real current directory, so a deny anchored deeper than
+// the root still fires. A cwd on a *different* drive says nothing about where
+// `C:secret.txt` lands, so no candidate is invented from it.
+#[cfg(windows)]
+#[test]
+fn windows_drive_relative_payload_resolves_against_a_same_drive_cwd() {
+    // `defaultMode` is explicit here so the last case pins "no candidate matched"
+    // rather than colliding with the missing-key fall-back, which is also deny.
+    let rs = RuleSet::load_str(r#"{"defaultMode":"ask","deny":["Read(/C:/work/**)"]}"#).unwrap();
+    assert_eq!(
+        decide_payload(&rs, "Read", "C:secret.txt", Some(r"C:\work")).tier,
+        Tier::Deny
+    );
+    // Same drive, different case on the letter: the filesystem does not care.
+    assert_eq!(
+        decide_payload(&rs, "Read", "c:secret.txt", Some(r"C:\work")).tier,
+        Tier::Deny
+    );
+    // A different drive says nothing about where `C:secret.txt` lands, so no
+    // candidate is invented from it and only the drive-root form survives.
+    assert_eq!(
+        decide_payload(&rs, "Read", "C:secret.txt", Some(r"D:\work")).tier,
+        Tier::Ask
+    );
+}

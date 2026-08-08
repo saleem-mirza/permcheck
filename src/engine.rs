@@ -5,9 +5,7 @@
 //! is the whole decision for Path and Generic tools; Bash adds the compound step
 //! in [`crate::bash`].
 
-#[cfg(windows)]
-use crate::matcher::normalize_root;
-use crate::matcher::{home_dir, is_absolute};
+use crate::matcher::{is_absolute, normalize_root};
 use crate::rules::{CompiledRule, RuleSet};
 use crate::types::{Decision, Family, Tier};
 use std::borrow::Cow;
@@ -99,8 +97,9 @@ pub fn decide_payload(rs: &RuleSet, tool: &str, payload: &str, cwd: Option<&str>
     Decision::for_call(tier, tool, payload)
 }
 
-/// Candidate forms for a Path payload: raw, `~`-expanded, and `cwd`-absolutized
-/// (§7.1, §7.2).
+/// Candidate forms for a Path payload (§7.1, §7.2): the raw payload, its
+/// `~`-expanded and `cwd`-absolutized forms, the Windows drive-root and
+/// drive-relative anchorings, and each of those with `.`/`..` collapsed.
 pub(crate) fn path_candidates<'a>(payload: &'a str, cwd: Option<&str>) -> Vec<Cow<'a, str>> {
     let mut v = Vec::with_capacity(4);
     v.push(Cow::Borrowed(payload));
@@ -112,10 +111,19 @@ pub(crate) fn path_candidates<'a>(payload: &'a str, cwd: Option<&str>) -> Vec<Co
     #[cfg(windows)]
     push_unique(&mut v, Cow::Owned(normalize_root(payload)));
 
-    if payload == "~" {
-        push_unique(&mut v, Cow::Owned(home_dir().to_string()));
-    } else if let Some(rest) = payload.strip_prefix("~/") {
-        push_unique(&mut v, Cow::Owned(format!("{}/{}", home_dir(), rest)));
+    // A drive-relative payload (`C:notes.txt`) names the current directory on
+    // that drive, which only the cwd can supply. `normalize_root` above already
+    // anchored it at the drive root; this adds the exact form when the cwd is on
+    // the same drive.
+    #[cfg(windows)]
+    if let Some(dir) = cwd
+        && let Some(joined) = crate::matcher::drive_relative_join(payload, dir)
+    {
+        push_unique(&mut v, Cow::Owned(joined));
+    }
+
+    if let Some(expanded) = crate::matcher::expand_tilde(payload) {
+        push_unique(&mut v, Cow::Owned(expanded));
     }
 
     // Relative payloads are absolutized against cwd (§7.2). An already-absolute
@@ -150,13 +158,113 @@ pub(crate) fn path_candidates<'a>(payload: &'a str, cwd: Option<&str>) -> Vec<Co
     v
 }
 
+/// Resolve one Bash command operand to the path it really names (§7.2), for the
+/// path-operand escalation form (§8 step 2).
+///
+/// Returns `None` for a token that names no path, so an ordinary word is left
+/// exactly as written and produces no extra form. The gate opens for a token that
+/// carries a `.` or `..` segment, that is relative and contains a separator, or
+/// that starts with `~`.
+///
+/// The relative case is why a rule anchored at a real directory means what it
+/// says. A Bash specifier matches command text, so `Bash(rm -rf .scratch/*)`
+/// otherwise matches `rm -rf .scratch/x` from *any* directory, granting deletion
+/// of every `.scratch` on the machine rather than the project's. Absolutizing the
+/// operand against the call's `cwd` puts the real target in front of the rules,
+/// where a deny on the tree can see it.
+///
+/// When the gate opens, the token is put through the same resolution a Path
+/// payload gets: separators folded, `~` expanded, a relative token absolutized
+/// against `cwd`, and `.`/`..` collapsed. Resolution is lexical only, so a
+/// wildcard in the token is carried through untouched — sound because a shell `*`
+/// matches within one segment, so `dir/*/../x` really does name `dir/x`.
+pub(crate) fn resolve_operand(token: &str, cwd: Option<&str>) -> Option<String> {
+    let folded = crate::matcher::fold_separators(token);
+    if !names_a_path(&folded) {
+        return None;
+    }
+
+    // A `/`-rooted operand with nothing to collapse resolves to itself, so bail
+    // before allocating. This is the common absolute operand (`/tmp`,
+    // `/etc/passwd`), and skipping it is the difference between one allocation per
+    // operand and none. The test is platform-neutral: `normalize_root` returns
+    // `/`-rooted input unchanged and `drive_relative_join` declines it, so the
+    // whole ladder below really is the identity here.
+    if folded.as_ref() == token && folded.starts_with('/') && !has_dot_segment(&folded) {
+        return None;
+    }
+
+    // A drive-relative operand (`C:src\..\etc`) resolves against the cwd only when
+    // the cwd names the same drive; otherwise it falls through to the ladder and
+    // `normalize_root` anchors it at the drive root.
+    #[cfg(windows)]
+    let drive_joined = cwd.and_then(|dir| crate::matcher::drive_relative_join(&folded, dir));
+    #[cfg(not(windows))]
+    let drive_joined: Option<String> = None;
+
+    let expanded: String = if let Some(joined) = drive_joined {
+        joined
+    } else if let Some(home) = crate::matcher::expand_tilde(&folded) {
+        home
+    } else if !is_absolute(&folded)
+        && !folded.starts_with('~')
+        && let Some(dir) = cwd
+    {
+        // `~user` is excluded from the join, mirroring `path_candidates`: it names
+        // that user's home, not a file under the cwd. Only the cwd base needs
+        // Windows normalization (`D:\proj` -> `/D:/proj`); on POSIX `dir` is
+        // already `/`-rooted and is used as-is, allocation-free.
+        #[cfg(windows)]
+        let dir = normalize_root(dir);
+        format!("{}/{}", dir.trim_end_matches('/'), folded)
+    } else {
+        normalize_root(&folded)
+    };
+
+    let resolved = lexical_normalize(&expanded).unwrap_or(expanded);
+    (resolved != token).then_some(resolved)
+}
+
+/// Could this command word name a file, and is it worth resolving?
+///
+/// Conservative on both sides. A word must start like a filename, which drops
+/// options (`-rf`, `--exclude=x`), redirections (`>out`, `2>&1`), and operators.
+/// It must then name a directory (`~`, a separator) or be a bare `.`/`..`, which
+/// drops ordinary arguments (`push`, `main`, `fix`). A `scheme://host/path` URL is
+/// excluded: its slashes are not a filesystem path, and the Generic family
+/// already matches it by host.
+///
+/// Being wrong in the permissive direction only costs a wasted candidate, because
+/// the form it feeds can only raise a verdict and only on a real rule match.
+pub(crate) fn names_a_path(word: &str) -> bool {
+    let starts_like_a_name = word
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphanumeric() || matches!(c, '.' | '/' | '~' | '_'));
+    if !starts_like_a_name {
+        return false;
+    }
+    // A word with no separator can only be a dot segment: splitting it on `/` would
+    // yield the word itself, so the general scan reduces to these two equalities.
+    // The `://` scan runs last so an ordinary argument never pays for it.
+    (word.starts_with('~') || word.contains('/') || word == "." || word == "..")
+        && !word.contains("://")
+}
+
+/// Does `path` carry a `.` or `..` segment, i.e. is there anything for
+/// [`lexical_normalize`] to collapse? The gate for every caller that wants to skip
+/// the work when there is none.
+fn has_dot_segment(path: &str) -> bool {
+    path.split('/').any(|s| s == "." || s == "..")
+}
+
 /// Lexically resolve `.` and `..` segments of `path` without touching the
 /// filesystem (no symlink following, §9.2). Returns the collapsed form only when
 /// it differs from `path`; `None` when there is nothing to collapse. An absolute
 /// path stays rooted and a `..` at the root is dropped; a relative path keeps a
 /// leading `..` it cannot cancel.
 fn lexical_normalize(path: &str) -> Option<String> {
-    if !path.split('/').any(|s| s == "." || s == "..") {
+    if !has_dot_segment(path) {
         return None;
     }
     let absolute = path.starts_with('/');

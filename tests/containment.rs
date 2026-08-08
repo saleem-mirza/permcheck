@@ -149,3 +149,45 @@ fn every_matching_deny_must_be_carved() {
         Tier::Allow
     );
 }
+
+// A carve-out is a claim about which *paths* the exception covers, so it has to
+// survive a respelling of the path. `Bash(rm -rf /w/.scratch/*)` is a strict
+// subset of `Bash(rm -rf /*)` and legitimately carves it, but the carve-out must
+// not extend to a command whose operand only looks like it is inside the scratch
+// directory. The path-operand form (§8 step 2) is decided on its own precisely so
+// that a raw-text match cannot carve it away.
+#[test]
+fn a_carve_out_does_not_cover_a_traversal_out_of_its_directory() {
+    let rs = RuleSet::load_str(
+        r#"{"defaultMode":"ask","allow":["Bash(rm -rf /w/.scratch/*)"],"deny":["Bash(rm -rf /*)"]}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        decide_bash("rm -rf /w/.scratch/build", &rs, Some("/w")).tier,
+        Tier::Allow
+    );
+    assert_eq!(
+        decide_bash("rm -rf /w/.scratch/../src", &rs, Some("/w")).tier,
+        Tier::Deny
+    );
+}
+
+// Windows-only: `\` is the separator a real Windows caller writes, so the same
+// carve-out has to hold for the backslash spelling and the mixed spelling. Not
+// compiled on POSIX, where `\` is a shell escape and the test above covers it.
+#[cfg(windows)]
+#[test]
+fn windows_carve_out_survives_backslash_traversal() {
+    let rs = RuleSet::load_str(
+        r#"{"defaultMode":"ask","allow":["Bash(rm -rf /C:/w/.scratch/*)"],"deny":["Bash(rm -rf /C:/*)"]}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        decide_bash(r"rm -rf C:\w\.scratch\..\src", &rs, Some(r"C:\w")).tier,
+        Tier::Deny
+    );
+    assert_eq!(
+        decide_bash("rm -rf C:/w/.scratch/../src", &rs, Some(r"C:\w")).tier,
+        Tier::Deny
+    );
+}

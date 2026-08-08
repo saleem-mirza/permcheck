@@ -121,13 +121,36 @@ impl RuleSet {
             ));
         }
 
-        // Dead `cmd:*` rules with an interior `*`.
+        // Dead `cmd:*` rules: an interior `*`, or whitespace padding.
         for rule in &self.rules {
-            if let Matcher::Bash(matcher::BashMatcher::Prefix(prefix)) = &rule.matcher
-                && prefix.contains('*')
-            {
+            let Matcher::Bash(matcher::BashMatcher::Prefix(prefix)) = &rule.matcher else {
+                continue;
+            };
+            if prefix.contains('*') {
                 out.push(format!(
                     "rule `{}` has `*` before `:*`; the `cmd:*` form matches `cmd` literally, so the `*` is a literal asterisk and this rule matches nothing. For a mid-command wildcard use the glob form (no `:*`).",
+                    rule.source,
+                ));
+            }
+            // A prefix ends at a word boundary, so a trailing space demands a
+            // second one in the command (`curl  x`), and a leading space can
+            // never appear in a trimmed unit. Either way the rule is inert, which
+            // is silent and dangerous when the author meant it as a deny.
+            let leading = prefix.starts_with(char::is_whitespace);
+            if leading || prefix.ends_with(char::is_whitespace) {
+                let trimmed = prefix.trim();
+                // A leading space never matches: units are trimmed first. A
+                // trailing space demands a second one in the command.
+                let detail = if leading {
+                    "a unit is trimmed before matching, so a leading space matches nothing at all"
+                        .to_string()
+                } else {
+                    format!(
+                        "a trailing space requires a second one (`{trimmed} x` never matches, `{trimmed}  x` does)"
+                    )
+                };
+                out.push(format!(
+                    "rule `{}` pads `{prefix}` with whitespace before `:*`: {detail}. Write `Bash({trimmed}:*)`.",
                     rule.source,
                 ));
             }

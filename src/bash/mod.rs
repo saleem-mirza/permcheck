@@ -35,7 +35,7 @@ pub fn decide_bash(command: &str, rs: &RuleSet, cwd: Option<&str>) -> Decision {
     for unit in units {
         let cmd = strip_env_assignments(unit);
         let forms = identity_forms(cmd);
-        let mut tier = unit_tier(rs, &forms);
+        let mut tier = unit_tier(rs, &forms, cwd);
         // A leading wrapper (`env`, `sudo`, `timeout`, …) executes the command
         // that follows it, so the wrapped command's own decision must apply too.
         // Otherwise `env aws …` would ride in on the wrapper's allow rule and
@@ -45,8 +45,13 @@ pub fn decide_bash(command: &str, rs: &RuleSet, cwd: Option<&str>) -> Decision {
         // wrapper (`"env" aws …`) is invisible to the raw string, and every
         // pipeline stage leaves the leading word easier to recognize, never
         // harder.
-        if let Some(inner) = strip_leading_wrappers(forms.canonical()) {
-            let inner_tier = unit_tier(rs, &identity_forms(inner));
+        // Skip it once already at deny: the re-decision can only raise, so there is
+        // nothing left for it to add, and it would re-resolve every path operand
+        // and re-scan the rule index to learn that.
+        if tier != Tier::Deny
+            && let Some(inner) = strip_leading_wrappers(forms.canonical())
+        {
+            let inner_tier = unit_tier(rs, &identity_forms(inner), cwd);
             if inner_tier > tier {
                 tier = inner_tier;
             }

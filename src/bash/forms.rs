@@ -30,8 +30,9 @@ const STAGES: [fn(&str) -> Option<String>; 5] = [
     git_subcommand_form,
 ];
 
-/// Upper bound on identity forms: the raw unit plus one per pipeline stage.
-const MAX_FORMS: usize = STAGES.len() + 1;
+/// Upper bound on identity forms: the raw unit, one per pipeline stage, plus the
+/// off-chain quoted-basename form ([`quoted_command_basename`]).
+const MAX_FORMS: usize = STAGES.len() + 2;
 
 /// The identity forms of one unit (§8 step 2): every spelling decided together
 /// with the raw command, plus the index of the fully-normalized one.
@@ -54,6 +55,13 @@ impl<'a> Forms<'a> {
         self.forms[self.canonical].as_ref()
     }
 
+    /// The unit exactly as it arrived, before any stage ran. Only the Windows
+    /// path form reads this, to recover a `\` the quoting stage consumed as an
+    /// escape.
+    fn raw(&self) -> &str {
+        self.forms[0].as_ref()
+    }
+
     /// Record a stage's output and make it the spelling the next stage reads. A
     /// form already present is reused rather than duplicated, which keeps the
     /// candidate list free of repeats when two stages converge.
@@ -65,12 +73,24 @@ impl<'a> Forms<'a> {
             self.canonical = existing;
             return;
         }
-        debug_assert!(self.len < MAX_FORMS, "one form per stage plus the raw unit");
+        debug_assert!(
+            self.len < MAX_FORMS,
+            "one form per stage, the raw unit, and the off-chain form"
+        );
         if self.len < MAX_FORMS {
             self.forms[self.len] = Cow::Owned(form);
             self.canonical = self.len;
             self.len += 1;
         }
+    }
+
+    /// Add a candidate that sits **off** the pipeline, leaving `canonical` where
+    /// the chain left it. Used by [`quoted_command_basename`], whose output is an
+    /// alternative reading of the unit rather than a further reduction of it.
+    fn push_off_chain(&mut self, form: String) {
+        let keep = self.canonical;
+        self.push(form);
+        self.canonical = keep;
     }
 }
 
@@ -88,33 +108,85 @@ pub(super) fn identity_forms(cmd: &str) -> Forms<'_> {
             forms.push(next);
         }
     }
+    // Read the raw unit, not the chain: the quotes this needs are gone by now.
+    if let Some(basenamed) = quoted_command_basename(cmd) {
+        forms.push_off_chain(basenamed);
+    }
     forms
 }
 
 /// The tier of a single unit against the Bash matchers, taking the rule set's
 /// `defaultMode` fall-back when nothing matches.
-pub(super) fn unit_tier(rs: &RuleSet, forms: &Forms<'_>) -> Tier {
+pub(super) fn unit_tier(rs: &RuleSet, forms: &Forms<'_>, cwd: Option<&str>) -> Tier {
     let mut tier = engine::decide_tier(rs, "Bash", forms.candidates()).unwrap_or(rs.default_tier);
 
     // Escalation forms (§8 step 2) are each decided on their own and only ever
     // raise the verdict. They read the canonical spelling, so a quoted or padded
     // command reaches its flag and interpreter rules the same as a bare one.
     let canonical = forms.canonical();
-    for_each_flag_candidate(canonical, |candidate| {
-        if tier != Tier::Deny
-            && let Some(candidate_tier) = engine::decide_tier(rs, "Bash", &[candidate])
-        {
-            tier = tier.max(candidate_tier);
-        }
-        tier != Tier::Deny
-    });
+    if tier != Tier::Deny {
+        for_each_flag_candidate(canonical, |candidate| raise(rs, &mut tier, candidate));
+    }
     if tier != Tier::Deny
         && let Some(candidate) = inline_exec_candidate(canonical)
-        && let Some(candidate_tier) = engine::decide_tier(rs, "Bash", &[&candidate])
     {
-        tier = tier.max(candidate_tier);
+        raise(rs, &mut tier, &candidate);
+    }
+    if tier != Tier::Deny {
+        for_each_path_candidate(canonical, forms.raw(), cwd, |candidate| {
+            raise(rs, &mut tier, candidate)
+        });
     }
     tier
+}
+
+/// Decide one escalation candidate on its own and fold it in, never lowering
+/// `tier` (§8 step 2). Returns whether the caller should keep offering candidates,
+/// which is false once `deny` is reached and nothing can change the outcome.
+fn raise(rs: &RuleSet, tier: &mut Tier, candidate: &str) -> bool {
+    if *tier != Tier::Deny
+        && let Some(candidate_tier) = engine::decide_tier(rs, "Bash", &[candidate])
+    {
+        *tier = (*tier).max(candidate_tier);
+    }
+    *tier != Tier::Deny
+}
+
+/// Reduce a **quoted** leading executable path to its basename, reading the raw
+/// unit (§8 step 2).
+///
+/// Quotes are the only thing marking a path that contains spaces as a single word,
+/// so once [`strip_shell_quoting`] has run,
+/// `"C:/Program Files/LLVM/bin/clang.exe" -c x.c` reads as the word `C:/Program`
+/// followed by arguments, and [`basename_command`] reduces it to `Program`. A rule
+/// written `Bash(clang.exe:*)` then matches nothing (claude-code#27688).
+///
+/// This runs **off** the [`STAGES`] chain rather than at the front of it. Putting
+/// it first looked right and was a fail-open regression: the chain would then
+/// start from `clang.exe …`, and the quote-stripped full-path spelling that a deny
+/// naming `/opt/my tool/bin/danger` relies on would never be produced at all. Both
+/// spellings have to remain candidates, so this contributes one extra form and
+/// leaves the pipeline's own output untouched.
+///
+/// Returns `None` unless the unit opens with a quote whose contents look like a
+/// path, which leaves every ordinary command untouched.
+fn quoted_command_basename(cmd: &str) -> Option<String> {
+    let trimmed = cmd.trim_start();
+    let quote = trimmed.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+    let rest = &trimmed[quote.len_utf8()..];
+    let close = rest.find(quote)?;
+    let (word, tail) = rest.split_at(close);
+    // Only a path is worth reducing; a quoted bare word is already its basename,
+    // and reducing it would just duplicate the `strip_shell_quoting` form.
+    if !word.contains(['/', '\\']) {
+        return None;
+    }
+    let slashed = word.replace('\\', "/");
+    let base = basename(&slashed);
+    if base.is_empty() {
+        return None;
+    }
+    Some(format!("{base}{}", &tail[quote.len_utf8()..]))
 }
 
 /// Remove shell quoting and escaping, leaving the characters the shell passes to
@@ -333,6 +405,80 @@ fn inline_exec_candidate(cmd: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Visit the command with every path operand resolved to the path it really
+/// names (§7.2, §8 step 2).
+///
+/// Each whitespace-separated token goes through [`engine::resolve_operand`], which
+/// returns `None` for a word that names no path and for one that already resolves
+/// to itself. A word naming a *relative* path is the common trigger, not the rare
+/// traversal one: `cat src/main.rs` and `python3 scripts/build.py` both resolve,
+/// because absolutizing against `cwd` is what makes a directory-anchored rule mean
+/// what it says. Nothing is allocated until the first token actually resolves, so
+/// a command that mentions no path costs one pass over its words.
+///
+/// This is the form that stops a traversal spelling from riding a narrow allow
+/// past a broad deny. Being an escalation form is load-bearing: decided on its
+/// own it cannot be carved out by an allow that matched the raw spelling, which
+/// is exactly what an identity form would allow to happen.
+///
+/// On Windows the command is resolved twice, from the fully-normalized spelling
+/// and from the raw unit. A backslash is both a path separator and the shell's
+/// escape character, and [`strip_shell_quoting`] runs first and reads it as an
+/// escape, so `C:\proj\..\src` has already become `C:proj..src` by the time the
+/// canonical spelling is built. Which reading is right depends on the shell, so
+/// both are offered; escalation forms only ever raise a verdict, so carrying the
+/// extra reading cannot loosen a decision (§9.2).
+fn for_each_path_candidate(
+    canonical: &str,
+    raw: &str,
+    cwd: Option<&str>,
+    mut visit: impl FnMut(&str) -> bool,
+) {
+    let resolve_one = |cmd: &str| -> Option<String> {
+        // The buffer is created by the first token that resolves, and seeded with
+        // the words already passed over. A command whose operands all resolve to
+        // themselves (`cat /etc/passwd`) therefore allocates nothing at all.
+        let mut out: Option<String> = None;
+        for (i, tok) in cmd.split_ascii_whitespace().enumerate() {
+            let resolved = engine::resolve_operand(tok, cwd);
+            let buf = match (&mut out, &resolved) {
+                (None, None) => continue,
+                (Some(buf), _) => buf,
+                (slot @ None, Some(first)) => slot.insert(seed(cmd, i, first.len())),
+            };
+            buf.push_str(resolved.as_deref().unwrap_or(tok));
+            buf.push(' ');
+        }
+        out.map(|mut joined| {
+            joined.pop();
+            joined
+        })
+    };
+
+    // Only the Windows build has a second reading of the raw unit to offer; on
+    // POSIX `cfg!` is a constant `false`, so the canonical spelling is the whole
+    // story and the second arm folds away.
+    let second_reading = (cfg!(windows) && raw != canonical).then_some(raw);
+    for cmd in [Some(canonical), second_reading].into_iter().flatten() {
+        if let Some(candidate) = resolve_one(cmd)
+            && !visit(&candidate)
+        {
+            return;
+        }
+    }
+}
+
+/// A rebuild buffer holding the first `skip` words of `cmd` verbatim, sized for
+/// the whole command plus the growth the first resolved operand brings.
+fn seed(cmd: &str, skip: usize, first_resolved_len: usize) -> String {
+    let mut buf = String::with_capacity(cmd.len() + first_resolved_len);
+    for word in cmd.split_ascii_whitespace().take(skip) {
+        buf.push_str(word);
+        buf.push(' ');
+    }
+    buf
 }
 
 /// Visit the canonical candidates for a clustered or reordered short-flag set.

@@ -113,6 +113,62 @@ fn dead_rule_prints_a_lint_warning_to_stderr() {
         .stderr(predicates::str::contains("matches nothing"));
 }
 
+// A `cmd:*` specifier padded with whitespace is inert in the same silent way, and
+// it is easy to type: claude-code#6527 carries a real `Bash(curl :*)` deny whose
+// author believed curl was blocked. `curl ` only matches a double-spaced command,
+// so the checker has to name it before it ships.
+#[test]
+fn whitespace_padded_prefix_prints_a_lint_warning() {
+    let f = rules_file(r#"{"deny":["Bash(curl :*)"]}"#);
+    Command::cargo_bin("permcheck")
+        .unwrap()
+        .args(["Bash", "ls", "--rules"])
+        .arg(f.path())
+        .assert()
+        .stderr(predicates::str::contains("pads `curl `"));
+}
+
+#[test]
+fn whitespace_padded_prefix_really_is_inert() {
+    // The lint is only worth trusting if the rule it names truly does not fire.
+    let f = rules_file(r#"{"defaultMode":"ask","deny":["Bash(curl :*)"]}"#);
+    Command::cargo_bin("permcheck")
+        .unwrap()
+        .args(["Bash", "curl https://example.com", "--rules"])
+        .arg(f.path())
+        .assert()
+        .code(1); // ask, not deny
+}
+
+// The leading-space variant is inert for a different reason: a unit is trimmed
+// before matching, so no command ever starts with the padding. The message must
+// name that cause; the double-spaced example from the trailing case is false
+// here (`curl  x` does not match ` curl` either).
+#[test]
+fn leading_whitespace_prefix_lint_names_the_right_cause() {
+    let f = rules_file(r#"{"deny":["Bash( curl:*)"]}"#);
+    Command::cargo_bin("permcheck")
+        .unwrap()
+        .args(["Bash", "ls", "--rules"])
+        .arg(f.path())
+        .assert()
+        .stderr(predicates::str::contains("matches nothing at all"));
+}
+
+#[test]
+fn leading_whitespace_prefix_really_is_inert() {
+    // Neither the single- nor the double-spaced spelling reaches the rule.
+    let f = rules_file(r#"{"defaultMode":"ask","deny":["Bash( curl:*)"]}"#);
+    for cmd in ["curl https://example.com", "curl  https://example.com"] {
+        Command::cargo_bin("permcheck")
+            .unwrap()
+            .args(["Bash", cmd, "--rules"])
+            .arg(f.path())
+            .assert()
+            .code(1); // ask, not deny
+    }
+}
+
 #[test]
 fn clean_rules_emit_no_lint_warning() {
     let f = rules_file(RULES);

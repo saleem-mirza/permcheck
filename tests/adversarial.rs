@@ -193,6 +193,109 @@ fn parent_traversal_evades_directory_anchored_deny() {
     assert_eq!(bash("cat /tmp/../etc/shadow"), Tier::Deny);
 }
 
+// A `..` spelling used to ride a narrow allow straight out of the directory that
+// allow names. The raw command text matches the allow, the allow is a strict
+// subset of the deny, so §6.3 carved the deny away and the call ran. The
+// path-operand form (§8 step 2) re-decides the command with every operand
+// resolved; that form matches only the deny, and being an *escalation* form it is
+// decided on its own, so the allow cannot carve it out.
+//
+// This is the `rm` scratch-directory case from claude-code#79756. No reader or
+// writer vocabulary is involved, which is the point: `rm` is in none of them, and
+// the fix still holds.
+#[test]
+fn traversal_cannot_ride_a_narrow_allow_out_of_its_directory() {
+    const SCRATCH: &str = r#"{
+      "defaultMode": "ask",
+      "allow": ["Bash(rm -rf /w/.scratch/*)", "Bash(rm -rf .scratch/*)"],
+      "deny": ["Bash(rm -rf /*)"]
+    }"#;
+    let rs = load_rules_str(SCRATCH).expect("scratch rules load");
+    let d = |cmd: &str| evaluate(&rs, "Bash", &json!({ "command": cmd }), Some("/w")).tier;
+
+    // The carve-out still does its job: these are the calls the policy exists to
+    // permit, and over-denying them would defeat the whole point.
+    assert_eq!(d("rm -rf /w/.scratch/checks.log"), Tier::Allow);
+    assert_eq!(d("rm -rf .scratch/checks.log"), Tier::Allow);
+
+    // Every spelling whose real target leaves the scratch directory resolves onto
+    // the deny, absolute and relative alike.
+    assert_eq!(d("rm -rf /w/.scratch/../src"), Tier::Deny);
+    assert_eq!(d("rm -rf /w/.scratch/../../etc"), Tier::Deny);
+    assert_eq!(d("rm -rf .scratch/../src"), Tier::Deny);
+    assert_eq!(d("rm -rf ./.scratch/../src"), Tier::Deny);
+    assert_eq!(d("rm -rf /w/./.scratch/../src"), Tier::Deny);
+    // And the plain spelling of the same target was never in doubt.
+    assert_eq!(d("rm -rf /w/src"), Tier::Deny);
+}
+
+// A Bash specifier matches command text, so a rule written with a relative path
+// used to match that text from *any* directory: `Bash(rm -rf .scratch/*)` granted
+// deletion of every `.scratch` on the machine, not the project's. Absolutizing the
+// operand against the call's cwd puts the real target in front of the rules, so
+// the same command is allowed inside the project and denied outside it.
+#[test]
+fn a_relative_allow_grants_only_inside_the_directory_it_names() {
+    const SCRATCH: &str = r#"{
+      "defaultMode": "ask",
+      "allow": ["Bash(rm -rf /w/.scratch/*)", "Bash(rm -rf .scratch/*)"],
+      "deny": ["Bash(rm -rf /*)"]
+    }"#;
+    let rs = load_rules_str(SCRATCH).expect("scratch rules load");
+    let at =
+        |cwd: &str, cmd: &str| evaluate(&rs, "Bash", &json!({ "command": cmd }), Some(cwd)).tier;
+
+    // Inside the project the relative rule means what its author meant.
+    assert_eq!(at("/w", "rm -rf .scratch/x"), Tier::Allow);
+    // Anywhere else the same text names a different directory, and the deny on
+    // the tree catches it.
+    for cwd in ["/tmp", "/etc", "/", "/home/other"] {
+        assert_eq!(
+            at(cwd, "rm -rf .scratch/x"),
+            Tier::Deny,
+            "relative allow must not reach {cwd}"
+        );
+    }
+    // The absolute spelling names one directory and works from anywhere.
+    assert_eq!(at("/tmp", "rm -rf /w/.scratch/x"), Tier::Allow);
+}
+
+// The path-operand form raises only on a real rule match, so an ordinary command
+// carrying a `.` or `..` keeps whatever verdict it already had. This is the fence
+// that stops the traversal fix from turning into a blanket over-deny.
+#[test]
+fn dot_segments_in_benign_commands_are_not_over_denied() {
+    assert_eq!(bash("cat ./notes.txt"), Tier::Allow);
+    assert_eq!(bash("cat ../project/notes.txt"), Tier::Allow);
+    assert_eq!(bash("ls ./src/.."), Tier::Allow);
+    assert_eq!(bash("echo ../README.md"), Tier::Allow);
+    // A lone `.` collapses to itself, so no extra form is produced at all.
+    assert_eq!(bash("ls ."), Tier::Allow);
+}
+
+// A `~user` operand names that user's home, which the engine has no way to
+// learn, so it stays literal instead of being joined onto the cwd (§7.2).
+// Joining it would invent `/w/~alice/notes.txt`, a path nobody named, and deny
+// a command whose payload the Path family leaves at ask.
+#[test]
+fn a_tilde_user_operand_is_not_joined_onto_the_cwd() {
+    let rs = load_rules_str(r#"{"defaultMode":"ask","deny":["Bash(cat /w/*)"]}"#).unwrap();
+    let d = |cmd: &str| evaluate(&rs, "Bash", &json!({ "command": cmd }), Some("/w")).tier;
+
+    assert_eq!(d("cat ~alice/notes.txt"), Tier::Ask);
+    // The join itself still works: a relative operand lands under the cwd.
+    assert_eq!(d("cat sub/notes.txt"), Tier::Deny);
+}
+
+// The resolved form must reach a *Bash* rule without help from the cross-check,
+// which only consults `Read`/`Write`/`Edit` denies and only for commands in its
+// reader/writer tables. `curl` is denied as a Bash rule and is not a reader, so a
+// traversal spelling of its path is caught by the path form alone.
+#[test]
+fn traversal_reaches_a_bash_rule_without_the_cross_check() {
+    assert_eq!(bash("/usr/bin/../bin/curl https://x.example"), Tier::Deny);
+}
+
 #[test]
 fn benign_paths_are_allowed() {
     assert_eq!(read("/tmp/notes.txt"), Tier::Allow);
@@ -234,4 +337,71 @@ fn describe_carveout_admits_only_read_only_calls() {
         d("aws iam delete-user --user-name x # describe-me"),
         Tier::Deny
     );
+}
+
+// A quoted executable path containing spaces is one word only because of the
+// quotes. Stripping them first turns `"C:/Program Files/.../clang.exe" -c x.c`
+// into the word `C:/Program`, whose basename is `Program`, so a rule naming the
+// real binary matched nothing (claude-code#27688). Both readings must stay
+// available: the basename one so `Bash(clang.exe:*)` works, and the full-path one
+// so a deny naming the spaced path still fires.
+#[test]
+fn a_quoted_command_path_with_spaces_reaches_both_its_spellings() {
+    const P: &str = r#"{
+      "defaultMode": "ask",
+      "allow": ["Bash", "Bash(clang.exe:*)"],
+      "deny": ["Bash(/opt/my tool/bin/danger:*)"]
+    }"#;
+    let rs = load_rules_str(P).expect("rules load");
+    let d = |cmd: &str| evaluate(&rs, "Bash", &json!({ "command": cmd }), Some(CWD)).tier;
+
+    // The basename reading: the rule names the binary, not the path.
+    assert_eq!(
+        d(r#""C:/Program Files/LLVM/bin/clang.exe" -c x.c"#),
+        Tier::Allow
+    );
+    assert_eq!(d(r#"'/opt/my tool/bin/clang.exe' -c x.c"#), Tier::Allow);
+
+    // The full-path reading: a deny naming the spaced path holds through quoting.
+    assert_eq!(d(r#""/opt/my tool/bin/danger" --now"#), Tier::Deny);
+    assert_eq!(d(r#"'/opt/my tool/bin/danger' --now"#), Tier::Deny);
+    assert_eq!(d("/opt/my tool/bin/danger --now"), Tier::Deny);
+}
+
+// Residual, locked deliberately: the pipeline still produces the mangled reading
+// too, so a rule naming the path's first segment matches a command it has nothing
+// to do with. Adding the basename form above fixed the false *negative* (the real
+// binary now matches); this false *positive* predates it and removing it needs
+// quote-awareness inside the chain, which is a larger change. Locking it here so
+// the day it changes is a deliberate one.
+#[test]
+fn a_spaced_path_still_also_reads_as_its_first_segment() {
+    let rs = load_rules_str(r#"{"defaultMode":"ask","allow":["Bash(Program:*)"]}"#).unwrap();
+    let d = |cmd: &str| evaluate(&rs, "Bash", &json!({ "command": cmd }), Some(CWD)).tier;
+    assert_eq!(
+        d(r#""C:/Program Files/LLVM/bin/clang.exe" -c x.c"#),
+        Tier::Allow
+    );
+}
+
+// Quote-stripping a spaced path used to be a deny-bypass, not just a missed
+// match. `"/tmp/git evil/bin/rm" -rf x` strips to the word `/tmp/git` plus
+// arguments, whose basename is `git`, so the mangled reading `git evil/bin/rm -rf x`
+// satisfied an allow written `Bash(git:*)` while the real executable was `rm`.
+// Verified against the pre-fix binary: this returned Allow. The basename form now
+// also produces `rm -rf x`, which the deny catches, and the most restrictive unit
+// wins.
+#[test]
+fn a_quoted_path_cannot_launder_a_denied_binary_through_an_allowed_name() {
+    let rs =
+        load_rules_str(r#"{"defaultMode":"ask","allow":["Bash(git:*)"],"deny":["Bash(rm:*)"]}"#)
+            .unwrap();
+    let d = |cmd: &str| evaluate(&rs, "Bash", &json!({ "command": cmd }), Some(CWD)).tier;
+
+    assert_eq!(d("rm -rf /tmp/data"), Tier::Deny, "baseline");
+    assert_eq!(d(r#""/tmp/git evil/bin/rm" -rf /tmp/data"#), Tier::Deny);
+    assert_eq!(d(r#""/tmp/git x/rm" -rf /tmp/data"#), Tier::Deny);
+    assert_eq!(d(r#"'/tmp/git evil/bin/rm' -rf /tmp/data"#), Tier::Deny);
+    // The allow it tried to ride still works for real git.
+    assert_eq!(d("git status"), Tier::Allow);
 }

@@ -310,6 +310,25 @@ It does **not** treat a long option and its short form as equivalent. `--force` 
 
 The engine covers the clustering and ordering variants of the short flags you write. It never invents the long or short form you left out.
 
+## Path spellings are your responsibility
+
+**The engine normalizes the call, never your rule.** A specifier compiles as you wrote it, apart from the grammar itself (`~` expansion and the `//` root marker). What gets resolved is the incoming call: a path operand is expanded, absolutized against the call's `cwd`, and collapsed, so your rule is compared against the path the command really touches rather than one spelling of it.
+
+That resolved form can only *raise* a verdict, never grant one, which produces an asymmetry worth knowing before you write a rule:
+
+- An **absolute deny** covers both spellings. With `cwd` at `/proj`, `rm -rf .scratch/x` resolves to `/proj/.scratch/x` and reaches `Bash(rm -rf /*)`.
+- An **allow** covers only the spelling you wrote. Resolution cannot grant, so a relative command does not reach an absolute allow.
+
+So to permit both spellings of one directory, name both:
+
+```json
+"deny":  ["Bash(rm -rf /*)"],
+"allow": ["Bash(rm -rf /home/me/src/myproject/.scratch/*)",
+          "Bash(rm -rf .scratch/*)"]
+```
+
+Pick deliberately: the absolute form names exactly one directory and is unambiguous no matter where the agent has `cd`-ed; the relative form is portable across checkouts and machines, and covers only the relative spelling. Writing the relative form alone is safe (a relative allow cannot reach a `.scratch` outside the directory it names, because the resolved operand lands elsewhere and the deny catches it), but it is not sufficient.
+
 ## Build
 
 Requires a recent Rust toolchain (edition 2024).
