@@ -63,6 +63,77 @@ fn substitution_and_backticks_cannot_hide_denied_commands() {
     ]);
 }
 
+/// OPEN ENGINE GAP, locked at its current verdict so closing it is deliberate.
+///
+/// A command inside a subshell `(…)`, a brace group `{ …; }`, or a loop or
+/// conditional body reaches no Bash rule. The rule the operator wrote exists and
+/// names the command; the engine fails to match this spelling of it, so this is
+/// engine faithfulness, not a ruleset gap like
+/// [`documented_gaps_are_locked_honestly`] records.
+///
+/// The inconsistency is with the test above: `$(sudo …)` and `` `sudo …` `` are
+/// both denied, and only the bare paren is missed. Two causes:
+///
+/// 1. `split::scan` matches `$(`, `` ` ``, `<(`/`>(`, and `$((`, but a bare `(`
+///    falls through to the catch-all, so the unit stays `(sudo rm -rf /tmp/x)`
+///    and `Bash(sudo:*)` does not cover it.
+/// 2. Nothing strips a unit's leading shell keyword. Splitting on `;` already
+///    yields units like `then cat .env` and `do sudo …`, one keyword away from
+///    the rule.
+///
+/// Blast radius: every Bash deny, under `defaultMode: "ask"`. A policy with
+/// `defaultMode: "deny"` is unaffected, since the fall-back tier is the whole
+/// gap. Closing (1) makes `(( i++ ))` split into a unit `i++` that falls to the
+/// fall-back tier, so its verdict is pinned below too.
+#[test]
+fn shell_grouping_and_keywords_evade_every_bash_rule() {
+    // The unwrapped spellings, to prove the rules are present and that only the
+    // grouping defeats them.
+    assert_all_deny(&["sudo rm -rf /tmp/x", "kubectl delete pod x", "cat .env"]);
+
+    // Subshell.
+    assert_eq!(bash("(sudo rm -rf /tmp/x)"), Tier::Ask);
+    assert_eq!(bash("( sudo rm -rf /tmp/x )"), Tier::Ask);
+    assert_eq!(bash("(kubectl delete pod x)"), Tier::Ask);
+    assert_eq!(bash("echo a | (sudo rm -rf /tmp/x)"), Tier::Ask);
+    // The file-access cross-check reads the same unit, so it is bypassed too.
+    assert_eq!(bash("(cat .env)"), Tier::Ask);
+
+    // Brace group.
+    assert_eq!(bash("{ sudo rm -rf /tmp/x; }"), Tier::Ask);
+    assert_eq!(bash("{ kubectl delete pod x; }"), Tier::Ask);
+
+    // Leading keyword or reserved word.
+    assert_eq!(bash("! sudo rm -rf /tmp/x"), Tier::Ask);
+    assert_eq!(bash("time sudo rm -rf /tmp/x"), Tier::Ask);
+
+    // Loop and conditional bodies, which split on `;` into keyword-led units.
+    assert_eq!(bash("while true; do sudo rm -rf /tmp/x; done"), Tier::Ask);
+    assert_eq!(bash("if true; then kubectl delete pod x; fi"), Tier::Ask);
+    assert_eq!(bash("for f in a; do cat .env; done"), Tier::Ask);
+
+    // Arithmetic command, pinned before the paren-split change moves it.
+    assert_eq!(bash("(( i++ ))"), Tier::Ask);
+
+    // The fall-back tier is the entire gap: the same command against the same
+    // rules, with only `defaultMode` flipped, is blocked. That makes deny-default
+    // a real mitigation and also the reason this file must not adopt it. Flipping
+    // the shipped policy would turn every assertion above into `Deny`, which
+    // reads as a working engine while the rule still never matches.
+    assert_eq!(deny_default_bash("(sudo rm -rf /tmp/x)"), Tier::Deny);
+    assert_eq!(deny_default_bash("{ kubectl delete pod x; }"), Tier::Deny);
+}
+
+/// The reference rules with `defaultMode` flipped to `deny`, for the one
+/// assertion that has to show what the fall-back tier is hiding.
+fn deny_default_bash(cmd: &str) -> Tier {
+    let mut policy: serde_json::Value =
+        serde_json::from_str(include_str!("../rules/permcheck.json")).unwrap();
+    policy["permissions"]["defaultMode"] = json!("deny");
+    let rules = RuleSet::load_str(&policy.to_string()).unwrap();
+    evaluate(&rules, "Bash", &json!({ "command": cmd }), Some("/work")).tier
+}
+
 #[test]
 fn wrapper_commands_cannot_launder_denied_commands() {
     // `env` is allowed by `Bash(env:*)`, but it *runs* its argument command, so
