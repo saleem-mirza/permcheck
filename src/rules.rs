@@ -5,6 +5,7 @@
 use crate::matcher::{self, Matcher};
 use crate::types::{Family, Tier};
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::Read;
@@ -135,9 +136,20 @@ impl RuleSet {
     }
 
     /// Indices of exact and wildcard selectors matching `tool`, in global
-    /// tier/file order.
-    pub(crate) fn matching_rule_indices(&self, tool: &str) -> Vec<usize> {
+    /// tier/file order. Borrows the exact list when no wildcard selector matches
+    /// (the common case: a policy with no `Tool*`/`*` selectors never allocates
+    /// or sorts here), since each tool's exact list is already ascending by
+    /// `order_index`.
+    pub(crate) fn matching_rule_indices(&self, tool: &str) -> Cow<'_, [usize]> {
         let exact = self.index.get(tool).map(Vec::as_slice).unwrap_or(&[]);
+        if self.wildcard_indices.is_empty()
+            || !self
+                .wildcard_indices
+                .iter()
+                .any(|&idx| self.rules[idx].selector.matches(tool))
+        {
+            return Cow::Borrowed(exact);
+        }
         let mut out = Vec::with_capacity(exact.len() + self.wildcard_indices.len());
         out.extend_from_slice(exact);
         out.extend(
@@ -147,7 +159,7 @@ impl RuleSet {
                 .filter(|&idx| self.rules[idx].selector.matches(tool)),
         );
         out.sort_unstable();
-        out
+        Cow::Owned(out)
     }
 
     /// Rule-language containment includes both the tool selector and payload

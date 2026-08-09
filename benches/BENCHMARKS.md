@@ -9,6 +9,18 @@ The machine carried background load during this run (load average ~1.5), and
 repeat runs of untouched code moved by up to 7%. Treat anything inside ±7% as
 noise, not signal.
 
+**2026-08-09 update — `matching_rule_indices` borrows instead of allocating.**
+When a policy has no `Tool*`/`*` tool selectors (the reference set has none), the
+function now returns the already-sorted exact index list by reference rather than
+copying it into a fresh `Vec` and re-sorting on every `decide_hit` call. Bash has
+174 rules, and that list was re-sorted per unit, per escalation form, per wrapper
+stage, and per cross-check operand. Measured against a same-session baseline: the
+single-unit Bash denies improved 4-5% (`deny_aws_describe` 2.61→2.49 µs), the
+escalation-heavy git/wrapper cases 2-2.5%, and the small generic decisions 2-5%.
+Cases dominated by NFA glob matching (heavy `path` reads, `compound_pipe`) were
+flat within noise. The table medians below predate this change; the relative
+deltas above are the reliable signal.
+
 Benchmarks are grouped by matcher family, plus the one-time rule-set load. Run
 `cargo bench` to reproduce. Each case exercises a distinct decision path.
 

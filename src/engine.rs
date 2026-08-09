@@ -32,7 +32,7 @@ pub(crate) fn decide_hit<S: AsRef<str>>(
     let mut spill: Vec<&CompiledRule> = Vec::new();
     let mut best_carve: Option<(usize, &CompiledRule)> = None;
     let mut last_tier = Tier::Allow;
-    for idx in rs.matching_rule_indices(tool) {
+    for &idx in rs.matching_rule_indices(tool).iter() {
         let rule = &rs.rules[idx];
         debug_assert!(
             last_tier <= rule.tier,
