@@ -132,6 +132,10 @@ fn brace_groups_and_leading_keywords_cannot_hide_denied_commands() {
         // Negation and timing, which run the command they precede.
         "! sudo rm -rf /tmp/x",
         "time sudo rm -rf /tmp/x",
+        // `coproc` and `builtin` are command prefixes too.
+        "coproc rm -rf /tmp/x",
+        "builtin rm -rf /tmp/x",
+        "coproc cat .env", // the cross-check reaches through them as well
         "time -p sudo rm -rf /tmp/x", // `time` takes options, so it peels as a wrapper
         "! time env sudo rm -rf /tmp/x", // reserved words and wrappers interleave
         // Loop and conditional bodies.
@@ -313,6 +317,50 @@ fn wrapper_commands_cannot_launder_denied_commands() {
         "timeout 5 env kubectl delete pod x",
         "nice -n 10 aws ec2 terminate-instances",
     ]);
+}
+
+#[test]
+fn a_wrapper_option_value_cannot_launder_a_denied_command() {
+    // A wrapper option whose value is a separate token used to stop the peel on
+    // the value, so the command behind it was never decided and every deny
+    // reachable only through a stage fell back to a prompt.
+    assert_all_deny(&[
+        "timeout -s KILL 5 rm -rf /tmp/x",
+        "timeout --signal KILL 5 rm -rf /tmp/x",
+        "timeout -k 5 5 rm -rf /tmp/x",
+        "xargs -I {} rm -rf /tmp/x",
+        "time -f x rm -rf /tmp/x",
+        "doas -u root rm -rf /tmp/x",
+        "stdbuf -o 0 rm -rf /tmp/x",
+        "ionice -c 3 rm -rf /tmp/x",
+        // `-h` is both `--help` and `--host=host`, so no table resolves it. Both
+        // readings are decided, and the command is reached either way.
+        "sudo -h rm -rf /tmp/x",
+        "sudo -h myhost rm -rf /tmp/x",
+    ]);
+}
+
+#[test]
+#[cfg(windows)]
+fn an_executable_suffix_does_not_hide_a_command() {
+    // `rm` and `rm.exe` are one program on Windows, so a rule naming either
+    // catches both. One command per *consumer* of the name; the suffix and case
+    // rules themselves belong to the `prefix` and `forms` unit tests.
+    assert_all_deny(&[
+        "rm.exe -rf /tmp/x",              // identity form, no table
+        "sudo.exe -u root rm -rf /tmp/x", // wrapper table, then peeled
+        r#"python.exe -c "import os""#,   // interpreter table
+        "cat.exe /home/user/.ssh/id_rsa", // reader table, cross-check
+    ]);
+}
+
+#[test]
+#[cfg(windows)]
+fn only_the_executable_name_is_case_insensitive() {
+    // The filesystem folds case for the *name*; bash does not fold arguments,
+    // and `git PUSH` is not `git push` on any platform. Folding the whole unit
+    // would let a rule match text the shell never treats as equivalent.
+    assert_eq!(bash("git.exe PUSH --FORCE origin main"), Tier::Ask);
 }
 
 #[test]

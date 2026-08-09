@@ -59,6 +59,12 @@ fn bash_evasion_to_denied_file_is_denied() {
         "timeout 5s cat .env",                       // wrapper + duration-suffix arg
         "timeout 1.5h cat .env",                     // wrapper + fractional duration
         "nice -n 10 cat .env",                       // wrapper + option + numeric
+        "sudo -u root cat .env",                     // wrapper option taking a value
+        "env -u FOO cat .env",                       // same, unset form
+        "timeout -s KILL 5 cat .env",                // value option, then duration
+        "timeout --signal KILL 5 cat .env",          // separated long form
+        "sudo -h cat .env",                          // `-h` reading that takes none
+        "sudo -h myhost cat .env",                   // `-h` reading that takes one
         "cat < .env",                                // input redirection
         "cat .\\env",                                // backslash escape -> .env
         "grep secret .env",                          // pattern-first reader
@@ -73,6 +79,38 @@ fn bash_evasion_to_denied_file_is_denied() {
     for cmd in denied {
         assert_eq!(bash(cmd), Tier::Deny, "expected deny for: {cmd:?}");
     }
+}
+
+#[test]
+fn deciding_both_option_readings_did_not_cost_ordinary_commands() {
+    // A wrapper option whose value is a separate token leaves two readings, and
+    // both are decided (§8.2). This policy allows the wrapper *and* the command
+    // it runs, so a reading that should not exist shows up as a drift onto the
+    // fall-back instead of hiding behind an already-unmatched unit.
+    const WRAPPED: &str = r#"{
+      "allow": ["Bash(xargs:*)", "Bash(nice:*)", "Bash(timeout:*)",
+                "Bash(echo:*)", "Bash(ls:*)"],
+      "deny": ["Bash(rm -rf:*)"],
+      "defaultMode": "ask"
+    }"#;
+    let rs = load_rules_str(WRAPPED).expect("crafted rules load");
+    let tier = |cmd: &str| evaluate(&rs, "Bash", &json!({ "command": cmd }), Some(CWD)).tier;
+
+    // A value the argument peel already absorbs (`-n 1`, `5`) never headed a
+    // command, so it contributes no second reading and costs no tier.
+    assert_eq!(tier("xargs -n 1 echo hi"), Tier::Allow);
+    assert_eq!(tier("nice -n 10 ls"), Tier::Allow);
+    assert_eq!(tier("timeout 5 echo hi"), Tier::Allow);
+    assert_eq!(tier("timeout 5 echo sudo rm"), Tier::Allow);
+
+    // The command behind a value-taking option is reached.
+    assert_eq!(tier("timeout -s KILL 5 rm -rf /tmp/x"), Tier::Deny);
+    assert_eq!(tier("xargs -I {} rm -rf /tmp/x"), Tier::Deny);
+
+    // The accepted cost, unchanged from before both readings existed: the
+    // reading where `-s` takes no value makes `KILL` a command word, which
+    // matches nothing and prompts. Raising only, so the deny above still wins.
+    assert_eq!(tier("timeout -s KILL 5 ls"), Tier::Ask);
 }
 
 #[test]

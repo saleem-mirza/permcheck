@@ -6,7 +6,7 @@ use crate::engine;
 use crate::rules::RuleSet;
 use crate::types::Tier;
 
-use super::prefix::{basename, is_assignment, strip_env_assignments};
+use super::prefix::{command_name, is_assignment, name_eq, strip_env_assignments};
 use super::tokenize::{ShellWord, dequote_words, shell_words};
 
 /// The normalization pipeline behind the identity forms (§8 step 2). Each stage
@@ -20,9 +20,9 @@ const STAGES: [fn(&str) -> Option<String>; 5] = [
     git_subcommand_form,
 ];
 
-/// Upper bound on identity forms: the raw unit, one per pipeline stage, plus the
-/// off-chain parsed-basename form ([`command_basename_form`]).
-const MAX_FORMS: usize = STAGES.len() + 2;
+/// Upper bound on identity forms: the raw unit, one per pipeline stage, and the
+/// two off-chain forms ([`command_basename_form`], [`folded_command_form`]).
+const MAX_FORMS: usize = STAGES.len() + 3;
 
 /// The identity forms of one unit (§8 step 2): every spelling decided together
 /// with the raw command, plus the index of the fully-normalized one.
@@ -103,6 +103,9 @@ pub(super) fn identity_forms(cmd: &str) -> Forms<'_> {
     if let Some(basenamed) = command_basename_form(cmd) {
         forms.push_off_chain(basenamed);
     }
+    if let Some(folded) = folded_command_form(cmd) {
+        forms.push_off_chain(folded);
+    }
     forms
 }
 
@@ -149,19 +152,40 @@ fn raise(rs: &RuleSet, verdict: &mut Verdict, candidate: &str) -> bool {
     verdict.0 != Tier::Deny
 }
 
-/// Reduce a leading executable path to its basename from the parsed first shell
-/// word, reading the raw unit (§8 step 2). Runs **off** the [`STAGES`] chain: at
-/// the front it would drop the full-path spelling a deny relies on, failing open.
-fn command_basename_form(cmd: &str) -> Option<String> {
+/// The unit's command word reduced to [`command_name`], the word as parsed, and
+/// where the rest of the unit starts. Reads the raw unit (§8 step 2), whose
+/// parsed boundaries preserve an executable path containing spaces.
+fn command_word(cmd: &str) -> Option<(String, String, usize)> {
     let command = shell_words(cmd)
         .into_iter()
         .filter(|word| word.redirect.is_none())
         .find(|word| !is_assignment(&word.value))?;
-    let base = basename(&command.value);
-    if base.is_empty() || base == command.value {
+    let base = command_name(&command.value).to_string();
+    (!base.is_empty()).then_some((base, command.value, command.range.end))
+}
+
+/// Reduce a leading executable path to its basename from the parsed first shell
+/// word (§8 step 2). Runs **off** the [`STAGES`] chain: at the front it would
+/// drop the full-path spelling a deny relies on, failing open.
+fn command_basename_form(cmd: &str) -> Option<String> {
+    let (base, value, rest) = command_word(cmd)?;
+    if base == value {
         return None;
     }
-    Some(format!("{base}{}", &cmd[command.range.end..]))
+    Some(format!("{base}{}", &cmd[rest..]))
+}
+
+/// The command word folded to lower case, which on Windows names the same
+/// executable (`RM.EXE` and `rm`). `None` on POSIX, where names are byte-exact,
+/// and when the word is already folded. Arguments keep their case on both:
+/// only executable resolution is case-insensitive, `git PUSH` is not `git push`.
+fn folded_command_form(cmd: &str) -> Option<String> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let (base, _, rest) = command_word(cmd)?;
+    let folded = base.to_ascii_lowercase();
+    (folded != base).then(|| format!("{folded}{}", &cmd[rest..]))
 }
 
 /// Remove shell quoting and escaping: `"sudo" rm`, `su"do" rm`, `\sudo rm`, and
@@ -279,8 +303,8 @@ const INTERPRETERS: &[Interp] = &[
 /// `python3 -m http.server` both reach `python3 -m http.server`.
 fn inline_exec_candidate(cmd: &str) -> Option<String> {
     let mut toks = cmd.split_ascii_whitespace().peekable();
-    let name = basename(toks.next()?);
-    let interp = INTERPRETERS.iter().find(|i| i.name == name)?;
+    let name = command_name(toks.next()?);
+    let interp = INTERPRETERS.iter().find(|i| name_eq(i.name, name))?;
     while let Some(tok) = toks.next() {
         if tok == "--" {
             break;
@@ -288,7 +312,7 @@ fn inline_exec_candidate(cmd: &str) -> Option<String> {
         let b = tok.as_bytes();
         if b.first() != Some(&b'-') {
             if interp.subcommand.contains(&tok) {
-                return Some(format!("{name} {tok}"));
+                return Some(format!("{} {tok}", interp.name));
             }
             continue;
         }
@@ -296,7 +320,7 @@ fn inline_exec_candidate(cmd: &str) -> Option<String> {
             let head = rest.split('=').next().unwrap_or(rest);
             for &(long, canon) in interp.long {
                 if long.strip_prefix("--") == Some(head) {
-                    return Some(format!("{name} {canon}"));
+                    return Some(format!("{} {canon}", interp.name));
                 }
             }
             continue;
@@ -305,7 +329,7 @@ fn inline_exec_candidate(cmd: &str) -> Option<String> {
         // form, bundled (`-We`) or with an attached value (`-mhttp.server`).
         for (offset, &c) in b[1..].iter().enumerate() {
             if interp.short.contains(&c) {
-                return Some(format!("{name} -{}", c as char));
+                return Some(format!("{} -{}", interp.name, c as char));
             }
             if interp.value_short.contains(&c) {
                 // The value follows the flag in this token, or is the next token.
@@ -315,7 +339,7 @@ fn inline_exec_candidate(cmd: &str) -> Option<String> {
                 } else {
                     Some(attached)
                 };
-                return value.map(|value| format!("{name} -{} {value}", c as char));
+                return value.map(|value| format!("{} -{} {value}", interp.name, c as char));
             }
             if !c.is_ascii_alphanumeric() {
                 break;
@@ -378,7 +402,7 @@ fn resolved_command(cmd: &str, cwd: Option<&str>, windows_raw: bool) -> Option<S
         out.push_str(&cmd[cursor..word.range.start]);
         let reading = word_reading(cmd, word, windows_raw);
         if i == command {
-            out.push_str(basename(reading));
+            out.push_str(command_name(reading));
         } else if let Some(resolved) = &replacements[i] {
             out.push_str(resolved);
         } else {
@@ -473,7 +497,7 @@ fn basename_command(cmd: &str) -> Option<String> {
     if !exe.contains('/') {
         return None;
     }
-    let base = basename(exe);
+    let base = command_name(exe);
     if base.is_empty() || base == exe {
         return None;
     }
@@ -601,6 +625,18 @@ mod pipeline_tests {
             identity_forms(r#"FOO="bar" sudo rm"#).canonical(),
             "sudo rm"
         );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn the_command_word_folds_but_its_arguments_do_not() {
+        // Windows resolves the executable name case-insensitively, so the folded
+        // word is another spelling of it. Arguments keep their case: `git PUSH`
+        // is not `git push`, so folding them would match text bash never equates.
+        let forms = identity_forms("RM.EXE -rf X");
+        let seen: Vec<&str> = forms.candidates().iter().map(|c| c.as_ref()).collect();
+        assert!(seen.contains(&"rm -rf X"), "{seen:?}");
+        assert!(!seen.iter().any(|form| form.contains("-rf x")), "{seen:?}");
     }
 
     #[test]

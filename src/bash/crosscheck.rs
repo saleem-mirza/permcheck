@@ -3,7 +3,9 @@
 use crate::engine;
 use crate::rules::RuleSet;
 
-use super::prefix::{basename, peel_wrappers};
+use super::prefix::{
+    ValueOpts, basename, command_name, consumes_next_value, name_eq, name_in, peel_wrappers,
+};
 use super::tokenize::{RedirectKind, Token, tokenize};
 
 const READERS: &[&str] = &[
@@ -72,14 +74,9 @@ enum ReaderOpt<'a> {
     AuxFile(Option<&'a str>),
 }
 
-/// Options taking a **separate** value that names neither a pattern nor a file.
-/// The value must be consumed or it is misread as an operand. Deliberately short:
-/// skipping a real file operand under-denies, so varying-arity options are left out.
-struct ValueOpts {
-    short: &'static [u8],
-    long: &'static [&'static str],
-}
-
+/// Reader options taking a **separate** value that names neither a pattern nor a
+/// file. Deliberately short: skipping a real file operand under-denies, so
+/// varying-arity options are left out.
 const GREP_VALUE_OPTS: ValueOpts = ValueOpts {
     short: b"mABCdD",
     long: &[
@@ -108,29 +105,13 @@ const NO_VALUE_OPTS: ValueOpts = ValueOpts {
 };
 
 fn value_opts(name: &str) -> &'static ValueOpts {
-    match name {
-        "grep" | "egrep" | "fgrep" | "zgrep" | "rgrep" => &GREP_VALUE_OPTS,
-        "awk" | "gawk" => &AWK_VALUE_OPTS,
-        _ => &NO_VALUE_OPTS,
+    if name_in(name, &["grep", "egrep", "fgrep", "zgrep", "rgrep"]) {
+        &GREP_VALUE_OPTS
+    } else if name_in(name, &["awk", "gawk"]) {
+        &AWK_VALUE_OPTS
+    } else {
+        &NO_VALUE_OPTS
     }
-}
-
-/// Does `option` consume the **next** token as its value for reader `name`? Only
-/// the separated spelling does; an attached value is self-contained, and in a
-/// cluster the value-taking letter ends the token (`-im` consumes, `-mi` does not).
-fn consumes_next_value(name: &str, option: &str) -> bool {
-    let opts = value_opts(name);
-    if option.starts_with("--") {
-        return opts.long.contains(&option);
-    }
-    let Some(cluster) = option.strip_prefix('-') else {
-        return false;
-    };
-    cluster.bytes().all(|c| c.is_ascii_alphanumeric())
-        && cluster
-            .bytes()
-            .next_back()
-            .is_some_and(|last| opts.short.contains(&last))
 }
 
 fn reader_option(op: &str) -> Option<ReaderOpt<'_>> {
@@ -206,12 +187,22 @@ pub(super) fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> Option<
             Token::Redirect(..) => None,
         })
         .collect();
-    let words = peel_wrappers(&words);
+    // A wrapper option of unknown arity leaves more than one candidate command
+    // word (§8.2); the most-peeled reading comes first, so the hit it names is
+    // the accurate one whenever it fires.
+    peel_wrappers(&words)
+        .into_iter()
+        .find_map(|reading| simple_command_hit(rs, reading, cwd))
+}
+
+/// Return the file operand by which one reading of a simple command reads or
+/// writes a denied path.
+fn simple_command_hit(rs: &RuleSet, words: &[&str], cwd: Option<&str>) -> Option<CrossHit> {
     let &command = words.first()?;
-    let name = basename(command);
+    let name = command_name(command);
     let operands = &words[1..];
 
-    if name == "dd" {
+    if name_eq(name, "dd") {
         for operand in operands {
             if let Some(path) = operand.strip_prefix("if=")
                 && !path.is_empty()
@@ -226,11 +217,11 @@ pub(super) fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> Option<
                 return Some(hit);
             }
         }
-    } else if READERS.contains(&name) {
+    } else if name_in(name, READERS) {
         if let Some(hit) = reader_reads_denied(rs, name, operands, cwd) {
             return Some(hit);
         }
-    } else if WRITERS.contains(&name) {
+    } else if name_in(name, WRITERS) {
         for operand in operands {
             if operand.starts_with('-') || operand.contains('=') {
                 continue;
@@ -239,11 +230,11 @@ pub(super) fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> Option<
                 return Some(hit);
             }
         }
-    } else if name == "cp" || name == "mv" {
+    } else if name_in(name, &["cp", "mv"]) {
         return cp_mv_denied(rs, operands, cwd);
-    } else if name == "curl" {
+    } else if name_eq(name, "curl") {
         return curl_reads_denied(rs, operands, cwd);
-    } else if name == "wget" {
+    } else if name_eq(name, "wget") {
         return wget_reads_denied(rs, operands, cwd);
     }
     None
@@ -255,7 +246,7 @@ fn reader_reads_denied(
     operands: &[&str],
     cwd: Option<&str>,
 ) -> Option<CrossHit> {
-    let pattern_first = PATTERN_FIRST.contains(&name);
+    let pattern_first = name_in(name, PATTERN_FIRST);
     let mut pattern_consumed = false;
     let mut end_of_options = false;
     let mut i = 0;
@@ -282,7 +273,7 @@ fn reader_reads_denied(
                 {
                     return Some(hit);
                 }
-            } else if consumes_next_value(name, operand) {
+            } else if consumes_next_value(value_opts(name), operand) {
                 // The option's value is a separate token. Leaving it in place
                 // shifts every later operand by one, so the pattern is read as a
                 // file and a benign command is denied (§8.3).
