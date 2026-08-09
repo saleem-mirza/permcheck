@@ -78,6 +78,26 @@ Invoked as `permcheck --hook --rules <path>`. Wired into Claude Code
   input (command, path, URL, query), or the tool name when the tool takes no
   payload. Error decisions (below) use a descriptive reason instead.
 
+  An `ask` or `deny` reason additionally carries a parenthesized clause naming what
+  produced it, because `permissionDecisionReason` is the only field Claude Code
+  reads back and so the only place a block can be explained. Without it, a policy
+  hole and a policy decision are indistinguishable: `deny: ls | frobnicate` and
+  `deny: ls | sudo whoami` differ only in which one means the allow list is short
+  an entry. The clause names the deciding statement when the payload split into
+  more than one, and then what decided it:
+
+  ```
+  deny: ls; sudo whoami (statement 2 of 2: "sudo whoami" matched Bash(sudo:*))
+  deny: ls | frobnicate (statement 2 of 2: "frobnicate" no rule matched, defaultMode=deny)
+  deny: command sudo whoami (wrapper stage "sudo whoami" matched Bash(sudo:*))
+  deny: cat .env (reaches denied path ".env" via Read(//**/.env))
+  ask: figlet hello (no rule matched, defaultMode=ask)
+  allow: ls -la
+  ```
+
+  `allow` never carries a clause: nothing needs explaining. Quoted fragments are
+  clipped, so an oversized payload cannot produce an oversized reason.
+
 - **Fail-closed**: any error (unparseable stdin, unreadable/invalid rules file, a
   missing or empty `tool_name`, or an internal panic) yields `deny` (still exit
   0). An unrecognized non-empty tool name is not an error: it routes to Generic
@@ -484,6 +504,10 @@ decomposes it and takes the **most restrictive** verdict.
    command) the splitter stops descending and the command is **denied**, since a
    partial split could miss a denied inner command (§9.1).
 
+   Splitting a conditional, loop, or group leaves its **closer** as a unit of its
+   own (`fi`, `done`, `esac`, `}`), and an assignment with no command (`FOO=bar`)
+   is a unit too. Neither runs anything, so neither is decided (§8 step 4).
+
 2. **Per unit**, strip leading `NAME=value` environment assignments, then decide
    the trimmed unit string against the Bash matchers via §6.3. The unit is also
    matched in normalized forms so a rule cannot be dodged by dressing up the
@@ -582,6 +606,24 @@ decomposes it and takes the **most restrictive** verdict.
    fully-normalized spelling from the pipeline above, so a disguised wrapper
    (`"env" aws …`) is still recognized as one.
 
+   Peeling runs **one stage at a time**, and every stage is decided, not only the
+   command left at the end. A Bash specifier matches at the head of a unit, so a
+   rule naming a wrapper (`Bash(sudo:*)`) fires only while that wrapper is the
+   first word: peeling `command sudo …` straight through to the innermost command
+   would leave the `sudo` deny with nothing to match. Deciding each stage puts
+   every peeled word back at a head. This matters for ordinary shell, since §8.1
+   hands the matcher `then sudo …` and `do sudo …` for the body of any `if` or
+   `while`.
+
+   Stages fold in with the same most-restrictive rule, and only `deny` ends the
+   walk early. A stage that matches no rule reports the fall-back tier, which is
+   indistinguishable from a rule that says `ask`, so stopping at `ask` would skip
+   a later stage that denies. `deny` is the one verdict no further stage outranks.
+
+   Each stage re-decides a suffix of the unit, so a unit of nothing but stacked
+   wrappers costs work quadratic in its length. Stages are capped at **32** and a
+   unit past the cap is denied rather than decided on the stages that fit (§9.1).
+
    The reserved-word list stops at words a command follows. `for`, `case`, and
    `in` are excluded because a variable or pattern follows them, and `fi`, `done`,
    `esac`, and `}` because nothing follows them. Words are matched after quote
@@ -636,7 +678,29 @@ decomposes it and takes the **most restrictive** verdict.
 
 4. **Aggregate**: the command's verdict is the most restrictive unit verdict
    (the first unit that reaches the maximal tier). The emitted reason echoes the
-   whole command, not the individual unit.
+   whole command, and names the deciding unit in its clause (§2.1).
+
+   A unit that **runs no command** is not decided and contributes nothing: a
+   closer or bare reserved word from §8 step 1, or an assignment husk. Charging
+   those the `defaultMode` fall-back blocked a unit that never executes, which is
+   invisible while the fall-back is `ask` and unconditional once an operator sets
+   it to `deny`. No rule set can repair it, since nobody writes `Bash(fi:*)`.
+
+   When *every* unit runs nothing, the command is **allowed**. The fall-back is
+   for a command no rule named, not for a payload containing no command, so it
+   does not apply and the answer does not depend on `defaultMode`. The same holds
+   when the splitter yields no units at all, which happens only for whitespace, a
+   bare separator, a comment, or an empty subshell. A comment ends at its newline,
+   so a command on the next line is still a unit of its own and still decided:
+   `# c` is allowed, `# c\nsudo …` is not.
+
+   This is the only step that lowers a verdict, so it reads the **raw** spelling.
+   `'fi'`, `"fi"`, `\fi`, and `./fi` all normalize to the word `fi` and `./fi`
+   runs a program, so a skip keyed on the normalized word would drop a real
+   command. Wrappers are never skipped either: `sudo` alone is an executable, and
+   a rule naming it has to keep matching. Dropping an assignment husk is sound
+   only because §8 step 1 already lifted any substitution in the value into a unit
+   of its own, so `FOO=$(curl …)` still decides `curl …`.
 
 ## 9. Fail-closed and non-goals
 
@@ -650,6 +714,9 @@ decomposes it and takes the **most restrictive** verdict.
   convert it to `deny` and the hook would exit non-zero with no decision — which
   Claude Code treats as a non-blocking error, letting the call run. The Bash
   splitter therefore caps substitution nesting and denies past the cap (§8.1).
+- Work that grows faster than the input is capped the same way, since a hook that
+  takes seconds to answer is a hook an operator turns off: wrapper peel stages are
+  bounded at 32 per unit and a unit past the bound is denied (§8 step 2).
 - Unreadable/invalid rules file, unparseable stdin, or a missing/empty tool name
   → `deny` (hook) or exit `3` (CLI, config errors only). An unrecognized
   non-empty tool name routes to Generic and is not an error (§5).

@@ -1,9 +1,6 @@
-//! Winner selection and candidate forms (§6.3, §7).
-//!
-//! [`decide_tier`] is the carve-out-aware selection used by every family: a deny
-//! holds unless a matching allow/ask is a subset carve-out of it. [`decide_payload`]
-//! is the whole decision for Path and Generic tools; Bash adds the compound step
-//! in [`crate::bash`].
+//! Winner selection and candidate forms (§6.3, §7). [`decide_hit`] is the
+//! carve-out-aware selection every family uses; [`decide_payload`] is the whole
+//! decision for Path and Generic tools, and Bash adds its compound step.
 
 use crate::matcher::is_absolute;
 #[cfg(windows)]
@@ -12,37 +9,28 @@ use crate::rules::{CompiledRule, MAX_PAYLOAD_BYTES, RuleSet};
 use crate::types::{Decision, Family, Tier};
 use std::borrow::Cow;
 
-/// Decide the tier for `tool` given the payload's candidate forms (§6.3).
-///
-/// A matching deny holds unless some matching allow/ask rule is a **carve-out** of
-/// it, i.e. its match-set is a strict subset of that deny
-/// ([`crate::matcher::is_strict_carve_out`]). If any matching deny is left
-/// un-carved, the decision is `deny`. Otherwise the winner is chosen among the
-/// matching allow/ask rules by [`selection_key`].
-///
-/// Returns `None` when nothing matches (caller applies the `defaultMode`
-/// fall-back, §6.4).
-pub(crate) fn decide_tier<S: AsRef<str>>(
+/// Decide the tier for `tool`, plus the rule that set it as an index into
+/// `rs.rules` (§6.3, §2.1). A matching deny holds unless an allow/ask is a strict
+/// carve-out of it. `None` means nothing matched, so the caller falls back (§6.4).
+pub(crate) fn decide_hit<S: AsRef<str>>(
     rs: &RuleSet,
     tool: &str,
     candidates: &[S],
-) -> Option<Tier> {
+) -> Option<(Tier, Option<usize>)> {
     if candidates
         .iter()
         .any(|candidate| candidate.as_ref().len() > MAX_PAYLOAD_BYTES)
     {
-        return Some(Tier::Deny);
+        return Some((Tier::Deny, None));
     }
-    // Loaded rule indices are tier-ordered Allow -> Ask -> Deny. Record only the
-    // matching non-denies; when a deny matches, every possible carve-out has
-    // already been seen, so an uncarved deny can terminate immediately.
-    // The inline array plus a lazy spill keeps the common case off the heap:
-    // `Vec::new` allocates nothing until the first push.
+    // Rule indices are tier-ordered Allow -> Ask -> Deny, so by the time a deny
+    // matches every possible carve-out has been seen and an uncarved deny can
+    // return at once. The inline array plus lazy spill keeps that off the heap.
     const CAP: usize = 8;
     let mut buf: [Option<&CompiledRule>; CAP] = [None; CAP];
     let mut n = 0usize;
     let mut spill: Vec<&CompiledRule> = Vec::new();
-    let mut best_carve: Option<&CompiledRule> = None;
+    let mut best_carve: Option<(usize, &CompiledRule)> = None;
     let mut last_tier = Tier::Allow;
     for idx in rs.matching_rule_indices(tool) {
         let rule = &rs.rules[idx];
@@ -59,7 +47,7 @@ pub(crate) fn decide_tier<S: AsRef<str>>(
                     break;
                 }
                 Ok(false) => {}
-                Err(()) => return Some(Tier::Deny),
+                Err(()) => return Some((Tier::Deny, None)),
             }
         }
         if !matched {
@@ -73,7 +61,7 @@ pub(crate) fn decide_tier<S: AsRef<str>>(
                 .chain(spill.iter().copied())
                 .any(|carve| rs.is_strict_carve_out(carve, rule));
             if !carved {
-                return Some(Tier::Deny);
+                return Some((Tier::Deny, Some(idx)));
             }
             continue;
         }
@@ -84,12 +72,12 @@ pub(crate) fn decide_tier<S: AsRef<str>>(
             spill.push(rule);
         }
         best_carve = Some(match best_carve {
-            None => rule,
-            Some(current) if selection_key(rule) > selection_key(current) => rule,
+            None => (idx, rule),
+            Some((_, current)) if selection_key(rule) > selection_key(current) => (idx, rule),
             Some(current) => current,
         });
     }
-    best_carve.map(|rule| rule.tier)
+    best_carve.map(|(idx, rule)| (rule.tier, Some(idx)))
 }
 
 /// Winner-selection ordering (§6.3): maximize specificity, then tier (`ask` over
@@ -108,8 +96,34 @@ pub fn decide_payload(rs: &RuleSet, tool: &str, payload: &str, cwd: Option<&str>
         Family::Path => path_candidates(payload, cwd),
         _ => generic_candidates(payload),
     };
-    let tier = decide_tier(rs, tool, &candidates).unwrap_or(rs.default_tier); // fall-back §6.4
-    Decision::for_call(tier, tool, payload)
+    // Fall-back §6.4. A single call is a one-statement list, attributed like a
+    // Bash unit (§2.1).
+    let hit = decide_hit(rs, tool, &candidates);
+    let tier = hit.map_or(rs.default_tier, |(tier, _)| tier);
+    Decision::for_call_because(tier, tool, payload, || match hit {
+        Some((_, Some(idx))) => Some(Clause::Rule(&rs.rules[idx].source)),
+        Some((_, None)) => None,
+        None => Some(Clause::FallBack(rs.default_tier)),
+    })
+}
+
+/// Why a call got its tier, rendered into the reason (§2.1). A `Display` rather
+/// than a `String`, so a decision costs one allocation either way.
+pub(crate) enum Clause<'a> {
+    /// The rule that decided it, as the operator wrote it.
+    Rule(&'a str),
+    /// Nothing matched. Naming the configured mode is what separates a policy
+    /// hole from a policy decision (§6.4).
+    FallBack(Tier),
+}
+
+impl std::fmt::Display for Clause<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Clause::Rule(source) => write!(f, "matched {source}"),
+            Clause::FallBack(tier) => write!(f, "no rule matched, defaultMode={}", tier.label()),
+        }
+    }
 }
 
 /// Candidate forms for a Path payload (§7.1, §7.2): the raw payload, its
@@ -124,26 +138,9 @@ pub(crate) fn path_candidates<'a>(payload: &'a str, cwd: Option<&str>) -> Vec<Co
     v
 }
 
-/// Resolve one Bash command operand to the path it really names (§7.2), for the
-/// path-operand escalation form (§8 step 2).
-///
-/// Returns `None` for a token that names no path, so an ordinary word is left
-/// exactly as written and produces no extra form. The gate opens for a token that
-/// carries a `.` or `..` segment, that is relative and contains a separator, or
-/// that starts with `~`.
-///
-/// The relative case is why a rule anchored at a real directory means what it
-/// says. A Bash specifier matches command text, so `Bash(rm -rf .scratch/*)`
-/// otherwise matches `rm -rf .scratch/x` from *any* directory, granting deletion
-/// of every `.scratch` on the machine rather than the project's. Absolutizing the
-/// operand against the call's `cwd` puts the real target in front of the rules,
-/// where a deny on the tree can see it.
-///
-/// When the gate opens, the token is put through the same resolution a Path
-/// payload gets: separators folded, `~` expanded, a relative token absolutized
-/// against `cwd`, and `.`/`..` collapsed. Resolution is lexical only, so a
-/// wildcard in the token is carried through untouched — sound because a shell `*`
-/// matches within one segment, so `dir/*/../x` really does name `dir/x`.
+/// Resolve one Bash operand to the path it really names (§7.2, §8 step 2), or
+/// `None` for a token naming no path. Absolutizing against `cwd` is what stops
+/// `Bash(rm -rf .scratch/*)` matching a `.scratch` in any directory at all.
 pub(crate) fn resolve_operand(token: &str, cwd: Option<&str>) -> Option<String> {
     let folded = crate::matcher::fold_separators(token);
     if !names_a_path(&folded) {
@@ -153,10 +150,8 @@ pub(crate) fn resolve_operand(token: &str, cwd: Option<&str>) -> Option<String> 
 }
 
 /// Every additive path spelling shared by Path payloads and Bash operands, in
-/// resolution order: Windows root anchoring, same-drive joining, tilde expansion,
-/// CWD absolutization, then lexical `.`/`..` collapse of each prior form. The raw
-/// spelling is used as the seed but omitted from `forms`; `resolved` explicitly
-/// carries the real final spelling so callers never depend on candidate order.
+/// resolution order: root anchoring, drive join, `~`, CWD, then `.`/`..` collapse.
+/// `resolved` carries the final spelling, so callers never depend on form order.
 struct PathResolution<'a> {
     forms: Vec<Cow<'a, str>>,
     resolved: Option<String>,
@@ -211,17 +206,9 @@ fn resolve_path<'a>(path: &'a str, cwd: Option<&str>) -> PathResolution<'a> {
     PathResolution { forms, resolved }
 }
 
-/// Could this command word name a file, and is it worth resolving?
-///
-/// Conservative on both sides. A word must start like a filename, which drops
-/// options (`-rf`, `--exclude=x`), redirections (`>out`, `2>&1`), and operators.
-/// It must then name a directory (`~`, a separator) or be a bare `.`/`..`, which
-/// drops ordinary arguments (`push`, `main`, `fix`). A `scheme://host/path` URL is
-/// excluded: its slashes are not a filesystem path, and the Generic family
-/// already matches it by host.
-///
-/// Being wrong in the permissive direction only costs a wasted candidate, because
-/// the form it feeds can only raise a verdict and only on a real rule match.
+/// Could this command word name a file, and is it worth resolving? A word must
+/// start like a filename and then name a directory or be a bare `.`/`..`, which
+/// drops options, redirections, ordinary arguments, and URLs.
 pub(crate) fn names_a_path(word: &str) -> bool {
     let starts_like_a_name = word
         .chars()
@@ -248,11 +235,9 @@ fn has_dot_segment(path: &str) -> bool {
     path.split('/').any(|s| s == "." || s == "..")
 }
 
-/// Lexically resolve `.` and `..` segments of `path` without touching the
-/// filesystem (no symlink following, §9.2). Returns the collapsed form only when
-/// it differs from `path`; `None` when there is nothing to collapse. An absolute
-/// path stays rooted and a `..` at the root is dropped; a relative path keeps a
-/// leading `..` it cannot cancel.
+/// Lexically resolve `.` and `..` in `path`, never touching the filesystem (§9.2).
+/// `None` when there is nothing to collapse. An absolute path stays rooted and a
+/// root `..` is dropped; a relative path keeps a leading `..` it cannot cancel.
 fn lexical_normalize(path: &str) -> Option<String> {
     if !has_dot_segment(path) {
         return None;
@@ -320,28 +305,35 @@ fn url_host_ref(s: &str) -> Option<&str> {
     if host.is_empty() { None } else { Some(host) }
 }
 
-/// True if any **deny**-tier rule for one of `tools` matches `path` (§8). Used by
-/// the Bash file-access cross-check, which only ever raises to `deny`.
-///
-/// Candidates are prepared once into [`PathProbe`]s and reused across rules; a
-/// candidate with no glob metacharacter reduces to a plain matcher test.
-pub(crate) fn path_hits_deny(rs: &RuleSet, tools: &[&str], path: &str, cwd: Option<&str>) -> bool {
+/// Whether a deny-tier rule for one of `tools` matches `path`, and which rule did
+/// (§8.3). The inner `None` means the oversized-path guard denied without a rule.
+/// Candidates are prepared once into [`PathProbe`]s and reused across rules.
+pub(crate) fn path_deny_hit(
+    rs: &RuleSet,
+    tools: &[&str],
+    path: &str,
+    cwd: Option<&str>,
+) -> Option<Option<usize>> {
     if path.len() > MAX_PAYLOAD_BYTES {
-        return true;
+        return Some(None);
     }
     let candidates = path_candidates(path, cwd);
     let probes: Vec<_> = candidates
         .iter()
         .map(|candidate| crate::matcher::PathProbe::new(candidate.as_ref()))
         .collect();
-    tools.iter().any(|&tool| {
-        rs.matching_rule_indices(tool).iter().any(|&idx| {
-            let rule = &rs.rules[idx];
-            rule.tier == Tier::Deny
-                && probes
-                    .iter()
-                    .any(|probe| probe.hits(&rule.matcher).unwrap_or(true))
-        })
+    tools.iter().find_map(|&tool| {
+        rs.matching_rule_indices(tool)
+            .iter()
+            .copied()
+            .find(|&idx| {
+                let rule = &rs.rules[idx];
+                rule.tier == Tier::Deny
+                    && probes
+                        .iter()
+                        .any(|probe| probe.hits(&rule.matcher).unwrap_or(true))
+            })
+            .map(Some)
     })
 }
 

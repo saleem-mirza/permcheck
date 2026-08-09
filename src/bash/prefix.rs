@@ -4,34 +4,45 @@ use super::split::{skip_quoted, skip_single};
 use super::tokenize::shell_words;
 
 /// Wrapper commands whose leading options are peeled to reach the real command.
-///
-/// `time` earns its place here rather than in [`RESERVED`] because it takes its
-/// own options (`time -p cmd`), which the argument peeling below already drops.
+/// `time` belongs here rather than in [`RESERVED`] because it takes its own
+/// options (`time -p cmd`), which the argument peeling below drops.
 const WRAPPERS: &[&str] = &[
     "sudo", "doas", "env", "timeout", "nice", "ionice", "nohup", "stdbuf", "setsid", "command",
     "xargs", "time",
 ];
 
-/// Shell reserved words that introduce a command without changing which command
-/// runs, so the command after one has to be decided on its own. Splitting on `;`
-/// (§8.1) already leaves a conditional or loop body as a unit like `then cat .env`
-/// or `do sudo …`, one word short of the rule that names it.
-///
-/// Unlike a [`WRAPPERS`] entry these take no options, so only the word itself is
-/// dropped: peeling arguments after `if` would eat the condition's own operands.
-/// The list stops at words a command follows. `for`, `case`, and `in` are left out
-/// because a variable or pattern follows them, not a command, and `fi`, `done`,
-/// `esac`, and `}` because nothing follows them at all.
-///
-/// Matching is exact, against the word the lexical pass produced, which has had
-/// its quoting removed. Quoting does strip a word's reserved meaning in the shell
-/// (`'{' cmd` runs a command named `{`, it does not open a group), so that
-/// spelling is peeled here when the shell would not peel it. Both callers only
-/// ever raise a verdict, so the cost is an over-deny on a command the shell would
-/// have failed to find anyway.
+/// Shell reserved words a command follows, so the command after one is decided on
+/// its own. Only the word is dropped, never arguments, which would eat a
+/// condition's operands. Matched after quote removal, which over-denies `'{' cmd`.
 const RESERVED: &[&str] = &[
     "{", "!", "if", "then", "elif", "else", "while", "until", "do",
 ];
+
+/// Reserved words that *close* a construct, so §8.1 leaves each as a unit of its
+/// own: `fi`, `done`, `}`. They run no command.
+const CLOSERS: &[&str] = &["fi", "done", "esac", "}", ";;"];
+
+/// True when a unit runs no command, so it carries no verdict (§8 step 4). The
+/// only place the engine lowers one, so it reads the **raw** slice: `'fi'` and
+/// `./fi` normalize to `fi`, and `./fi` runs a program. Wrappers never skip.
+pub(super) fn executes_nothing(unit: &str) -> bool {
+    let trimmed = unit.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if trimmed
+        .split_ascii_whitespace()
+        .all(|word| RESERVED.contains(&word) || CLOSERS.contains(&word))
+    {
+        return true;
+    }
+    strip_env_assignments(trimmed).trim().is_empty()
+}
+
+/// Most peel stages per unit, past which it is denied. Each stage re-decides a
+/// suffix, so an unbounded chain is quadratic in the unit's length. Real commands
+/// stack a handful (`! time env sudo timeout 5 nice cmd` is six).
+const MAX_STAGES: usize = 32;
 
 /// Strip leading `NAME=value` environment assignments from a unit.
 pub fn strip_env_assignments(unit: &str) -> &str {
@@ -70,11 +81,9 @@ fn is_wrapper_arg(w: &str) -> bool {
     w.starts_with('-') || w.contains('=') || is_duration(w)
 }
 
-/// A bare numeric wrapper argument, including `timeout`'s duration forms
-/// (`5`, `5s`, `1m`, `1.5h`, `2d`). Recognizing these lets wrapper peeling reach
-/// the wrapped command: without it, `timeout 5s sudo rm -rf /` stops at `5s` and
-/// launders the `sudo` deny down to the fall-back tier. Peeling only ever raises a
-/// verdict, so widening what counts as a wrapper argument cannot loosen a decision.
+/// A bare numeric wrapper argument, including `timeout` durations (`5s`, `1.5h`).
+/// Without these, `timeout 5s sudo …` stops at `5s` and launders the `sudo` deny.
+/// Peeling only raises, so widening this cannot loosen a decision.
 fn is_duration(w: &str) -> bool {
     // An optional single unit suffix (`timeout` accepts one, e.g. `5s`, not `1h30m`).
     let num = match w.as_bytes().last() {
@@ -121,9 +130,10 @@ pub(super) fn basename(word: &str) -> &str {
     word.rsplit(['/', '\\']).next().unwrap_or(word)
 }
 
-/// Strip leading wrapper commands and shell reserved words, returning the command
-/// string behind them.
-pub(super) fn strip_leading_wrappers(cmd: &str) -> Option<&str> {
+/// The command behind **each** leading wrapper or reserved word, outermost first,
+/// plus whether [`MAX_STAGES`] truncated it (caller fails closed, §9.1). Every
+/// stage, because a rule naming a wrapper only matches in head position.
+pub(super) fn strip_leading_wrappers(cmd: &str) -> (Vec<&str>, bool) {
     let words: Vec<_> = shell_words(cmd)
         .into_iter()
         .filter(|word| word.redirect.is_none())
@@ -132,30 +142,32 @@ pub(super) fn strip_leading_wrappers(cmd: &str) -> Option<&str> {
     while words.get(i).is_some_and(|word| is_assignment(&word.value)) {
         i += 1;
     }
-    let mut peeled = false;
+    let mut stages = Vec::new();
     while let Some(word) = words.get(i) {
         // A reserved word carries no options of its own, so only it is dropped;
         // peeling arguments after `if` would eat the condition's own operands.
         if RESERVED.contains(&word.value.as_str()) {
-            peeled = true;
             i += 1;
-            continue;
-        }
-        if !WRAPPERS.contains(&basename(&word.value)) {
+        } else if WRAPPERS.contains(&basename(&word.value)) {
+            i += 1;
+            while words.get(i).is_some_and(|word| is_wrapper_arg(&word.value)) {
+                i += 1;
+            }
+        } else {
             break;
         }
-        peeled = true;
-        i += 1;
-        while words.get(i).is_some_and(|word| is_wrapper_arg(&word.value)) {
-            i += 1;
+        // Nothing follows, so there is no command to decide.
+        let Some(next) = words.get(i) else { break };
+        let rest = cmd[next.range.start..].trim_end();
+        if rest.is_empty() {
+            break;
         }
+        if stages.len() == MAX_STAGES {
+            return (stages, true);
+        }
+        stages.push(rest);
     }
-
-    let rest = words
-        .get(i)
-        .map(|word| cmd[word.range.start..].trim_end())
-        .unwrap_or("");
-    (peeled && !rest.is_empty()).then_some(rest)
+    (stages, false)
 }
 
 pub(super) fn is_assignment(word: &str) -> bool {

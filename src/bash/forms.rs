@@ -9,20 +9,9 @@ use crate::types::Tier;
 use super::prefix::{basename, is_assignment, strip_env_assignments};
 use super::tokenize::{ShellWord, dequote_words, shell_words};
 
-/// The normalization pipeline behind the identity forms (§8 step 2), in order.
-/// Each stage runs on the **previous stage's output**, and every intermediate
-/// spelling is kept as a candidate, so a command wearing several disguises at
-/// once still reduces to the spelling a rule names.
-///
-/// The order is load-bearing, and so is composing the stages instead of applying
-/// each to the raw command: quoting hides every later stage's marker (a quoted
-/// `"/usr/bin/git"` shows no `/` to reduce), and irregular whitespace hides the
-/// rest. Applied independently, as this did before, `/usr/bin/git  push --force`
-/// produced `git  push --force` and `/usr/bin/git push --force` and so matched
-/// neither the deny rule nor anything else.
-///
-/// A stage returns `None` when it changes nothing, which is the common case, so
-/// a plain command yields a single borrowed form and allocates nothing.
+/// The normalization pipeline behind the identity forms (§8 step 2). Each stage
+/// runs on the previous stage's output and every intermediate spelling is kept:
+/// composing matters, since quoting hides every later stage's marker.
 const STAGES: [fn(&str) -> Option<String>; 5] = [
     strip_shell_quoting,
     assignment_stripped_form,
@@ -117,61 +106,52 @@ pub(super) fn identity_forms(cmd: &str) -> Forms<'_> {
     forms
 }
 
-/// The tier of a single unit against the Bash matchers, taking the rule set's
+/// A tier and the rule that set it, as an index into `rs.rules`. `None` when the
+/// tier came from the `defaultMode` fall-back or a §9.1 guard.
+pub(super) type Verdict = (Tier, Option<usize>);
+
+/// The verdict for a single unit against the Bash matchers, taking the rule set's
 /// `defaultMode` fall-back when nothing matches.
-pub(super) fn unit_tier(rs: &RuleSet, forms: &Forms<'_>, cwd: Option<&str>) -> Tier {
-    let mut tier = engine::decide_tier(rs, "Bash", forms.candidates()).unwrap_or(rs.default_tier);
+pub(super) fn unit_tier(rs: &RuleSet, forms: &Forms<'_>, cwd: Option<&str>) -> Verdict {
+    let mut verdict: Verdict =
+        engine::decide_hit(rs, "Bash", forms.candidates()).unwrap_or((rs.default_tier, None));
 
     // Escalation forms (§8 step 2) are each decided on their own and only ever
     // raise the verdict. They read the canonical spelling, so a quoted or padded
     // command reaches its flag and interpreter rules the same as a bare one.
     let canonical = forms.canonical();
-    if tier != Tier::Deny {
-        for_each_flag_candidate(canonical, |candidate| raise(rs, &mut tier, candidate));
+    if verdict.0 != Tier::Deny {
+        for_each_flag_candidate(canonical, |candidate| raise(rs, &mut verdict, candidate));
     }
-    if tier != Tier::Deny
+    if verdict.0 != Tier::Deny
         && let Some(candidate) = inline_exec_candidate(canonical)
     {
-        raise(rs, &mut tier, &candidate);
+        raise(rs, &mut verdict, &candidate);
     }
-    if tier != Tier::Deny {
+    if verdict.0 != Tier::Deny {
         for_each_path_candidate(forms.raw(), cwd, |candidate| {
-            raise(rs, &mut tier, candidate)
+            raise(rs, &mut verdict, candidate)
         });
     }
-    tier
+    verdict
 }
 
-/// Decide one escalation candidate on its own and fold it in, never lowering
-/// `tier` (§8 step 2). Returns whether the caller should keep offering candidates,
-/// which is false once `deny` is reached and nothing can change the outcome.
-fn raise(rs: &RuleSet, tier: &mut Tier, candidate: &str) -> bool {
-    if *tier != Tier::Deny
-        && let Some(candidate_tier) = engine::decide_tier(rs, "Bash", &[candidate])
+/// Decide one escalation candidate and fold it in, never lowering the verdict
+/// (§8 step 2). Returns false once `deny` is reached, so the caller stops. The
+/// rule is replaced only on a strict raise, keeping the cause that set the tier.
+fn raise(rs: &RuleSet, verdict: &mut Verdict, candidate: &str) -> bool {
+    if verdict.0 != Tier::Deny
+        && let Some((tier, rule)) = engine::decide_hit(rs, "Bash", &[candidate])
+        && tier > verdict.0
     {
-        *tier = (*tier).max(candidate_tier);
+        *verdict = (tier, rule);
     }
-    *tier != Tier::Deny
+    verdict.0 != Tier::Deny
 }
 
-/// Reduce a leading executable path to its basename using the parsed first shell
-/// word, reading the raw unit (§8 step 2).
-///
-/// Quotes are the only thing marking a path that contains spaces as a single word,
-/// so once [`strip_shell_quoting`] has run,
-/// `"C:/Program Files/LLVM/bin/clang.exe" -c x.c` reads as the word `C:/Program`
-/// followed by arguments, and [`basename_command`] reduces it to `Program`. A rule
-/// written `Bash(clang.exe:*)` then matches nothing (claude-code#27688).
-///
-/// This runs **off** the [`STAGES`] chain rather than at the front of it. Putting
-/// it first looked right and was a fail-open regression: the chain would then
-/// start from `clang.exe …`, and the quote-stripped full-path spelling that a deny
-/// naming `/opt/my tool/bin/danger` relies on would never be produced at all. Both
-/// spellings have to remain candidates, so this contributes one extra form and
-/// leaves the pipeline's own output untouched.
-///
-/// Parsing rather than searching for a matching quote covers ordinary, ANSI-C,
-/// and locale quoting and keeps POSIX backslashes as filename characters.
+/// Reduce a leading executable path to its basename from the parsed first shell
+/// word, reading the raw unit (§8 step 2). Runs **off** the [`STAGES`] chain: at
+/// the front it would drop the full-path spelling a deny relies on, failing open.
 fn command_basename_form(cmd: &str) -> Option<String> {
     let command = shell_words(cmd)
         .into_iter()
@@ -184,18 +164,9 @@ fn command_basename_form(cmd: &str) -> Option<String> {
     Some(format!("{base}{}", &cmd[command.range.end..]))
 }
 
-/// Remove shell quoting and escaping, leaving the characters the shell passes to
-/// the command: `"sudo" rm`, `su"do" rm`, `\sudo rm`, and `$'sudo' rm` all reduce
-/// to `sudo rm`. Returns `None` when the unit carries no quote or escape
-/// character, which is the common case.
-///
-/// Stripping covers the whole unit, not only the command word, because a rule
-/// names argument text too (`Bash(git push --force:*)` against
-/// `git push "--force"`). Operators, redirections, and spacing survive; the
-/// whitespace stage collapses those.
-///
-/// The escape sequences inside `$'…'` are not decoded (§9.2), and a backslash
-/// inside double quotes stays literal, matching what `super::tokenize` does.
+/// Remove shell quoting and escaping: `"sudo" rm`, `su"do" rm`, `\sudo rm`, and
+/// `$'sudo' rm` all reduce to `sudo rm`. Covers the whole unit, not just the
+/// command word, since a rule names argument text too. `$'…'` is not decoded.
 fn strip_shell_quoting(cmd: &str) -> Option<String> {
     dequote_words(cmd)
 }
@@ -354,23 +325,9 @@ fn inline_exec_candidate(cmd: &str) -> Option<String> {
     None
 }
 
-/// Visit the command with every path operand resolved to the path it really
-/// names (§7.2, §8 step 2).
-///
-/// Each parsed shell word goes through [`engine::resolve_operand`], which returns
-/// `None` for a word that names no path and for one that already resolves to
-/// itself. Parsed boundaries are load-bearing: `"scratch dir"/../src` is one
-/// operand even though its dequoted value contains whitespace.
-///
-/// This is the form that stops a traversal spelling from riding a narrow allow
-/// past a broad deny. Being an escalation form is load-bearing: decided on its
-/// own it cannot be carved out by an allow that matched the raw spelling, which
-/// is exactly what an identity form would allow to happen.
-///
-/// On Windows an unquoted backslash can be read either as shell escaping or as a
-/// path separator, depending on the caller's shell. Both readings are offered and
-/// escalation remains monotone, so the ambiguity can only make the verdict more
-/// restrictive (§9.2).
+/// Visit the command with every path operand resolved to the path it really names
+/// (§7.2, §8 step 2). An escalation form on purpose: decided on its own it cannot
+/// be carved out by an allow that matched the raw spelling.
 fn for_each_path_candidate(cmd: &str, cwd: Option<&str>, mut visit: impl FnMut(&str) -> bool) {
     let mut seen = Vec::new();
     let raw_windows = (cfg!(windows) && cmd.contains('\\')).then_some(true);
@@ -624,7 +581,7 @@ mod pipeline_tests {
     #[test]
     fn converging_stages_do_not_duplicate_candidates() {
         // A stage that reproduces an earlier form reuses it, so the candidate
-        // list never carries repeats into `decide_tier`.
+        // list never carries repeats into `decide_hit`.
         let forms = identity_forms("git push --force");
         assert_eq!(forms.candidates().len(), 1);
         let forms = identity_forms("git  push --force");

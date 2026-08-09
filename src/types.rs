@@ -1,8 +1,8 @@
-//! Core data types + payload extraction (§5, §6.2).
-//!
-//! [`Tier`] is the three-way decision lattice, [`Decision`] is the engine's
-//! output, and [`Family`] routes a tool to one of three matcher families.
-//! [`extract_payload`] pulls the string that gets matched out of `tool_input`.
+//! Core data types and payload extraction (§5, §6.2). [`Tier`] is the decision
+//! lattice, [`Decision`] the engine's output, [`Family`] routes a tool to a matcher
+//! family, and [`extract_payload`] pulls the matched string from `tool_input`.
+
+use std::fmt;
 
 use serde_json::{Value, json};
 
@@ -34,16 +34,34 @@ pub struct Decision {
 }
 
 impl Decision {
-    /// Build the canonical decision for a tool call (§2.1): the reason is
-    /// `<label>: <payload>`, or `<label>: <tool>` when the tool takes no payload
-    /// (the extracted payload is empty). This is the single place the §2.1 reason
-    /// form is constructed, so the library and the binary never diverge.
+    /// The canonical decision for a tool call (§2.1): the reason is
+    /// `<label>: <payload>`, or `<label>: <tool>` for a tool with no payload. The
+    /// single place that form is built, so library and binary cannot diverge.
     pub fn for_call(tier: Tier, tool: &str, payload: &str) -> Self {
         let what = if payload.is_empty() { tool } else { payload };
         Decision {
             tier,
             reason: format!("{}: {}", tier.label(), what),
         }
+    }
+
+    /// [`Decision::for_call`] plus a clause naming what produced the tier, keeping
+    /// the §2.1 prefix. `permissionDecisionReason` is the only field Claude Code
+    /// reads back, so it is the sole channel for explaining a block.
+    pub(crate) fn for_call_because<D, F>(tier: Tier, tool: &str, payload: &str, clause: F) -> Self
+    where
+        D: fmt::Display,
+        F: FnOnce() -> Option<D>,
+    {
+        let what = if payload.is_empty() { tool } else { payload };
+        // Written straight into the one format that builds the reason: building the
+        // clause separately, or appending it, costs an extra allocation per
+        // decision and measured 30-70% slower on the smallest ones.
+        let reason = match (tier != Tier::Allow).then(clause).flatten() {
+            Some(clause) => format!("{}: {what} ({clause})", tier.label()),
+            None => format!("{}: {what}", tier.label()),
+        };
+        Decision { tier, reason }
     }
 
     /// A fail-closed `deny` carrying a descriptive reason instead of the uniform
@@ -106,11 +124,9 @@ impl Family {
     }
 }
 
-/// Extract the primary payload string from a tool's `tool_input` (§5).
-///
-/// Returns the empty string when the expected field is missing or the tool
-/// takes no string payload (e.g. `TodoWrite`), in which case only a bare rule
-/// can match it.
+/// Extract the primary payload string from a tool's `tool_input` (§5). Empty when
+/// the field is missing or the tool takes no string payload (`TodoWrite`), in which
+/// case only a bare rule can match it.
 pub fn extract_payload(tool: &str, input: &Value) -> String {
     extract_payload_ref(tool, input).to_owned()
 }
@@ -128,16 +144,9 @@ pub(crate) fn extract_payload_ref<'a>(tool: &str, input: &'a Value) -> &'a str {
         "WebFetch" => field("url"),
         "WebSearch" => field("query"),
         "SlashCommand" => field("command"),
-        // Generic fallback: the lexicographically-first (by field name)
-        // non-empty string field of tool_input, which is the behavior SPEC §5
-        // pins.
-        //
-        // The key order is computed here rather than inherited from iteration
-        // order. `serde_json::Map` is a `BTreeMap` only while the
-        // `preserve_order` feature is off, and features unify across the whole
-        // build: one dependency anywhere in the graph turning it on would swap
-        // in an `IndexMap` and silently redefine this as "first inserted field",
-        // changing decisions with no compile error and no test failure.
+        // The lexicographically-first non-empty string field, per SPEC §5. Key
+        // order is computed here, not inherited: `preserve_order` would otherwise
+        // silently redefine this as "first inserted field".
         _ => input.as_object().and_then(|map| {
             map.iter()
                 .filter(|(_, value)| value.as_str().is_some_and(|s| !s.is_empty()))

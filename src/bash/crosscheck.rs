@@ -72,21 +72,9 @@ enum ReaderOpt<'a> {
     AuxFile(Option<&'a str>),
 }
 
-/// Options that take a **separate** value and name neither a pattern nor a file,
-/// keyed by reader. Their value has to be consumed, because a leftover value is
-/// misread as the next operand: `grep -m 5 .env notes.txt` took `5` as the
-/// pattern and then checked `.env` as a file, denying a command that only ever
-/// searched `notes.txt`.
-///
-/// The table is deliberately short, and it lists only options whose value is
-/// mandatory and separable. Skipping a token that is really a file operand would
-/// under-deny, which is the dangerous direction, so an option is left out
-/// whenever its arity varies: `sed -i` takes a mandatory suffix on BSD and an
-/// optional attached one on GNU, and `--color` takes a value only in the
-/// `=` form. Both stay unlisted, which costs one harmless extra path check.
-///
-/// An option that names a file (`-f`, `--file`, `--exclude-from`) belongs in
-/// [`reader_option`] instead, so its value is checked rather than skipped.
+/// Options taking a **separate** value that names neither a pattern nor a file.
+/// The value must be consumed or it is misread as an operand. Deliberately short:
+/// skipping a real file operand under-denies, so varying-arity options are left out.
 struct ValueOpts {
     short: &'static [u8],
     long: &'static [&'static str],
@@ -127,13 +115,9 @@ fn value_opts(name: &str) -> &'static ValueOpts {
     }
 }
 
-/// Does `option` consume the **next** token as its value for reader `name`?
-///
-/// Only the separated spelling does. An attached value is self-contained
-/// (`-m5`, `-A3`, `--max-count=5`), and in a cluster the value-taking letter
-/// ends the token, so anything after it is the attached value (`-im` consumes
-/// the next token, `-mi` carries `i` as the value). `grep`'s `-NUM` form is a
-/// self-contained option and is left alone.
+/// Does `option` consume the **next** token as its value for reader `name`? Only
+/// the separated spelling does; an attached value is self-contained, and in a
+/// cluster the value-taking letter ends the token (`-im` consumes, `-mi` does not).
 fn consumes_next_value(name: &str, option: &str) -> bool {
     let opts = value_opts(name);
     if option.starts_with("--") {
@@ -183,18 +167,34 @@ fn reader_option(op: &str) -> Option<ReaderOpt<'_>> {
     None
 }
 
-/// Return whether a simple command reads or writes a denied path.
-pub(super) fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> bool {
+/// Which file operand tripped the cross-check and the deny rule that stopped it,
+/// so a decision can name the path rather than echo the command (§2.1).
+pub(super) struct CrossHit {
+    pub(super) operand: String,
+    pub(super) rule: Option<usize>,
+}
+
+/// Check one operand against the deny rules for `tools`. The only place a
+/// [`CrossHit`] is built, so every call site reports the operand it tested.
+fn hits(rs: &RuleSet, tools: &[&str], path: &str, cwd: Option<&str>) -> Option<CrossHit> {
+    engine::path_deny_hit(rs, tools, path, cwd).map(|rule| CrossHit {
+        operand: path.to_string(),
+        rule,
+    })
+}
+
+/// Return the file operand by which a simple command reads or writes a denied path.
+pub(super) fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> Option<CrossHit> {
     let tokens = tokenize(cmd);
 
     for token in &tokens {
         if let Token::Redirect(kind, target) = token {
             let hit = match kind {
-                RedirectKind::In => engine::path_hits_deny(rs, &["Read"], target, cwd),
-                _ => engine::path_hits_deny(rs, &["Write", "Edit"], target, cwd),
+                RedirectKind::In => hits(rs, &["Read"], target, cwd),
+                _ => hits(rs, &["Write", "Edit"], target, cwd),
             };
-            if hit {
-                return true;
+            if hit.is_some() {
+                return hit;
             }
         }
     }
@@ -207,9 +207,7 @@ pub(super) fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> bool {
         })
         .collect();
     let words = peel_wrappers(&words);
-    let Some(&command) = words.first() else {
-        return false;
-    };
+    let &command = words.first()?;
     let name = basename(command);
     let operands = &words[1..];
 
@@ -217,40 +215,46 @@ pub(super) fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> bool {
         for operand in operands {
             if let Some(path) = operand.strip_prefix("if=")
                 && !path.is_empty()
-                && engine::path_hits_deny(rs, &["Read"], path, cwd)
+                && let Some(hit) = hits(rs, &["Read"], path, cwd)
             {
-                return true;
+                return Some(hit);
             }
             if let Some(path) = operand.strip_prefix("of=")
                 && !path.is_empty()
-                && engine::path_hits_deny(rs, &["Write", "Edit"], path, cwd)
+                && let Some(hit) = hits(rs, &["Write", "Edit"], path, cwd)
             {
-                return true;
+                return Some(hit);
             }
         }
     } else if READERS.contains(&name) {
-        if reader_reads_denied(rs, name, operands, cwd) {
-            return true;
+        if let Some(hit) = reader_reads_denied(rs, name, operands, cwd) {
+            return Some(hit);
         }
     } else if WRITERS.contains(&name) {
         for operand in operands {
             if operand.starts_with('-') || operand.contains('=') {
                 continue;
             }
-            if engine::path_hits_deny(rs, &["Write", "Edit"], operand, cwd) {
-                return true;
+            if let Some(hit) = hits(rs, &["Write", "Edit"], operand, cwd) {
+                return Some(hit);
             }
         }
-    } else if ((name == "cp" || name == "mv") && cp_mv_denied(rs, operands, cwd))
-        || (name == "curl" && curl_reads_denied(rs, operands, cwd))
-        || (name == "wget" && wget_reads_denied(rs, operands, cwd))
-    {
-        return true;
+    } else if name == "cp" || name == "mv" {
+        return cp_mv_denied(rs, operands, cwd);
+    } else if name == "curl" {
+        return curl_reads_denied(rs, operands, cwd);
+    } else if name == "wget" {
+        return wget_reads_denied(rs, operands, cwd);
     }
-    false
+    None
 }
 
-fn reader_reads_denied(rs: &RuleSet, name: &str, operands: &[&str], cwd: Option<&str>) -> bool {
+fn reader_reads_denied(
+    rs: &RuleSet,
+    name: &str,
+    operands: &[&str],
+    cwd: Option<&str>,
+) -> Option<CrossHit> {
     let pattern_first = PATTERN_FIRST.contains(&name);
     let mut pattern_consumed = false;
     let mut end_of_options = false;
@@ -274,9 +278,9 @@ fn reader_reads_denied(rs: &RuleSet, name: &str, operands: &[&str], cwd: Option<
                 if checks_file
                     && let Some(value) = value
                     && !value.is_empty()
-                    && engine::path_hits_deny(rs, &["Read"], value, cwd)
+                    && let Some(hit) = hits(rs, &["Read"], value, cwd)
                 {
-                    return true;
+                    return Some(hit);
                 }
             } else if consumes_next_value(name, operand) {
                 // The option's value is a separate token. Leaving it in place
@@ -290,19 +294,17 @@ fn reader_reads_denied(rs: &RuleSet, name: &str, operands: &[&str], cwd: Option<
             pattern_consumed = true;
             continue;
         }
-        if engine::path_hits_deny(rs, &["Read"], operand, cwd) {
-            return true;
+        if let Some(hit) = hits(rs, &["Read"], operand, cwd) {
+            return Some(hit);
         }
     }
-    false
+    None
 }
 
-/// `cp` and `mv` touch two sides, and both are checked: they **read** every
-/// source and **overwrite** the destination. Sources go against the `Read` deny
-/// rules, because copying a secret out exposes it exactly as `cat`-ing it does
-/// (`cp .env /tmp/leak`); the destination goes against `Write`/`Edit` deny,
-/// because replacing a protected file is how a policy gets swapped out.
-fn cp_mv_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> bool {
+/// `cp` and `mv` touch two sides and both are checked. Sources go against `Read`
+/// deny, since `cp .env /tmp/leak` exposes a secret exactly as `cat` does; the
+/// destination goes against `Write`/`Edit`, since that is how a policy is swapped.
+fn cp_mv_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> Option<CrossHit> {
     let mut target_dir = None;
     let mut positionals = Vec::new();
     let mut end_options = false;
@@ -328,9 +330,16 @@ fn cp_mv_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> bool {
         }
     }
 
-    let reads = |path: &str| !path.is_empty() && engine::path_hits_deny(rs, &["Read"], path, cwd);
-    let writes =
-        |path: &str| !path.is_empty() && engine::path_hits_deny(rs, &["Write", "Edit"], path, cwd);
+    let reads = |path: &str| {
+        (!path.is_empty())
+            .then(|| hits(rs, &["Read"], path, cwd))
+            .flatten()
+    };
+    let writes = |path: &str| {
+        (!path.is_empty())
+            .then(|| hits(rs, &["Write", "Edit"], path, cwd))
+            .flatten()
+    };
 
     // With `-t <dir>` every positional is a source; otherwise the last operand is
     // the destination and the rest are sources.
@@ -338,22 +347,22 @@ fn cp_mv_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> bool {
         Some(_) => positionals.as_slice(),
         None => positionals.split_last().map_or(&[][..], |(_, rest)| rest),
     };
-    if sources.iter().any(|source| reads(source)) {
-        return true;
+    if let Some(hit) = sources.iter().find_map(|source| reads(source)) {
+        return Some(hit);
     }
 
     if let Some(directory) = target_dir {
-        if writes(directory) {
-            return true;
+        if let Some(hit) = writes(directory) {
+            return Some(hit);
         }
         let base = directory.trim_end_matches('/');
         return positionals
             .iter()
-            .any(|source| writes(&format!("{base}/{}", basename(source))));
+            .find_map(|source| writes(&format!("{base}/{}", basename(source))));
     }
     positionals
         .split_last()
-        .is_some_and(|(destination, _)| writes(destination))
+        .and_then(|(destination, _)| writes(destination))
 }
 
 fn long_value<'a>(
@@ -407,7 +416,7 @@ fn curl_file_ref(value: &str) -> Option<&str> {
     value.find('<').map(|position| &value[position + 1..])
 }
 
-fn curl_reads_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> bool {
+fn curl_reads_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> Option<CrossHit> {
     let mut i = 0;
     while i < operands.len() {
         let operand = operands[i];
@@ -415,8 +424,10 @@ fn curl_reads_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> bool
         if let Some(path) = long_value(operand, "--upload-file", operands, &mut i)
             .or_else(|| short_value(operand, b'T', operands, &mut i))
         {
-            if !path.is_empty() && engine::path_hits_deny(rs, &["Read"], path, cwd) {
-                return true;
+            if !path.is_empty()
+                && let Some(hit) = hits(rs, &["Read"], path, cwd)
+            {
+                return Some(hit);
             }
             continue;
         }
@@ -431,15 +442,15 @@ fn curl_reads_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> bool
         if let Some(value) = data
             && let Some(path) = curl_file_ref(value)
             && !path.is_empty()
-            && engine::path_hits_deny(rs, &["Read"], path, cwd)
+            && let Some(hit) = hits(rs, &["Read"], path, cwd)
         {
-            return true;
+            return Some(hit);
         }
     }
-    false
+    None
 }
 
-fn wget_reads_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> bool {
+fn wget_reads_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> Option<CrossHit> {
     let mut i = 0;
     while i < operands.len() {
         let operand = operands[i];
@@ -447,10 +458,10 @@ fn wget_reads_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> bool
         if let Some(path) = long_value(operand, "--post-file", operands, &mut i)
             .or_else(|| long_value(operand, "--body-file", operands, &mut i))
             && !path.is_empty()
-            && engine::path_hits_deny(rs, &["Read"], path, cwd)
+            && let Some(hit) = hits(rs, &["Read"], path, cwd)
         {
-            return true;
+            return Some(hit);
         }
     }
-    false
+    None
 }

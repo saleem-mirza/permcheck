@@ -1,9 +1,6 @@
-//! Configurable unmatched-command fall-back via `defaultMode` (§6.4).
-//!
-//! `defaultMode: "ask"` makes a call that matches no rule decide `ask`; any other
-//! value (including `"deny"`, the native `"default"`, garbage, or a missing key)
-//! stays fail-closed at `deny`. The Bash cross-check and explicit denies are
-//! unaffected — they still win over the fall-back.
+//! Configurable unmatched-call fall-back via `defaultMode` (§6.4). `"ask"` decides
+//! `ask`; any other value, including a missing key, stays fail-closed at `deny`.
+//! Explicit denies and the cross-check still win over the fall-back.
 
 use permcheck::rules::RuleSet;
 use permcheck::types::Tier;
@@ -87,15 +84,36 @@ fn ask_mode_honored_in_top_level_form() {
 }
 
 #[test]
-fn empty_bash_command_uses_fallback_tier() {
-    assert_eq!(
-        tier(r#"{"permissions":{"defaultMode":"ask"}}"#, "Bash", "   "),
-        Tier::Ask
-    );
-    assert_eq!(
-        tier(r#"{"permissions":{"defaultMode":"deny"}}"#, "Bash", "   "),
-        Tier::Deny
-    );
+fn a_bash_command_that_runs_nothing_is_allowed() {
+    // The fall-back is for a command no rule named, not one with no command in it,
+    // so the answer must not depend on `defaultMode`.
+    for command in ["   ", "", "\n", ";", ";;", "# just a comment", "( )"] {
+        for mode in ["ask", "deny"] {
+            let rules = format!(r#"{{"permissions":{{"defaultMode":"{mode}"}}}}"#);
+            assert_eq!(
+                tier(&rules, "Bash", command),
+                Tier::Allow,
+                "{mode}-default: {command:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_comment_cannot_swallow_the_command_after_it() {
+    // Why the case above is safe: a comment ends at its newline, so a command on
+    // the next line is still its own unit.
+    let rules = r#"{"permissions":{"defaultMode":"ask","deny":["Bash(sudo:*)"]}}"#;
+    for command in [
+        "# c\nsudo whoami",
+        "ls # c\nsudo whoami",
+        "ls; # c\nsudo whoami",
+        "# $(sudo whoami)\nsudo whoami",
+    ] {
+        assert_eq!(tier(rules, "Bash", command), Tier::Deny, "{command:?}");
+    }
+    // A substitution that only ever appears inside a comment runs nothing.
+    assert_eq!(tier(rules, "Bash", "# $(sudo whoami)"), Tier::Allow);
 }
 
 #[test]

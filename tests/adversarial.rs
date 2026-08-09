@@ -1,9 +1,6 @@
-//! Adversarial / evasion tests driving the public engine API end to end.
-//!
-//! These lock the security posture: obfuscated or wrapped commands that reach a
-//! denied file, compound-command hiding, and traversal paths must still resolve
-//! to `deny`, while legitimate look-alikes must NOT be over-denied. A crafted
-//! rule set (not the reference file) keeps the expectations self-contained.
+//! Adversarial / evasion tests driving the public engine API end to end. Wrapped
+//! or obfuscated commands reaching a denied file must resolve to `deny`, and
+//! look-alikes must not over-deny. A crafted rule set keeps these self-contained.
 
 use permcheck::{Tier, evaluate, load_rules_str};
 use serde_json::json;
@@ -89,10 +86,9 @@ fn specific_deny_beats_broad_allow() {
 
 #[test]
 fn identity_normalizations_compose() {
-    // §8 step 2: each stage runs on the previous stage's output, so a command
-    // wearing several disguises still reduces to the spelling the deny names.
-    // Isolated on a crafted rule set: only `Bash(git push --force:*)` and
-    // `Bash(curl:*)` deny here, so a hit proves the pipeline reached the rule.
+    // §8 step 2: each stage runs on the previous stage's output, so several
+    // disguises still reduce to the spelling the deny names. Only two rules deny
+    // here, so a hit proves the pipeline reached the rule.
     let denied = [
         "git push --force",                      // no disguise, the baseline
         "/usr/bin/git push --force",             // basename alone
@@ -113,10 +109,8 @@ fn identity_normalizations_compose() {
 
 #[test]
 fn reserved_word_prefix_is_still_peeled() {
-    // Same shape as the wrapper test below, for the shell reserved words that
-    // introduce a command. `curl` is the denied payload and every other word here
-    // is allowed, so a deny proves the word was peeled and the command behind it
-    // decided on its own.
+    // Shell reserved words that introduce a command. `curl` is the denied payload
+    // and every other word is allowed, so a deny proves the word was peeled.
     let denied = [
         "{ curl http://example.com; }",
         "! curl http://example.com",
@@ -152,11 +146,9 @@ fn reserved_words_do_not_over_deny_ordinary_commands() {
     // than inheriting the inner command's allow.
     assert_eq!(bash("sudo rm notes.txt"), Tier::Ask);
 
-    // What this rule set cannot show: it names no rule for `time` or `!` and sets
-    // no `defaultMode`, so a unit led by one resolves to deny under §6.4 whether
-    // or not the word is peeled. Confirmed identical before and after this change.
-    // The shipped ask-default policy is where a benign `time ls` is observable, so
-    // `reference_evasion.rs` carries those assertions.
+    // This rule set names no rule for `time` or `!`, so a unit led by one denies
+    // under §6.4 either way. The shipped ask-default policy is where a benign
+    // `time ls` is observable, so `reference_evasion.rs` asserts that.
 }
 
 #[test]
@@ -181,10 +173,9 @@ fn quoted_wrapper_is_still_peeled() {
 
 #[test]
 fn quoted_flags_reach_the_escalation_forms() {
-    // The clustered-short-flag and interpreter candidates read the canonical
-    // spelling, so quoting a flag no longer takes it out of their reach. `rm` is
-    // ask-tier here and `python3 *` is allowed, so these assert the canonical
-    // form is what gets built, not that a deny fires.
+    // The flag and interpreter candidates read the canonical spelling, so quoting
+    // a flag no longer puts it out of reach. These assert the canonical form is
+    // built, not that a deny fires.
     assert_eq!(bash(r#"rm "-rf" scratch"#), Tier::Ask);
     assert_eq!(bash(r#"python3 "-c" "import os""#), Tier::Allow);
 }
@@ -249,25 +240,16 @@ fn path_traversal_and_forms_resolve_to_deny() {
 
 #[test]
 fn parent_traversal_evades_directory_anchored_deny() {
-    // A `..` segment routes an absolute path out of and back into a denied
-    // directory. `path_candidates` collapses `.`/`..` lexically, so
-    // `/tmp/../etc/shadow` resolves to `/etc/shadow` and hits `Read(/etc/**)`.
-    // Filename-anchored denies (`.env*`) are immune anyway because `**` catches
-    // any suffix; directory-prefix denies rely on this collapse.
+    // A `..` routes an absolute path back into a denied directory.
+    // `path_candidates` collapses it lexically, so `/tmp/../etc/shadow` hits
+    // `Read(/etc/**)`. Directory-prefix denies rely on this collapse.
     assert_eq!(read("/tmp/../etc/shadow"), Tier::Deny);
     assert_eq!(bash("cat /tmp/../etc/shadow"), Tier::Deny);
 }
 
-// A `..` spelling used to ride a narrow allow straight out of the directory that
-// allow names. The raw command text matches the allow, the allow is a strict
-// subset of the deny, so §6.3 carved the deny away and the call ran. The
-// path-operand form (§8 step 2) re-decides the command with every operand
-// resolved; that form matches only the deny, and being an *escalation* form it is
-// decided on its own, so the allow cannot carve it out.
-//
-// This is the `rm` scratch-directory case from claude-code#79756. No reader or
-// writer vocabulary is involved, which is the point: `rm` is in none of them, and
-// the fix still holds.
+// A `..` spelling used to ride a narrow allow out of the directory it names, the
+// raw text matching the allow that carved the deny away. The path-operand form is
+// decided on its own, so the allow cannot carve it out (claude-code#79756).
 #[test]
 fn traversal_cannot_ride_a_narrow_allow_out_of_its_directory() {
     const SCRATCH: &str = r#"{
@@ -294,11 +276,9 @@ fn traversal_cannot_ride_a_narrow_allow_out_of_its_directory() {
     assert_eq!(d("rm -rf /w/src"), Tier::Deny);
 }
 
-// A Bash specifier matches command text, so a rule written with a relative path
-// used to match that text from *any* directory: `Bash(rm -rf .scratch/*)` granted
-// deletion of every `.scratch` on the machine, not the project's. Absolutizing the
-// operand against the call's cwd puts the real target in front of the rules, so
-// the same command is allowed inside the project and denied outside it.
+// A Bash specifier matches command text, so `Bash(rm -rf .scratch/*)` used to
+// grant deletion of every `.scratch` on the machine. Absolutizing against the
+// call's cwd allows it inside the project and denies it outside.
 #[test]
 fn a_relative_allow_grants_only_inside_the_directory_it_names() {
     const SCRATCH: &str = r#"{
@@ -338,10 +318,9 @@ fn dot_segments_in_benign_commands_are_not_over_denied() {
     assert_eq!(bash("ls ."), Tier::Allow);
 }
 
-// A `~user` operand names that user's home, which the engine has no way to
-// learn, so it stays literal instead of being joined onto the cwd (§7.2).
-// Joining it would invent `/w/~alice/notes.txt`, a path nobody named, and deny
-// a command whose payload the Path family leaves at ask.
+// A `~user` operand names a home the engine cannot learn, so it stays literal
+// rather than joining onto the cwd (§7.2). Joining would invent
+// `/w/~alice/notes.txt` and deny a command the Path family leaves at ask.
 #[test]
 fn a_tilde_user_operand_is_not_joined_onto_the_cwd() {
     let rs = load_rules_str(r#"{"defaultMode":"ask","deny":["Bash(cat /w/*)"]}"#).unwrap();
@@ -352,10 +331,9 @@ fn a_tilde_user_operand_is_not_joined_onto_the_cwd() {
     assert_eq!(d("cat sub/notes.txt"), Tier::Deny);
 }
 
-// The resolved form must reach a *Bash* rule without help from the cross-check,
-// which only consults `Read`/`Write`/`Edit` denies and only for commands in its
-// reader/writer tables. `curl` is denied as a Bash rule and is not a reader, so a
-// traversal spelling of its path is caught by the path form alone.
+// The resolved form must reach a Bash rule without the cross-check, which only
+// covers its reader/writer tables. `curl` is denied as a Bash rule and is not a
+// reader, so the path form alone catches a traversal spelling.
 #[test]
 fn traversal_reaches_a_bash_rule_without_the_cross_check() {
     assert_eq!(bash("/usr/bin/../bin/curl https://x.example"), Tier::Deny);
@@ -367,12 +345,9 @@ fn benign_paths_are_allowed() {
     assert_eq!(write("/home/user/project/out.txt"), Tier::Allow);
 }
 
-// The `aws * describe-*` carve-out must admit only genuine read-only calls. Two
-// bypasses used to promote a mutating `aws` call to allow: (1) an interior `*`
-// that spanned whitespace let a later `describe-` substring satisfy the allow
-// while the executed operation stayed destructive; (2) a trailing `# describe-…`
-// comment fed the allow glob but bash discarded it at runtime. The single-token
-// service slot closes (1); comment stripping closes (2).
+// The `aws * describe-*` carve-out must admit only read-only calls. Two bypasses
+// promoted a mutating call to allow: an interior `*` spanning whitespace, and a
+// trailing `# describe-…` comment bash discards. Slot and comment stripping close both.
 #[test]
 fn describe_carveout_admits_only_read_only_calls() {
     const CARVEOUT: &str = r#"{
@@ -404,12 +379,9 @@ fn describe_carveout_admits_only_read_only_calls() {
     );
 }
 
-// A quoted executable path containing spaces is one word only because of the
-// quotes. Stripping them first turns `"C:/Program Files/.../clang.exe" -c x.c`
-// into the word `C:/Program`, whose basename is `Program`, so a rule naming the
-// real binary matched nothing (claude-code#27688). Both readings must stay
-// available: the basename one so `Bash(clang.exe:*)` works, and the full-path one
-// so a deny naming the spaced path still fires.
+// A quoted spaced executable path is one word only because of the quotes, so
+// stripping them first left the basename `Program` and a rule naming the real
+// binary matched nothing (claude-code#27688). Both readings must stay available.
 #[test]
 fn a_quoted_command_path_with_spaces_reaches_both_its_spellings() {
     const P: &str = r#"{
@@ -433,12 +405,9 @@ fn a_quoted_command_path_with_spaces_reaches_both_its_spellings() {
     assert_eq!(d("/opt/my tool/bin/danger --now"), Tier::Deny);
 }
 
-// Residual, locked deliberately: the pipeline still produces the mangled reading
-// too, so a rule naming the path's first segment matches a command it has nothing
-// to do with. Adding the basename form above fixed the false *negative* (the real
-// binary now matches); this false *positive* predates it and removing it needs
-// quote-awareness inside the chain, which is a larger change. Locking it here so
-// the day it changes is a deliberate one.
+// Residual, locked deliberately: the pipeline still produces the mangled reading,
+// so a rule naming the path's first segment matches an unrelated command. Removing
+// it needs quote-awareness inside the chain, a larger change.
 #[test]
 fn a_spaced_path_still_also_reads_as_its_first_segment() {
     let rs = load_rules_str(r#"{"defaultMode":"ask","allow":["Bash(Program:*)"]}"#).unwrap();
@@ -449,13 +418,9 @@ fn a_spaced_path_still_also_reads_as_its_first_segment() {
     );
 }
 
-// Quote-stripping a spaced path used to be a deny-bypass, not just a missed
-// match. `"/tmp/git evil/bin/rm" -rf x` strips to the word `/tmp/git` plus
-// arguments, whose basename is `git`, so the mangled reading `git evil/bin/rm -rf x`
-// satisfied an allow written `Bash(git:*)` while the real executable was `rm`.
-// Verified against the pre-fix binary: this returned Allow. The basename form now
-// also produces `rm -rf x`, which the deny catches, and the most restrictive unit
-// wins.
+// Quote-stripping a spaced path was a deny-bypass: `"/tmp/git evil/bin/rm" -rf x`
+// mangled to `git evil/bin/rm -rf x` and satisfied `Bash(git:*)` while the real
+// executable was `rm`. The basename form now also produces `rm -rf x`.
 #[test]
 fn a_quoted_path_cannot_launder_a_denied_binary_through_an_allowed_name() {
     let rs =
@@ -471,10 +436,9 @@ fn a_quoted_path_cannot_launder_a_denied_binary_through_an_allowed_name() {
     assert_eq!(d("git status"), Tier::Allow);
 }
 
-// ANSI-C quoting is still one shell word. It used to bypass the parsed-basename
-// form because that helper only recognized a literal quote in byte zero:
-// quote-stripping then split the spaced executable and invented the allowed
-// basename `my`, while the real executable was `rm`.
+// ANSI-C quoting is still one shell word. It bypassed the parsed-basename form,
+// which only recognized a literal quote in byte zero, inventing the allowed
+// basename `my` while the real executable was `rm`.
 #[test]
 fn ansi_c_quoted_path_cannot_launder_a_denied_binary() {
     let rs =
@@ -501,9 +465,8 @@ fn posix_quoted_backslash_does_not_invent_a_basename() {
 }
 
 // Path rewriting must use shell words, not whitespace runs. The quoted directory
-// is one operand; after collapsing `..` it leaves the allowed tree and lands on
-// `/w/src`, where the broad absolute deny must hold. Wrapper peeling must retain
-// the same raw word boundary for the inner decision.
+// is one operand; collapsing `..` lands it on `/w/src`, where the broad deny holds.
+// Wrapper peeling must keep the same raw word boundary.
 #[test]
 fn quoted_spaced_operand_resolves_as_one_word() {
     const POLICY: &str = r#"{
@@ -541,6 +504,192 @@ fn attached_long_option_path_is_resolved() {
 
     assert_eq!(d("tar --directory=.scratch/build archive.tar"), Tier::Allow);
     assert_eq!(d("tar --directory=.scratch/../src archive.tar"), Tier::Deny);
+}
+
+// --- Displaced wrappers (§8.2) ------------------------------------------------
+
+/// The denied command is itself a *wrapper*, with allowed words either side, so
+/// every spelling matches an explicit rule at every stage and any `deny` came from
+/// the `sudo` rule. `defaultMode` is `deny`: the loader accepts nothing else.
+const WRAPPER_RULES: &str = r#"{
+  "defaultMode": "deny",
+  "allow": ["Bash(command:*)", "Bash(xargs:*)", "Bash(whoami:*)", "Bash(ls:*)"],
+  "deny": ["Bash(sudo:*)"]
+}"#;
+
+fn wrapper_bash(cmd: &str) -> Tier {
+    let rs = load_rules_str(WRAPPER_RULES).expect("crafted rules load");
+    evaluate(&rs, "Bash", &json!({ "command": cmd }), Some(CWD)).tier
+}
+
+#[test]
+fn a_denied_wrapper_outranks_an_allow_at_both_ends_of_the_peel() {
+    // A rule naming a wrapper only fires while that wrapper is the first word. A
+    // one-step peel decided the two ends only, so the allowed outer and inner words
+    // let the `sudo` between them run on an allow.
+    assert_eq!(wrapper_bash("command sudo whoami"), Tier::Deny);
+    assert_eq!(wrapper_bash("xargs sudo whoami"), Tier::Deny);
+    assert_eq!(wrapper_bash("command xargs sudo whoami"), Tier::Deny);
+    // Head and innermost position already worked; lock them against a regression.
+    assert_eq!(wrapper_bash("sudo whoami"), Tier::Deny);
+    // An allowed command behind the same wrappers keeps its allow, so the stages
+    // raise a verdict only on a real match.
+    assert_eq!(wrapper_bash("command whoami"), Tier::Allow);
+    assert_eq!(wrapper_bash("command xargs ls"), Tier::Allow);
+}
+
+#[test]
+fn an_unmatched_stage_does_not_stop_the_peel() {
+    // A stage matching nothing reports the fall-back tier, indistinguishable from
+    // a rule that says `ask`. Only `deny`, which nothing outranks, is safe to stop on.
+    let rs = load_rules_str(
+        r#"{"defaultMode":"ask","allow":["Bash(whoami:*)"],"deny":["Bash(sudo:*)"]}"#,
+    )
+    .expect("crafted rules load");
+    let tier = |cmd: &str| evaluate(&rs, "Bash", &json!({ "command": cmd }), Some(CWD)).tier;
+
+    // No rule names `timeout`, so the first stage reports the fall-back `ask`.
+    assert_eq!(tier("timeout 5 whoami"), Tier::Ask);
+    // Stopping at that `ask` would return `ask` for this, not `deny`.
+    assert_eq!(tier("timeout 5 sudo whoami"), Tier::Deny);
+    assert_eq!(tier("nice timeout 5 sudo whoami"), Tier::Deny);
+}
+
+#[test]
+fn a_wrapper_chain_past_the_stage_bound_fails_closed() {
+    // Each stage re-decides a suffix, so an unbounded chain is quadratic. Past the
+    // bound the unit is denied rather than decided on the stages that fit (§9.1).
+    let chain = |n: usize| format!("{}whoami", "command ".repeat(n));
+
+    assert_eq!(wrapper_bash(&chain(32)), Tier::Allow); // at the bound
+    assert_eq!(wrapper_bash(&chain(33)), Tier::Deny); // one past it
+    assert_eq!(wrapper_bash(&chain(500)), Tier::Deny);
+    // A denied wrapper inside a chain short of the bound is still found.
+    assert_eq!(
+        wrapper_bash(&format!("{}sudo whoami", "command ".repeat(20))),
+        Tier::Deny
+    );
+}
+
+// --- Statements that run nothing (§8.1) ---------------------------------------
+
+/// The same rules at both fall-back settings. The `deny` side is where a stray
+/// verdict matters: there the fall-back is a block, not a prompt.
+const STRUCTURE_RULES: &str = r#"{
+  "defaultMode": "%MODE%",
+  "allow": ["Bash(ls:*)", "Bash(whoami:*)"],
+  "deny": ["Bash(sudo:*)"]
+}"#;
+
+fn structure_bash(cmd: &str, mode: &str) -> Tier {
+    let rs = load_rules_str(&STRUCTURE_RULES.replace("%MODE%", mode)).expect("crafted rules load");
+    evaluate(&rs, "Bash", &json!({ "command": cmd }), Some(CWD)).tier
+}
+
+/// Assert a command resolves to `ask` under ask-default and `deny` under
+/// deny-default, i.e. it is being decided by the fall-back and nothing else.
+fn assert_takes_fall_back(cmd: &str) {
+    assert_eq!(
+        structure_bash(cmd, "ask"),
+        Tier::Ask,
+        "ask-default: {cmd:?}"
+    );
+    assert_eq!(
+        structure_bash(cmd, "deny"),
+        Tier::Deny,
+        "deny-default: {cmd:?}"
+    );
+}
+
+#[test]
+fn a_statement_that_runs_nothing_carries_no_verdict() {
+    // A closer left by §8.1, or an assignment with no command, must not take the
+    // fall-back: no rule set can repair that, since nobody writes `Bash(fi:*)`.
+    for cmd in [
+        "ls; fi",
+        "ls; done",
+        "ls; esac",
+        "ls; }",
+        "FOO=bar; ls",
+        "ls; if",
+        "ls; then",
+        "FOO=bar BAZ=qux; ls",
+    ] {
+        assert_eq!(
+            structure_bash(cmd, "ask"),
+            Tier::Allow,
+            "ask-default: {cmd:?}"
+        );
+        assert_eq!(
+            structure_bash(cmd, "deny"),
+            Tier::Allow,
+            "deny-default: {cmd:?}"
+        );
+    }
+}
+
+#[test]
+fn a_quoted_or_qualified_closer_is_still_a_command() {
+    // The skip reads the raw slice: these all normalize to the word `fi`, and
+    // `./fi` runs a program.
+    for cmd in ["'fi'", "\"fi\"", "\\fi", "./fi", "/usr/bin/fi", "fi x"] {
+        assert_takes_fall_back(cmd);
+    }
+}
+
+#[test]
+fn a_wrapper_alone_is_still_a_command() {
+    // Wrappers are executables, so one alone is a real invocation.
+    assert_eq!(structure_bash("sudo", "ask"), Tier::Deny);
+    assert_eq!(structure_bash("ls; sudo", "ask"), Tier::Deny);
+    assert_eq!(structure_bash("sudo; ls", "deny"), Tier::Deny);
+    // One that no rule names still reaches the fall-back rather than being skipped.
+    assert_takes_fall_back("xargs");
+}
+
+#[test]
+fn a_command_hidden_in_an_assignment_value_still_decides() {
+    // Dropping an assignment husk is safe only because §8.1 lifts a substitution
+    // in the value into its own unit. Locked here: if that stops, so does the deny.
+    for cmd in [
+        "FOO=$(sudo whoami)",
+        "FOO=`sudo whoami`",
+        "A=1 B=$(sudo -i) C=3",
+        "FOO=$(sudo whoami); ls",
+    ] {
+        assert_eq!(
+            structure_bash(cmd, "ask"),
+            Tier::Deny,
+            "ask-default: {cmd:?}"
+        );
+        assert_eq!(
+            structure_bash(cmd, "deny"),
+            Tier::Deny,
+            "deny-default: {cmd:?}"
+        );
+    }
+}
+
+#[test]
+fn a_command_made_only_of_structure_is_allowed() {
+    // The fall-back is for a command no rule named, not one containing no command,
+    // so the answer must not depend on `defaultMode`.
+    for cmd in ["fi", "done", "esac", "}", "FOO=bar", "FOO=", "if", "{", "!"] {
+        assert_eq!(
+            structure_bash(cmd, "ask"),
+            Tier::Allow,
+            "ask-default: {cmd:?}"
+        );
+        assert_eq!(
+            structure_bash(cmd, "deny"),
+            Tier::Allow,
+            "deny-default: {cmd:?}"
+        );
+    }
+    // Anything that could run keeps its verdict, so this never generalizes.
+    assert_takes_fall_back("./fi");
+    assert_takes_fall_back("'fi'");
+    assert_eq!(structure_bash("sudo", "ask"), Tier::Deny);
 }
 
 // Windows drive-relative words have no separator (`C:secret.txt`) but still name

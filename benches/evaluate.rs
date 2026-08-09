@@ -1,10 +1,6 @@
-//! Criterion benchmarks for the hot path: load once, then evaluate many calls.
-//!
-//! The production cost model is a fresh short-lived process per tool call, so
-//! these measure steady-state `evaluate` latency against the reference rule set
-//! (`rules/permcheck.json`), grouped by matcher family, plus the one-time cost
-//! of loading and compiling the whole rule set. Every case pins its inputs and
-//! result with `black_box` so the optimizer can't fold the work away.
+//! Criterion benchmarks for the hot path: load once, then evaluate many calls
+//! against the reference rule set, grouped by matcher family, plus the one-time
+//! load. Every case pins inputs and result with `black_box`.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use permcheck::{RuleSet, evaluate};
@@ -45,10 +41,8 @@ fn bench_bash(c: &mut Criterion) {
         "bash",
         Some("/repo"),
         &[
-            // Specificity + fall-back against the shipped reference set: broad
-            // `aws:*` / `kubectl:*` denies (no narrow allow), git reads with no
-            // rule (→ `defaultMode: "ask"` fall-back), and `git push --force`
-            // deny beating `git push` ask.
+            // Specificity and fall-back: broad `aws:*` / `kubectl:*` denies, git
+            // reads with no rule, and `git push --force` deny beating the ask.
             (
                 "deny_aws_describe",
                 "Bash",
@@ -81,6 +75,16 @@ fn bench_bash(c: &mut Criterion) {
                 "wrapper_env_aws",
                 "Bash",
                 cmd("env aws ec2 terminate-instances"),
+            ),
+            // Staged peel (§8 step 2): the denied wrapper sits behind another
+            // peelable word, so it is found on the second stage, not the first.
+            ("wrapper_displaced_sudo", "Bash", cmd("command sudo whoami")),
+            // Worst realistic shape for the walk: several stages and no deny to
+            // short-circuit on, so every stage is decided.
+            (
+                "wrapper_stack_no_deny",
+                "Bash",
+                cmd("! time command nice whoami"),
             ),
             // Compound splitting: substitution, pipe, and chaining.
             ("compound_and", "Bash", cmd("cd /tmp && ls -la")),
