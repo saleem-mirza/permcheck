@@ -481,7 +481,13 @@ decomposes it and takes the **most restrictive** verdict.
    `&`, newlines, and the subshell delimiters `(` and `)`. Pull inner commands out
    of command substitutions
    `$(…)`, backticks `` `…` ``, and process substitutions `<(…)` / `>(…)`,
-   including inside double quotes. `$((…))` arithmetic is literal.
+   including inside double quotes and inside `$((…))` arithmetic expansion, whose
+   contents bash expands before evaluating them.
+
+   A `|` immediately after `>` belongs to the **redirection**, not to the pipe:
+   `>|` overrides `noclobber` and writes exactly as `>` does. Read as a pipe it
+   would cut the unit before the target, leaving the write with no cross-check
+   (§8.3) and a reason that does not name the file being overwritten.
 
    A `(` is a delimiter only in **command position** (at unit start, or after
    whitespace or another operator), which is the only place bash reads one as a
@@ -502,7 +508,9 @@ decomposes it and takes the **most restrictive** verdict.
    never errors, and unterminated constructs are consumed to end of input.
    Substitution nesting is bounded: past a fixed depth (far above any real
    command) the splitter stops descending and the command is **denied**, since a
-   partial split could miss a denied inner command (§9.1).
+   partial split could miss a denied inner command (§9.1). Arithmetic expansion
+   counts against that same depth, because scanning its contents means recursing
+   on them and nested `$((` recurses directly.
 
    Splitting a conditional, loop, or group leaves its **closer** as a unit of its
    own (`fi`, `done`, `esac`, `}`), and an assignment with no command (`FOO=bar`)
@@ -530,7 +538,13 @@ decomposes it and takes the **most restrictive** verdict.
      3. Runs of **whitespace** collapse to a single space, so `git  push
         --force` reaches a rule written with single spaces.
      4. A **path-qualified** executable reduces to its basename
-        (`/usr/bin/aws …` → `aws …`).
+        (`/usr/bin/aws …` → `aws …`). On Windows the name also loses a `PATHEXT`
+        suffix (`rm.exe` → `rm`) and gains a case-folded spelling
+        (`RM.EXE` → `rm`), because the filesystem resolves an executable by
+        either. POSIX keeps the name byte-exact, where `rm.exe` is a different
+        file. The fold stops at the command **word**: bash does not fold
+        arguments, so `git PUSH` is not `git push` on any platform, and shell
+        keywords stay byte-exact too.
      5. A **git** invocation with global options before the subcommand
         (`git -c x config …`, `git -C /r push --force`) exposes the subcommand.
 
@@ -593,12 +607,24 @@ decomposes it and takes the **most restrictive** verdict.
      spellings permits both.
 
    Additionally, if the unit begins with a **wrapper command** (`env`, `sudo`,
-   `timeout`, `nice`, `time`, `xargs`, …) or a **shell reserved word** (`{`, `!`,
-   `if`, `then`, `elif`, `else`, `while`, `until`, `do`), peel it and decide the
-   command behind it too, taking the most restrictive. A wrapper's options,
-   assignments, and numeric args are peeled with it; a reserved word takes no
-   options, so only the word itself is dropped, which leaves a condition's own
-   operands intact. The two interleave (`! time env sudo …`).
+   `timeout`, `nice`, `time`, `xargs`, `builtin`, …) or a **shell reserved word**
+   (`{`, `!`, `if`, `then`, `elif`, `else`, `while`, `until`, `do`, `coproc`),
+   peel it and decide the command behind it too, taking the most restrictive. A
+   wrapper's options, assignments, and numeric args are peeled with it; a
+   reserved word takes no options, so only the word itself is dropped, which
+   leaves a condition's own operands intact. The two interleave
+   (`! time env sudo …`).
+
+   A wrapper option whose value is a **separate token** is ambiguous, and both
+   readings are peeled: the value belongs to the option, or the option took none
+   and the value heads the command. Consuming alone would hide the command behind
+   `timeout -s KILL 5 rm -rf /`; consuming nothing hides it behind every such
+   option. The engine carries each wrapper's value-taking options as a table, but
+   the table cannot be authoritative on its own, since `sudo -h` is both `--help`
+   and `--host=host` and GNU `xargs -e`/`-i` take an *optional* value. Deciding
+   both readings makes a wrong or missing entry cost one extra stage rather than
+   a missed deny. A value the argument peel already absorbs (`-n 5`) never headed
+   a command, so it contributes no second reading.
 
    This runs the wrapped command's own rules, so `env aws …` cannot ride in on a
    broad `Bash(env:*)` allow and bypass an `aws` deny, and `{ sudo …; }` cannot
@@ -633,7 +659,9 @@ decomposes it and takes the **most restrictive** verdict.
 
 3. **File-access cross-check** (raises to `deny` only, never loosens): tokenize
    the unit, peel wrapper commands (`sudo`, `env`, `timeout`, `nice`, `time`,
-   `xargs`, …) and leading reserved words, then:
+   `xargs`, …) and leading reserved words, then, for each reading the wrapper
+   option arity leaves open (§8 step 2), with the command name resolved the same
+   way the identity forms resolve it:
    - if the command is a known **reader** (`cat`, `grep`, `sed`, `head`, …),
      check each non-option operand against the `Read` **deny** rules
      (pattern-first readers like `grep`/`sed`/`awk` skip their first operand,
@@ -738,7 +766,12 @@ out of scope and left to the OS sandbox and enterprise denies:
   `$'\x73udo'` is not reduced to `sudo`.
 - Non-POSIX shells (PowerShell, `cmd.exe`): the splitter, reader vocabulary, and
   env-stripping model POSIX syntax and do not apply there, though Windows
-  binaries ship.
+  binaries ship. The Bash analyzer itself is **not** compiled out on Windows,
+  since Claude Code runs bash there through Git Bash and MSYS; gating it would
+  leave that build unable to match any `Bash(…)` rule. What is platform-gated is
+  executable **naming** (§8 step 2): the `PATHEXT` suffix strip and the
+  case-insensitive name comparison apply on Windows only, because on POSIX
+  `rm.exe` is a different file and names are case-sensitive.
 - Path resolution (§7.2) is purely **lexical**. Symlinks are not followed, so a
   link pointing out of an allowed directory reaches its target unseen, and a path
   the shell builds at runtime is resolved as the literal text it was written as.
@@ -756,8 +789,13 @@ out of scope and left to the OS sandbox and enterprise denies:
   (`tclsh`, `groovy`, …) is not normalized, but it falls to `defaultMode` (ask),
   never a silent allow. The `curl`/`wget` file-read options remain a blocklist.
 - `xargs` is peeled as a wrapper, so the command it runs (`xargs cat …`,
-  `xargs rm -rf …`) is decided and cross-checked. A separate-token replace string
-  (`xargs -I {} …`) still hides the command; the attached form (`-I{}`) does not.
+  `xargs rm -rf …`) is decided and cross-checked, including behind a
+  separate-token replace string (`xargs -I {} …`), which is peeled under both
+  readings (§8 step 2).
+- The named coprocess form `coproc NAME compound-command` is not peeled. After
+  the prefix is dropped the next word is the coprocess's name rather than a
+  command, and nothing distinguishes the two lexically. The common unnamed form
+  (`coproc cmd …`) is peeled.
 - The reader **option** vocabulary (§8 step 3) is an enumeration, like the
   interpreter table. An option outside it whose value is a separate token leaves
   that value in the operand stream, where it is checked as if it were a path.
