@@ -338,6 +338,16 @@ fn nfa_match(text: &[u8], toks: &[PToken], sep: u8) -> bool {
     if let Some(matches) = literal_tokens_match(toks, text) {
         return matches;
     }
+    if toks.len() < MAX_BITSET_TOKENS {
+        nfa_match_bits(text, toks, sep)
+    } else {
+        nfa_match_vec(text, toks, sep)
+    }
+}
+
+/// [`nfa_match`] for a pattern too long for the bitset, callable on its own for
+/// the differential test.
+fn nfa_match_vec(text: &[u8], toks: &[PToken], sep: u8) -> bool {
     let mut current = vec![false; toks.len() + 1];
     let mut next = vec![false; toks.len() + 1];
     current[0] = true;
@@ -364,6 +374,51 @@ fn nfa_match(text: &[u8], toks: &[PToken], sep: u8) -> bool {
         std::mem::swap(&mut current, &mut next);
     }
     current[toks.len()]
+}
+
+/// Longest token sequence the `u128` state sets below can hold. A state set
+/// spans positions `0..=len`, and [`path_epsilon_closure`] reaches `i + 2`, so
+/// the bound leaves both inside 128 bits. Patterns past it (never real rules,
+/// but `MAX_RULE_BYTES` permits them) take the `Vec` path.
+const MAX_BITSET_TOKENS: usize = 125;
+
+/// [`nfa_match`] with the state sets held in registers rather than two heap
+/// allocations per call. Same transitions, same answer.
+fn nfa_match_bits(text: &[u8], toks: &[PToken], sep: u8) -> bool {
+    let mut current: u128 = 1;
+    epsilon_closure_bits(&mut current, toks);
+
+    for &ch in text {
+        let mut next: u128 = 0;
+        for (i, tok) in toks.iter().copied().enumerate() {
+            if current & (1u128 << i) == 0 {
+                continue;
+            }
+            match tok {
+                PToken::Lit(expected) if expected == ch => next |= 1u128 << (i + 1),
+                PToken::Ques if ch != sep => next |= 1u128 << (i + 1),
+                PToken::Star if ch != sep => next |= 1u128 << i,
+                PToken::DStar => next |= 1u128 << i,
+                PToken::Lit(_) | PToken::Ques | PToken::Star => {}
+            }
+        }
+        epsilon_closure_bits(&mut next, toks);
+        if next == 0 {
+            return false;
+        }
+        current = next;
+    }
+    current & (1u128 << toks.len()) != 0
+}
+
+/// [`epsilon_closure`] over a bitset. The single forward pass is enough: it only
+/// ever sets a later position, which the same pass then visits.
+fn epsilon_closure_bits(states: &mut u128, toks: &[PToken]) {
+    for (i, tok) in toks.iter().enumerate() {
+        if *states & (1u128 << i) != 0 && matches!(tok, PToken::Star | PToken::DStar) {
+            *states |= 1u128 << (i + 1);
+        }
+    }
 }
 
 /// Add transitions that consume no input: either wildcard may end immediately.
@@ -977,6 +1032,17 @@ fn path_match(pat: &[PToken], text: &[u8]) -> bool {
     if let Some(matches) = literal_tokens_match(pat, text) {
         return matches;
     }
+    if pat.len() < MAX_BITSET_TOKENS {
+        path_match_bits(pat, text)
+    } else {
+        path_match_vec(pat, text)
+    }
+}
+
+/// [`path_match`] for a pattern too long for the bitset. Kept callable on its
+/// own so the differential test can hold it against the bitset on every case,
+/// not only on the oversized patterns that reach it in practice.
+fn path_match_vec(pat: &[PToken], text: &[u8]) -> bool {
     let mut current = vec![false; pat.len() + 1];
     let mut looped = vec![false; pat.len() + 1];
     let mut next = vec![false; pat.len() + 1];
@@ -1022,6 +1088,59 @@ fn literal_tokens_match(toks: &[PToken], text: &[u8]) -> Option<bool> {
                     .zip(text)
                     .all(|(tok, byte)| matches!(tok, PToken::Lit(expected) if expected == byte))
         })
+}
+
+/// [`path_match`] with the four state sets held in registers rather than four
+/// heap allocations per call. Same transitions, same answer.
+fn path_match_bits(pat: &[PToken], text: &[u8]) -> bool {
+    let mut current: u128 = 1;
+    let mut looped: u128 = 0;
+    path_epsilon_closure_bits(&mut current, looped, pat);
+
+    for &ch in text {
+        let mut next: u128 = 0;
+        let mut next_looped: u128 = 0;
+        for (i, tok) in pat.iter().copied().enumerate() {
+            if current & (1u128 << i) != 0 {
+                match tok {
+                    PToken::Lit(expected) if expected == ch => next |= 1u128 << (i + 1),
+                    PToken::Ques if ch != b'/' => next |= 1u128 << (i + 1),
+                    PToken::Star if ch != b'/' => next |= 1u128 << i,
+                    PToken::DStar => next_looped |= 1u128 << i,
+                    PToken::Lit(_) | PToken::Ques | PToken::Star => {}
+                }
+            }
+            if looped & (1u128 << i) != 0 && tok == PToken::DStar {
+                next_looped |= 1u128 << i;
+            }
+        }
+        path_epsilon_closure_bits(&mut next, next_looped, pat);
+        if next == 0 && next_looped == 0 {
+            return false;
+        }
+        current = next;
+        looped = next_looped;
+    }
+    path_epsilon_closure_bits(&mut current, looped, pat);
+    current & (1u128 << pat.len()) != 0
+}
+
+/// [`path_epsilon_closure`] over bitsets.
+fn path_epsilon_closure_bits(states: &mut u128, looped: u128, toks: &[PToken]) {
+    for (i, tok) in toks.iter().enumerate() {
+        if looped & (1u128 << i) != 0 && *tok == PToken::DStar {
+            *states |= 1u128 << (i + 1);
+        }
+        if *states & (1u128 << i) == 0 {
+            continue;
+        }
+        if matches!(tok, PToken::Star | PToken::DStar) {
+            *states |= 1u128 << (i + 1);
+        }
+        if *tok == PToken::DStar && toks.get(i + 1) == Some(&PToken::Lit(b'/')) {
+            *states |= 1u128 << (i + 2);
+        }
+    }
 }
 
 /// Path `**/` has one extra epsilon transition, but only before that `**` has
@@ -1136,5 +1255,63 @@ mod subset_tests {
         // A bare allow refines only a universal deny, not a narrow one.
         assert!(!matcher_subset(&Matcher::Bare, &narrow));
         assert!(matcher_subset(&Matcher::Bare, &m(Family::Path, "**")));
+    }
+}
+
+#[cfg(test)]
+mod glob_engine_tests {
+    use super::*;
+
+    /// Patterns and texts covering every token kind, separator behaviour, and the
+    /// `**/` zero-directory collapse, plus the shapes that used to backtrack.
+    const CASES: &[(&str, &[&str])] = &[
+        ("/etc/passwd", &["/etc/passwd", "/etc/passwdx", "/etc", ""]),
+        ("/etc/*", &["/etc/x", "/etc/", "/etc/x/y", "/etc"]),
+        ("/etc/**", &["/etc/x", "/etc/x/y", "/etc/", "/etcx"]),
+        ("/**/.env", &["/a/.env", "/a/b/.env", "/.env", "/a/.envx"]),
+        ("/a/**/b", &["/a/b", "/a/x/b", "/a/x/y/b", "/a/bx"]),
+        ("/?/x", &["/a/x", "/ab/x", "//x"]),
+        ("/a*b*c", &["/abc", "/axbyc", "/ab/c", "/abcx"]),
+        ("**", &["", "/", "/a/b/c", "x"]),
+        ("/**/*.rs", &["/a.rs", "/a/b.rs", "/a/b/c.rs", "/a.rsx"]),
+        ("/a/**/**/b", &["/a/b", "/a/x/b", "/a/x/y/z/b"]),
+    ];
+
+    #[test]
+    fn the_bitset_and_vec_engines_agree_on_every_case() {
+        // Both are reachable in production, the `Vec` one only for a pattern past
+        // MAX_BITSET_TOKENS. Holding them against each other on ordinary patterns
+        // is what keeps the rarely-taken path honest.
+        for (spec, texts) in CASES {
+            let pat = PathMatcher::compile(spec).0;
+            for text in *texts {
+                assert_eq!(
+                    path_match_bits(&pat, text.as_bytes()),
+                    path_match_vec(&pat, text.as_bytes()),
+                    "path {spec:?} vs {text:?}"
+                );
+            }
+        }
+        for (spec, texts) in CASES {
+            let toks = bash_glob_tokens(spec);
+            for text in *texts {
+                assert_eq!(
+                    nfa_match_bits(text.as_bytes(), &toks, b' '),
+                    nfa_match_vec(text.as_bytes(), &toks, b' '),
+                    "bash {spec:?} vs {text:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_pattern_past_the_bitset_bound_still_matches() {
+        // The `Vec` path is only reachable here, and `MAX_RULE_BYTES` permits a
+        // specifier this long even though no real rule is one.
+        let segment = "a".repeat(MAX_BITSET_TOKENS + 10);
+        let matcher = PathMatcher::compile(&format!("/{segment}/**"));
+        assert!(matcher.0.len() > MAX_BITSET_TOKENS);
+        assert!(matcher.matches(&format!("/{segment}/x/y")));
+        assert!(!matcher.matches("/elsewhere/x"));
     }
 }
