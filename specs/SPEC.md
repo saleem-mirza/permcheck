@@ -676,13 +676,20 @@ decomposes it and takes the **most restrictive** verdict.
      (§9.2), and an option whose arity varies by platform (`sed -i`) is left out
      of it, which costs an extra path check but never skips a real operand.
    - if it is a known **writer** (`tee`, `truncate`), check operands against the
-     `Write`/`Edit` deny rules.
+     `Write`/`Edit` deny rules. `sort -o <path>` / `--output=<path>` names a file
+     `sort` writes, so that path is checked against `Write`/`Edit` deny even
+     though `sort` is otherwise a reader.
    - `cp`/`mv` touch both sides, and both are checked. They **overwrite** their
-     destination: the last path operand (or the `-t <dir>` /
-     `--target-directory=<dir>` target, with each source's landing path) is
-     checked against `Write`/`Edit` deny. They also **read** every source: each
-     remaining positional (all of them in the `-t` form) is checked against
-     `Read` deny, since `cp .env /tmp/leak` exposes the file exactly as
+     destination, checked against `Write`/`Edit` deny. When the operands name a
+     destination **directory** each source lands inside it under its basename, so
+     the landing path `<dir>/<basename>` is checked, not only the directory. A
+     directory is recognized three ways: the `-t <dir>` /
+     `--target-directory=<dir>` target, a last operand ending in `/`, and three
+     or more path operands (cp/mv then require the last to be a directory). A
+     plain two-operand `cp a b` with no trailing slash treats `b` as a file path,
+     since nothing lexical marks it a directory. They also **read** every source:
+     each remaining positional (all of them in the directory forms) is checked
+     against `Read` deny, since `cp .env /tmp/leak` exposes the file exactly as
      `cat .env` does.
    - `dd` names files by key-value operand: `if=<path>` is checked against `Read`
      deny, `of=<path>` against `Write`/`Edit` deny.

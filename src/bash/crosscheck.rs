@@ -99,6 +99,14 @@ const AWK_VALUE_OPTS: ValueOpts = ValueOpts {
     long: &[],
 };
 
+/// `sort` reads its inputs, but `-o`/`--output` names a file it writes. Consuming
+/// the value here keeps [`reader_reads_denied`] from treating the output path as
+/// an input operand and checking it against `Read` instead of `Write`.
+const SORT_VALUE_OPTS: ValueOpts = ValueOpts {
+    short: b"o",
+    long: &["--output"],
+};
+
 const NO_VALUE_OPTS: ValueOpts = ValueOpts {
     short: b"",
     long: &[],
@@ -109,6 +117,8 @@ fn value_opts(name: &str) -> &'static ValueOpts {
         &GREP_VALUE_OPTS
     } else if name_in(name, &["awk", "gawk"]) {
         &AWK_VALUE_OPTS
+    } else if name_eq(name, "sort") {
+        &SORT_VALUE_OPTS
     } else {
         &NO_VALUE_OPTS
     }
@@ -218,6 +228,13 @@ fn simple_command_hit(rs: &RuleSet, words: &[&str], cwd: Option<&str>) -> Option
             }
         }
     } else if name_in(name, READERS) {
+        // `sort -o FILE` writes FILE, unlike every other reader; check it against
+        // the write deny before the read-operand scan.
+        if name_eq(name, "sort")
+            && let Some(hit) = sort_writes_denied(rs, operands, cwd)
+        {
+            return Some(hit);
+        }
         if let Some(hit) = reader_reads_denied(rs, name, operands, cwd) {
             return Some(hit);
         }
@@ -332,22 +349,34 @@ fn cp_mv_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> Option<Cr
             .flatten()
     };
 
-    // With `-t <dir>` every positional is a source; otherwise the last operand is
-    // the destination and the rest are sources.
-    let sources = match target_dir {
-        Some(_) => positionals.as_slice(),
-        None => positionals.split_last().map_or(&[][..], |(_, rest)| rest),
+    // Resolve the destination directory when the operands name one: an explicit
+    // `-t`/`--target-directory`, a trailing-slash last operand, or 3+ operands
+    // (cp/mv then require the last to be an existing directory). Every source
+    // lands inside it under its basename, so each landing path is a write — the
+    // same effect the `-t` form has, which denied while the trailing-slash and
+    // multi-operand spellings of the identical copy used to slip through.
+    let (directory, sources) = match target_dir {
+        Some(dir) => (Some(dir), positionals.as_slice()),
+        None => match positionals.split_last() {
+            Some((&last, rest)) if last.ends_with('/') || positionals.len() >= 3 => {
+                (Some(last), rest)
+            }
+            _ => (
+                None,
+                positionals.split_last().map_or(&[][..], |(_, rest)| rest),
+            ),
+        },
     };
     if let Some(hit) = sources.iter().find_map(|source| reads(source)) {
         return Some(hit);
     }
 
-    if let Some(directory) = target_dir {
+    if let Some(directory) = directory {
         if let Some(hit) = writes(directory) {
             return Some(hit);
         }
         let base = directory.trim_end_matches('/');
-        return positionals
+        return sources
             .iter()
             .find_map(|source| writes(&format!("{base}/{}", basename(source))));
     }
@@ -434,6 +463,25 @@ fn curl_reads_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> Opti
             && let Some(path) = curl_file_ref(value)
             && !path.is_empty()
             && let Some(hit) = hits(rs, &["Read"], path, cwd)
+        {
+            return Some(hit);
+        }
+    }
+    None
+}
+
+/// Return the file operand by which `sort -o FILE` / `sort --output=FILE` writes a
+/// denied path. `sort` reads its inputs like any reader; this covers the one flag
+/// that turns it into a writer.
+fn sort_writes_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> Option<CrossHit> {
+    let mut i = 0;
+    while i < operands.len() {
+        let operand = operands[i];
+        i += 1;
+        if let Some(path) = long_value(operand, "--output", operands, &mut i)
+            .or_else(|| short_value(operand, b'o', operands, &mut i))
+            && !path.is_empty()
+            && let Some(hit) = hits(rs, &["Write", "Edit"], path, cwd)
         {
             return Some(hit);
         }

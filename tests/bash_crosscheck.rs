@@ -106,6 +106,80 @@ fn cp_mv_check_both_the_source_read_and_the_destination_write() {
     assert_eq!(t("cp /tmp/x /home/user/.env"), Tier::Allow);
 }
 
+#[test]
+fn cp_mv_into_a_directory_check_each_source_landing_path() {
+    // The deny names a specific file, so the directory itself is not matched —
+    // only the landing path `dir/basename(source)` is. This isolates the
+    // directory-destination handling from the plain last-operand write check.
+    let rs = RuleSet::load_str(
+        r#"{"allow":["Bash(cp:*)","Bash(mv:*)"],
+            "deny":["Write(//**/.claude/settings.json)","Edit(//**/.claude/settings.json)"],
+            "defaultMode":"ask"}"#,
+    )
+    .unwrap();
+    let t = |c: &str| decide_bash(c, &rs, Some("/home/user")).tier;
+
+    // Trailing-slash destination: the source lands at `.claude/settings.json`.
+    assert_eq!(
+        t("cp /home/user/settings.json /home/user/.claude/"),
+        Tier::Deny
+    );
+    assert_eq!(
+        t("mv /home/user/settings.json /home/user/.claude/"),
+        Tier::Deny
+    );
+    // Three or more operands: cp/mv require the last to be a directory, so the
+    // source `settings.json` lands inside it.
+    assert_eq!(
+        t("cp a.txt /home/user/settings.json /home/user/.claude/"),
+        Tier::Deny
+    );
+    // The `-t` form already handled this and still does.
+    assert_eq!(
+        t("cp -t /home/user/.claude /home/user/settings.json"),
+        Tier::Deny
+    );
+    // A benign copy into a directory is not over-denied.
+    assert_eq!(
+        t("cp /home/user/notes.txt /home/user/.claude/"),
+        Tier::Allow
+    );
+    // Two operands with no trailing slash stay a plain file-destination check:
+    // the destination is not assumed to be a directory.
+    assert_eq!(t("cp /home/user/settings.json /tmp/x"), Tier::Allow);
+}
+
+#[test]
+fn sort_output_flag_is_a_write() {
+    // `sort -o FILE` writes FILE; every spelling of the flag is checked against
+    // the write deny, while sort's inputs stay read-checked.
+    let rs = RuleSet::load_str(
+        r#"{"allow":["Bash(sort:*)"],
+            "deny":["Read(/**/.env*)","Write(//**/.ssh/**)","Edit(//**/.ssh/**)"],
+            "defaultMode":"ask"}"#,
+    )
+    .unwrap();
+    let t = |c: &str| decide_bash(c, &rs, Some("/home/user")).tier;
+    assert_eq!(
+        t("sort -o /home/user/.ssh/authorized_keys data"),
+        Tier::Deny
+    );
+    assert_eq!(t("sort -o/home/user/.ssh/authorized_keys data"), Tier::Deny);
+    assert_eq!(
+        t("sort --output /home/user/.ssh/authorized_keys data"),
+        Tier::Deny
+    );
+    assert_eq!(
+        t("sort --output=/home/user/.ssh/authorized_keys data"),
+        Tier::Deny
+    );
+    // The input side stays read-checked.
+    assert_eq!(t("sort /home/user/.env"), Tier::Deny);
+    // A benign sort is not over-denied, and the output path is a write, not a
+    // read: writing to a Read-covered path is fine.
+    assert_eq!(t("sort -o /tmp/out data"), Tier::Allow);
+}
+
 // --- interpreter inline-exec normalization (policy stays in the rules) -------
 
 #[test]
