@@ -26,6 +26,17 @@ fn read_redirect_from_denied_path() {
 }
 
 #[test]
+fn clobber_override_is_a_write() {
+    // `>|` overrides `noclobber` and writes exactly as `>` does. Its `|` must not
+    // reach the splitter's pipe handling, which would cut the unit before the
+    // target and leave the write with no cross-check at all.
+    assert_eq!(tier("echo hi >| /work/secret.txt"), Tier::Deny);
+    assert_eq!(tier("echo hi >|/work/secret.txt"), Tier::Deny);
+    assert_eq!(tier("echo hi 1>| /work/secret.txt"), Tier::Deny);
+    assert_eq!(tier("echo hi >| /work/out.txt"), Tier::Allow);
+}
+
+#[test]
 fn fd_dup_is_not_a_write() {
     assert_eq!(tier("echo hi 2>&1"), Tier::Allow);
     assert_eq!(tier("echo hi >&2"), Tier::Allow);

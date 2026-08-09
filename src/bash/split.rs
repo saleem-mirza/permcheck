@@ -50,7 +50,7 @@ fn scan(s: &str, start: usize, end: usize, ctx: &mut ScanCtx) {
             b'`' => i = handle_backtick(s, i + 1, end, ctx),
             b'$' if i + 1 < end && b[i + 1] == b'(' => {
                 if i + 2 < end && b[i + 2] == b'(' {
-                    i = skip_arith(b, i + 3, end);
+                    i = skip_arith(s, i + 3, end, ctx);
                 } else {
                     i = handle_paren(s, i + 2, end, ctx);
                 }
@@ -81,7 +81,11 @@ fn scan(s: &str, start: usize, end: usize, ctx: &mut ScanCtx) {
             }
             b'>' => {
                 i += 1;
-                if i < end && b[i] == b'>' {
+                // `>|` overrides `noclobber` and writes exactly as `>` does, so
+                // its `|` belongs to the operator. Left to the pipe arm below it
+                // would cut the unit before the target, which then reaches no
+                // redirection cross-check at all (§8.3).
+                if i < end && (b[i] == b'>' || b[i] == b'|') {
                     i += 1;
                 }
                 if i < end && b[i] == b'&' {
@@ -149,7 +153,7 @@ fn skip_double(s: &str, mut i: usize, end: usize, ctx: &mut ScanCtx) -> usize {
             i += 2;
         } else if b[i] == b'$' && i + 1 < end && b[i + 1] == b'(' {
             if i + 2 < end && b[i + 2] == b'(' {
-                i = skip_arith(b, i + 3, end);
+                i = skip_arith(s, i + 3, end, ctx);
             } else {
                 i = handle_paren(s, i + 2, end, ctx);
             }
@@ -228,12 +232,38 @@ pub(super) fn skip_quoted(b: &[u8], mut i: usize, end: usize, close: u8) -> usiz
     if i < end { i + 1 } else { end }
 }
 
-fn skip_arith(b: &[u8], mut i: usize, end: usize) -> usize {
+/// Skip an arithmetic expansion, one level deeper. Bash expands `$(…)` and
+/// backticks inside `$(( … ))` before evaluating it, so the interior is scanned
+/// rather than stepped over: a denied command hides there otherwise.
+fn skip_arith(s: &str, i: usize, end: usize, ctx: &mut ScanCtx) -> usize {
+    // Counted like any other substitution, so nesting cannot recurse past the
+    // cap. A stack overflow aborts instead of unwinding, which `catch_unwind`
+    // could not turn into `deny` (§9.1).
+    if ctx.depth >= MAX_SUBST_DEPTH {
+        ctx.too_deep = true;
+        return end;
+    }
+    ctx.depth += 1;
+    let out = scan_arith(s, i, end, ctx);
+    ctx.depth -= 1;
+    out
+}
+
+fn scan_arith(s: &str, mut i: usize, end: usize, ctx: &mut ScanCtx) -> usize {
+    let b = s.as_bytes();
     while i < end {
-        if b[i] == b')' && i + 1 < end && b[i + 1] == b')' {
-            return i + 2;
+        match b[i] {
+            b')' if i + 1 < end && b[i + 1] == b')' => return i + 2,
+            b'$' if i + 1 < end && b[i + 1] == b'(' => {
+                if i + 2 < end && b[i + 2] == b'(' {
+                    i = skip_arith(s, i + 3, end, ctx);
+                } else {
+                    i = handle_paren(s, i + 2, end, ctx);
+                }
+            }
+            b'`' => i = handle_backtick(s, i + 1, end, ctx),
+            _ => i += 1,
         }
-        i += 1;
     }
     end
 }

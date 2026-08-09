@@ -13,6 +13,17 @@ fn newlines_are_separators() {
 }
 
 #[test]
+fn clobber_override_is_one_operator() {
+    // The `|` of `>|` belongs to the redirection, so the target stays in the
+    // same unit as the command that writes it.
+    assert_eq!(split("echo x >| f"), ["echo x >| f"]);
+    assert_eq!(split("echo x >|f"), ["echo x >|f"]);
+    assert_eq!(split("echo x 1>| f"), ["echo x 1>| f"]);
+    // A real pipe after a completed redirection still splits.
+    assert_eq!(split("echo x > f | grep y"), ["echo x > f", "grep y"]);
+}
+
+#[test]
 fn single_quotes_suppress_splitting() {
     assert_eq!(split("echo 'a && b'"), ["echo 'a && b'"]);
 }
@@ -21,6 +32,20 @@ fn single_quotes_suppress_splitting() {
 fn extracts_command_substitution_as_unit() {
     let units = split("echo $(rm -rf /)");
     assert!(units.iter().any(|u| u.contains("rm -rf /")));
+}
+
+#[test]
+fn extracts_substitutions_from_arithmetic_expansion() {
+    // Bash expands a substitution inside `$(( … ))`, so the splitter lifts it
+    // out as its own unit rather than stepping over the whole expansion.
+    assert!(
+        split("echo $(( $(rm -rf /) ))")
+            .iter()
+            .any(|u| u == "rm -rf /")
+    );
+    assert!(split("echo $(( `id` ))").iter().any(|u| u == "id"));
+    // Arithmetic with no substitution still yields no interior unit.
+    assert_eq!(split("echo $(( 1 + 2 ))"), ["echo $(( 1 + 2 ))"]);
 }
 
 #[test]

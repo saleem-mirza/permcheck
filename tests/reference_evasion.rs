@@ -58,6 +58,35 @@ fn substitution_and_backticks_cannot_hide_denied_commands() {
 }
 
 #[test]
+fn arithmetic_expansion_cannot_hide_denied_commands() {
+    // Bash expands `$(…)` and backticks inside `$(( … ))` before evaluating it,
+    // so the interior runs. `$(( … ))` used to be stepped over rather than
+    // scanned, which put every Bash deny one arithmetic wrapper out of reach.
+    assert_all_deny(&[
+        "echo $(( $(rm -rf /tmp/x) ))",
+        "echo $(( `rm -rf /tmp/x` ))",
+        "echo $(( 1 + $(rm -rf /tmp/x) ))",
+        r#"echo "$(( $(rm -rf /tmp/x) ))""#, // inside double quotes
+        "echo $(( $(( $(rm -rf /tmp/x) )) ))", // nested arithmetic
+    ]);
+    // Ordinary arithmetic holds its tier: the interior yields no unit, so it
+    // must not drift onto the fall-back or pick up a spurious verdict.
+    assert_eq!(bash("echo $(( 1 + 2 ))"), Tier::Ask);
+    assert_eq!(bash("echo $(( i * 2 ))"), Tier::Ask);
+    assert_eq!(bash("(( i++ ))"), Tier::Ask);
+    assert_eq!(bash("echo $((RANDOM))"), Tier::Ask);
+}
+
+#[test]
+fn arithmetic_nesting_past_the_cap_fails_closed() {
+    // Scanning the interior means recursing on it, and a stack overflow aborts
+    // instead of unwinding, so `catch_unwind` could not turn it into `deny`
+    // (§9.1). The depth cap has to catch it first.
+    let deep = format!("echo {}1{}", "$((".repeat(5_000), "))".repeat(5_000));
+    assert_eq!(bash(&deep), Tier::Deny);
+}
+
+#[test]
 fn subshells_cannot_hide_denied_commands() {
     // A `(` in command position is a unit boundary (§8.1), so a subshell reaches
     // the same rules as the bare command. Before that, every Bash deny was one

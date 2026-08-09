@@ -67,6 +67,10 @@ pub(super) fn shell_words(s: &str) -> Vec<ShellWord> {
                 append = true;
                 j += 1;
             }
+            // `>|` is `>` with `noclobber` overridden: same target, same kind.
+            if is_out && !append && j < n && b[j] == b'|' {
+                j += 1;
+            }
             let mut amp = false;
             if is_out && j < n && b[j] == b'&' {
                 amp = true;
