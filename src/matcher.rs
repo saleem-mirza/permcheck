@@ -569,12 +569,12 @@ pub(crate) struct PathProbe<'a> {
 }
 
 impl<'a> PathProbe<'a> {
-    pub(crate) fn needs_preparation(raw: &str) -> bool {
-        has_glob_meta(raw) && !has_segment_leading_wildcard(raw)
-    }
-
+    /// A glob operand is prepared only when every path segment starts with a
+    /// literal, mirroring shell expansion: a segment-leading wildcard matches no
+    /// dotfile, so preparing one would over-deny ordinary globs (`cat *.rs`).
     pub(crate) fn new(raw: &'a str) -> Self {
-        let operand_glob = Self::needs_preparation(raw).then(|| compile_operand_glob(raw));
+        let prepare = has_glob_meta(raw) && !has_segment_leading_wildcard(raw);
+        let operand_glob = prepare.then(|| compile_operand_glob(raw));
         Self { raw, operand_glob }
     }
 
