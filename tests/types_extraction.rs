@@ -41,11 +41,9 @@ fn generic_fallback_is_lexicographically_first_field() {
     let input = json!({"query": "SELECT *", "database": "prod"});
     assert_eq!(extract_payload("mcp__db__run", &input), "prod");
 
-    // Source order reversed — same result. The extractor computes the key order
-    // itself rather than trusting map iteration order, so this holds whether
-    // `serde_json::Map` is a BTreeMap or an IndexMap. Enabling the
-    // `preserve_order` feature anywhere in the build would otherwise redefine
-    // the rule as "first inserted field" with no compile error.
+    // Source order reversed, same result. The extractor computes key order itself
+    // rather than trusting map iteration, so this holds whether `serde_json::Map`
+    // is a BTreeMap or an IndexMap under the `preserve_order` feature.
     let reversed = json!({"database": "prod", "query": "SELECT *"});
     assert_eq!(extract_payload("mcp__db__run", &reversed), "prod");
 

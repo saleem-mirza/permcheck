@@ -1,47 +1,26 @@
 //! Idempotent install/uninstall of the permcheck PreToolUse hook into a Claude
-//! Code `settings.json`.
-//!
-//! These are **pure** `serde_json::Value` transforms — no filesystem, no process
-//! state — so they are trivially testable and idempotent by construction:
-//! [`install`] applied to its own output is a fixed point. The binary
-//! ([`crate`]'s `main.rs`) owns the file I/O and scope resolution.
-//!
-//! The Claude Code hooks schema this targets:
-//!
-//! ```json
-//! { "hooks": { "PreToolUse": [
-//!   { "matcher": "*", "hooks": [
-//!     { "type": "command", "command": "permcheck --hook --rules \"/abs/permcheck.json\"" }
-//!   ] } ] } }
-//! ```
+//! Code `settings.json`. Pure `serde_json::Value` transforms, so [`install`]
+//! applied to its own output is a fixed point; `main.rs` owns the file I/O.
 
 use serde_json::{Map, Value, json};
 
-/// Build the hook command string that gets baked into `settings.json`.
-///
-/// The binary is referenced bare (`permcheck`, PATH-resolved; `permcheck.exe` on
-/// Windows via `PATHEXT`) and the rules path is absolute and double-quoted so a
-/// path with spaces works under POSIX `sh`, `cmd.exe`, and PowerShell alike.
+/// Build the hook command string baked into `settings.json`. The binary is bare
+/// (PATH-resolved) and the rules path absolute and double-quoted, so a path with
+/// spaces works under `sh`, `cmd.exe`, and PowerShell alike.
 pub fn hook_command(abs_rules: &str) -> String {
     format!("permcheck --hook --rules \"{abs_rules}\"")
 }
 
 /// Detection marker for a permcheck hook: the command invokes `permcheck` in
-/// `--hook` mode. Robust to a changed rules path and to bare-vs-absolute binary.
-///
-/// A heuristic, not proof of ownership: a user's own wrapper (say
-/// `run-permcheck.sh --hook`) also matches and would be rewritten or removed.
+/// `--hook` mode, whatever the rules path. A heuristic, not proof of ownership: a
+/// user's own `run-permcheck.sh --hook` also matches and would be rewritten.
 pub fn is_permcheck_hook(command: &str) -> bool {
     command.contains("permcheck") && command.contains("--hook")
 }
 
-/// The `--rules` path baked into the first installed permcheck PreToolUse hook,
-/// if any. Used by `--install` to detect (and refuse) a re-point that would
-/// silently abandon a hook's current policy file.
-///
-/// Recognizes both the quoted form [`hook_command`] writes and the bare form a
-/// hand-wired hook is likely to use; missing the latter would leave the guard
-/// inapplicable to exactly the hooks it protects.
+/// The `--rules` path in the first installed permcheck hook, used by `--install`
+/// to refuse a re-point that would abandon a hook's current policy. Recognizes the
+/// quoted form [`hook_command`] writes and the bare form a hand-wired hook uses.
 pub fn installed_rules_path(settings: &Value) -> Option<String> {
     let groups = settings["hooks"]["PreToolUse"].as_array()?;
     let command = groups.iter().find_map(|g| {
@@ -61,13 +40,9 @@ pub fn installed_rules_path(settings: &Value) -> Option<String> {
     (!path.is_empty()).then(|| path.to_string())
 }
 
-/// Return a new settings object with the permcheck PreToolUse hook present.
-///
-/// Idempotent: if a permcheck hook already exists anywhere under
-/// `hooks.PreToolUse`, its `command` is rewritten to `command` (refreshing a
-/// changed rules path) and any duplicate permcheck entries are dropped; otherwise
-/// a fresh `{matcher:"*", hooks:[…]}` group is appended. All other keys, matcher
-/// groups, and sibling hooks are preserved untouched.
+/// Return a new settings object with the permcheck PreToolUse hook present. An
+/// existing permcheck hook has its `command` rewritten and duplicates dropped;
+/// otherwise a group is appended. Everything else is preserved untouched.
 pub fn install(settings: &Value, command: &str) -> Value {
     let mut root = settings.as_object().cloned().unwrap_or_default();
 
@@ -115,11 +90,8 @@ pub fn install(settings: &Value, command: &str) -> Value {
 }
 
 /// Return a new settings object with every permcheck PreToolUse hook removed.
-///
-/// A matcher group whose `hooks` array becomes empty is dropped; an emptied
-/// `PreToolUse` key is dropped; an emptied `hooks` object is dropped. Everything
-/// else is preserved. A no-op (deep-equal to the input) when no permcheck hook is
-/// present.
+/// Containers emptied by the removal are dropped in turn; everything else is
+/// preserved, and it is a no-op when no permcheck hook is present.
 pub fn uninstall(settings: &Value) -> Value {
     let mut root = match settings.as_object() {
         Some(o) => o.clone(),

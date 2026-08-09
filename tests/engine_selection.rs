@@ -47,10 +47,9 @@ fn relative_path_absolutized_against_cwd() {
     );
 }
 
-// Windows-only: a drive-letter CWD with backslashes must be normalized to a
-// POSIX-anchored form (`/D:/proj`) so the `/`-based Path globs still match the
-// absolutized relative payload. Not compiled on POSIX, where the CWD is already
-// `/`-rooted and `relative_path_absolutized_against_cwd` above covers the case.
+// Windows-only: a drive-letter CWD must be POSIX-anchored (`/D:/proj`) so the
+// `/`-based Path globs still match the absolutized relative payload. POSIX is
+// already `/`-rooted and covered above.
 #[cfg(windows)]
 #[test]
 fn windows_cwd_is_normalized_before_matching() {
@@ -61,10 +60,9 @@ fn windows_cwd_is_normalized_before_matching() {
     );
 }
 
-// Windows-only: the real hook payload for Read/Write/Edit is an *absolute*
-// path. A drive-letter payload (`D:\proj\.env`, or its forward-slash form) must
-// normalize to `/D:/proj/.env` so a `/`-anchored deny rule fires — and it must
-// NOT be mis-classified as relative and joined onto the (unrelated) cwd.
+// Windows-only: a drive-letter payload must normalize to `/D:/proj/.env` so a
+// `/`-anchored deny fires, and must not be mis-classified as relative and joined
+// onto an unrelated cwd.
 #[cfg(windows)]
 #[test]
 fn windows_absolute_drive_payload_is_normalized() {
@@ -79,10 +77,9 @@ fn windows_absolute_drive_payload_is_normalized() {
     );
 }
 
-// Windows-only: the filesystem is case-insensitive, so a differently-cased
-// payload opens the same file and must not slip past a deny. A literal deny
-// (`id_rsa`) must fire on `ID_RSA`/`Id_Rsa`, and the drive letter's case must
-// not matter either. Not compiled on POSIX, which is case-sensitive by design.
+// Windows-only: the filesystem is case-insensitive, so a differently-cased payload
+// opens the same file and must not slip past a deny. The drive letter's case must
+// not matter either. POSIX is case-sensitive by design.
 #[cfg(windows)]
 #[test]
 fn windows_path_matching_is_case_insensitive() {
@@ -138,11 +135,9 @@ fn generic_matches_host_not_substring() {
     );
 }
 
-// Windows-only: `C:notes.txt` with no separator is *drive-relative* — Windows
-// reads it as `notes.txt` under the current directory on drive C, not as
-// `C:\notes.txt`. It used to anchor as `/C:notes.txt`, which matches no `/C:/**`
-// rule at all, so a deny on the drive missed it entirely. It must now anchor
-// under `/C:/`.
+// Windows-only: `C:notes.txt` is drive-relative, read under the current directory
+// on drive C. Anchoring it as `/C:notes.txt` matched no `/C:/**` rule at all, so a
+// deny on the drive missed it. It must anchor under `/C:/`.
 #[cfg(windows)]
 #[test]
 fn windows_drive_relative_payload_anchors_under_the_drive() {
@@ -162,10 +157,9 @@ fn windows_drive_relative_payload_anchors_under_the_drive() {
     );
 }
 
-// Windows-only: the drive root is only a fallback. When the cwd names the same
-// drive it supplies the real current directory, so a deny anchored deeper than
-// the root still fires. A cwd on a *different* drive says nothing about where
-// `C:secret.txt` lands, so no candidate is invented from it.
+// Windows-only: the drive root is a fallback. A cwd on the same drive supplies the
+// real current directory, so a deny anchored deeper still fires; a cwd on another
+// drive says nothing, so no candidate is invented.
 #[cfg(windows)]
 #[test]
 fn windows_drive_relative_payload_resolves_against_a_same_drive_cwd() {

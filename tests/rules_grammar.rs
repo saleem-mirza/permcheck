@@ -1,7 +1,6 @@
-//! Rule grammar + loading tests (§3, §4).
-//!
-//! `parse_rule` is crate-internal, so these exercise the grammar through the
-//! public `RuleSet::load_str` loader and the public `CompiledRule` fields.
+//! Rule grammar and loading tests (§3, §4). `parse_rule` is crate-internal, so
+//! these exercise the grammar through the public `RuleSet::load_str` loader and
+//! the public `CompiledRule` fields.
 
 use permcheck::RuleSet;
 use permcheck::rules::LoadError;

@@ -355,10 +355,9 @@ fn install_refuses_to_repoint_noncanonical_hook() {
 
     let settings = home.join(".claude").join("settings.json");
     let dest = home.join(".claude").join("permcheck.json");
-    // Rewrite the baked command to reference a bogus, non-canonical path. Mutate
-    // the parsed JSON (not the raw text) so this is independent of how the path is
-    // escaped on the platform — on Windows the stored path is drive-lettered with
-    // escaped backslashes, which a raw `dest.display()` replace would miss.
+    // Rewrite the baked command to a bogus path. Mutate the parsed JSON, not the
+    // raw text, so this is independent of platform escaping: on Windows a raw
+    // `dest.display()` replace would miss the escaped backslashes.
     let mut v = read_json(&settings);
     for group in v["hooks"]["PreToolUse"].as_array_mut().unwrap() {
         for h in group["hooks"].as_array_mut().unwrap() {
@@ -446,10 +445,9 @@ fn install_rules_does_not_swallow_flag() {
         .stderr(predicates::str::contains("requires a path"));
 }
 
-// The policy writers create and never replace. Asking `exists()` first would not
-// give them that: a file appearing between the answer and the write gets
-// overwritten. These drive real concurrent processes at one path, so only a write
-// that binds the test to the creation can pass.
+// The policy writers create and never replace, which an `exists()` check cannot
+// give: a file appearing between the answer and the write gets overwritten. These
+// drive real concurrent processes, so only a binding write passes.
 #[test]
 fn concurrent_init_rules_produces_exactly_one_winner() {
     use std::process::{Command as Proc, Stdio};
@@ -498,11 +496,9 @@ fn concurrent_init_rules_produces_exactly_one_winner() {
     permcheck::RuleSet::load_str(&text).unwrap();
 }
 
-// A smoke test for the `--install` seeding path, which writes the starter policy
-// under `.claude/` rather than at a path the caller named. Weaker than the test
-// above by construction: every racer writes byte-identical starter content, so a
-// clobber leaves no trace and only a torn or missing file can fail this. It still
-// guards that concurrent installs leave one loadable policy behind.
+// Smoke test for the `--install` seeding path. Weaker than the test above by
+// construction: every racer writes byte-identical content, so only a torn or
+// missing file fails. It still guards that concurrent installs leave one policy.
 #[test]
 fn concurrent_install_seeds_the_rules_file_once() {
     use std::process::{Command as Proc, Stdio};

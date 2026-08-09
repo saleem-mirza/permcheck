@@ -1,9 +1,6 @@
-//! permcheck — a specificity-aware permission engine for Claude Code.
-//!
-//! Given a tool call and a [`RuleSet`], [`evaluate`] returns exactly one
-//! [`Decision`] (`allow` / `ask` / `deny`) with a human-readable reason. It
-//! never executes the tool call and never mutates state. The behavioral source
-//! of truth is `specs/SPEC.md`.
+//! permcheck: a specificity-aware permission engine for Claude Code. Given a tool
+//! call and a [`RuleSet`], [`evaluate`] returns one [`Decision`] with a reason,
+//! never executing the call. `specs/SPEC.md` is the source of truth.
 
 pub mod bash;
 pub mod engine;

@@ -136,10 +136,9 @@ fn clean_rules_emit_no_lint_warning() {
 
 #[test]
 fn relative_path_absolutizes_against_process_cwd() {
-    // `.env` is relative; it absolutizes against the process CWD and hits the
-    // Read `.env` deny, while an unrelated absolute path stays allowed. This
-    // holds cross-platform: a Windows drive-letter CWD (e.g. `D:\proj`) is
-    // normalized to a POSIX-anchored form (`/D:/proj`) before Path matching.
+    // `.env` absolutizes against the process CWD and hits the Read deny, while an
+    // unrelated absolute path stays allowed. Holds cross-platform: a Windows
+    // drive-letter CWD is POSIX-anchored before Path matching.
     let f = rules_file(r#"{"allow":["Read"],"deny":["Read(/**/.env*)"]}"#);
     assert_eq!(exit_code(&["Read", ".env"], f.path()), 2);
     assert_eq!(exit_code(&["Read", "/tmp/notes.txt"], f.path()), 0);
@@ -148,14 +147,8 @@ fn relative_path_absolutizes_against_process_cwd() {
 #[test]
 fn a_payload_that_looks_like_a_mode_flag_never_changes_mode() {
     // Mode selection reads only the flags before the first positional (§2.2).
-    // It used to scan the whole argument vector, so checking the literal command
-    // string `--install` performed a real install: wiring the PreToolUse hook and
-    // seeding a policy file under the user's home, while the caller believed it
-    // was checking a payload. The CLI exists to check hostile strings, so this
-    // must never reach a state-changing path.
-    //
-    // Asserting on the exit code alone would be weak, so each case also asserts
-    // that nothing was written where an install or a seed would land.
+    // Scanning the whole vector meant checking the literal string `--install`
+    // performed a real install. Each case also asserts nothing was written.
     let f = rules_file(RULES);
     let home = tempfile::tempdir().unwrap();
 

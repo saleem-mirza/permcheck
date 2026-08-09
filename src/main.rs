@@ -57,19 +57,8 @@ fn main() {
 }
 
 /// The leading arguments that select a mode: everything before the first
-/// positional (and before an explicit `--`).
-///
-/// In check mode the first positional is the tool name, so anything after it is
-/// the payload being checked, not a request to change what permcheck does.
-/// Without that cut, `permcheck Bash "--install" --rules <file>` scanned the
-/// whole argument vector, matched `--install`, and performed a real install:
-/// wiring the hook and seeding a policy while the caller believed it was
-/// checking a command string. The CLI exists to check arbitrary, potentially
-/// hostile payloads, which is exactly where such a string arrives.
-///
-/// A value-taking flag consumes the token after it, so that token is not the
-/// first positional. [`flag_value`] uses the same rule, so the two agree on
-/// where the flags end.
+/// positional. Without the cut, `permcheck Bash "--install" --rules <file>`
+/// performed a real install while the caller believed it was checking a string.
 fn mode_args(args: &[String]) -> &[String] {
     const VALUE_FLAGS: [&str; 2] = ["--rules", "--init-rules"];
     let mut i = 0;
@@ -130,9 +119,8 @@ fn settings_path(scope: Scope) -> Option<PathBuf> {
     Some(base.join(".claude").join(file))
 }
 
-/// The canonical rules-file path for a scope — next to that scope's settings
-/// file, so `--install` can seed/copy the policy into a predictable location.
-/// Local uses a `.local` variant, mirroring `settings.local.json`, so it never
+/// The canonical rules-file path for a scope, beside that scope's settings file.
+/// Local uses a `.local` variant mirroring `settings.local.json`, so it never
 /// collides with a project-scope `permcheck.json` in the same repo.
 fn rules_dest_path(scope: Scope) -> Option<PathBuf> {
     let (base, file): (PathBuf, &str) = match scope {
@@ -183,16 +171,9 @@ fn write_json_atomic(path: &Path, value: &serde_json::Value) -> std::io::Result<
     write_atomic(path, text.as_bytes())
 }
 
-/// Write `bytes` to `path` only when nothing is there yet, returning
-/// [`std::io::ErrorKind::AlreadyExists`] otherwise.
-///
-/// The policy writers want "create, never replace", and asking `exists()` first
-/// and then writing does not give them that: the answer is stale the moment it
-/// returns, so a file appearing in the gap gets overwritten by the write that
-/// follows. `create_new` puts the test and the creation in one syscall, which is
-/// the only way the check binds. Every caller here is a create-if-absent path, so
-/// none of them wants [`write_atomic`]'s replacing `rename`; that one stays for
-/// `settings.json`, where replacing in place is the point.
+/// Write `bytes` only when nothing is at `path` yet. `create_new` puts the test
+/// and the creation in one syscall, which is the only way the check binds: an
+/// `exists()` answer is stale the moment it returns.
 fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
 
@@ -549,16 +530,9 @@ fn run_hook(args: &[String]) {
 
     let decision = result.unwrap_or_else(|_| Decision::deny_msg("internal panic"));
 
-    // Write through a locked handle rather than `println!`: that macro panics on
-    // a write error, and this sits outside the `catch_unwind` above, so a stdout
-    // whose reader is gone exited 101 with no decision — which Claude Code reads
-    // as a non-blocking error and lets the tool call through. That was the one
-    // path where the hook failed open. (`std` reports EBADF on stdout as success,
-    // so the reachable failure is a broken pipe, not a closed descriptor.)
-    //
-    // An undeliverable decision falls back to the exit-code channel: exit 2 is a
-    // blocking error, so the call is stopped rather than waved through (§9.1).
-    // Nothing else is worth attempting here; stderr may be just as broken.
+    // Not `println!`: it panics on a write error, and this sits outside the
+    // `catch_unwind`, so a broken stdout exited 101 with no decision and Claude
+    // Code let the call through. Undeliverable now falls back to exit 2 (§9.1).
     let mut out = std::io::stdout().lock();
     if writeln!(out, "{}", decision.to_hook_json())
         .and_then(|()| out.flush())
@@ -581,10 +555,9 @@ fn run_cli(args: &[String]) {
 
     let json_mode = args.iter().any(|a| a == "--json");
 
-    // Positional args (not --rules, its value, or --json). An unrecognized long
-    // flag is a usage error: silently skipping `--jsn` would drop the caller into
-    // exit-code mode with no hint. A bare `--` ends option parsing, so a payload
-    // that looks like a flag stays checkable (`permcheck Bash --rules r -- --install`).
+    // Positional args only. An unrecognized long flag is a usage error, since
+    // silently skipping `--jsn` would drop the caller into exit-code mode with no
+    // hint. A bare `--` ends option parsing so a flag-like payload stays checkable.
     let positional: Vec<&str> = {
         let mut pos = Vec::new();
         let mut skip_next = false;
@@ -731,11 +704,9 @@ fn find_rules_arg(args: &[String]) -> Option<PathBuf> {
     flag_value(args, "--rules")
 }
 
-/// The value of a path-taking flag, in either `--flag=<path>` or `--flag <path>`
-/// form. A following flag (or nothing) means no value: the next token is not
-/// swallowed as the path, so callers see a dangling flag and error rather than
-/// silently seeding. Scanning stops at a bare `--`, so a payload after it is
-/// never mistaken for a flag.
+/// The value of a path-taking flag, `--flag=<path>` or `--flag <path>`. A
+/// following flag means no value, so callers error on a dangling flag rather than
+/// silently seeding. Scanning stops at a bare `--`.
 fn flag_value(args: &[String], flag: &str) -> Option<PathBuf> {
     let eq_prefix = format!("{flag}=");
     let mut iter = args.iter();

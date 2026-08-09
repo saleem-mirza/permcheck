@@ -144,18 +144,9 @@ fn extra_event_fields_are_tolerated() {
 
 #[test]
 fn an_undeliverable_decision_blocks_instead_of_failing_open() {
-    // The decision travels on stdout, so a stdout that cannot be written leaves
-    // the caller with no verdict. Writing through `println!` panicked here —
-    // outside the `catch_unwind` — and exited 101, which Claude Code reads as a
-    // non-blocking error and lets the tool call through: the one path where the
-    // hook failed open. The verdict now falls back to the exit-code channel,
-    // where 2 is a blocking error (§2.1, §9.1).
-    //
-    // A closed read end makes it deterministic: the decision is written only
-    // after stdin reaches EOF, and the read end is dropped before stdin is fed,
-    // so the write is guaranteed to hit a broken pipe. (An unwritable fd would
-    // not reproduce it — `std` reports EBADF on stdout as success by design, so
-    // a broken pipe is the failure mode that actually reaches the caller.)
+    // An unwritable stdout left the caller with no verdict: `println!` panicked
+    // outside the `catch_unwind` and exited 101, which Claude Code lets through. It
+    // now falls back to exit 2 (§2.1, §9.1); the dropped read end makes it certain.
     use std::process::{Command, Stdio};
 
     let f = rules_file(RULES);

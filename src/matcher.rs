@@ -1,8 +1,6 @@
-//! Per-family matchers and specificity scoring (§6.1, §6.5).
-//!
-//! [`compile`] turns a specifier string into a [`Matcher`] plus its specificity
-//! score. All globbing is hand-written (no `regex`) so cold-start cost stays in
-//! microseconds — the binary is a fresh short-lived process per tool call.
+//! Per-family matchers and specificity scoring (§6.1, §6.5). [`compile`] turns a
+//! specifier into a [`Matcher`] plus its specificity score; globbing is
+//! hand-written (no `regex`) to keep cold start in microseconds.
 
 use crate::types::Family;
 use std::borrow::Cow;
@@ -24,10 +22,9 @@ pub(crate) fn home_dir() -> &'static str {
     HOME.get_or_init(|| normalize_root(&raw_home().unwrap_or_default()))
 }
 
-/// Expand a leading `~` that names the caller's own home: `~` alone and `~/rest`.
-/// `~user` stays literal, since the engine has no way to learn another user's
-/// home (§7.2). One definition shared by specifier compilation and both payload
-/// resolvers, so they agree by construction.
+/// Expand a leading `~` naming the caller's own home: `~` alone and `~/rest`.
+/// `~user` stays literal, another user's home being unknowable (§7.2). Shared by
+/// specifier compilation and both payload resolvers, so they agree.
 pub(crate) fn expand_tilde(path: &str) -> Option<String> {
     if path == "~" {
         return Some(home_dir().to_string());
@@ -36,11 +33,9 @@ pub(crate) fn expand_tilde(path: &str) -> Option<String> {
         .map(|rest| format!("{}/{}", home_dir(), rest))
 }
 
-/// The home directory as the environment reports it, before normalization.
-///
-/// Single source of truth: `~` expansion ([`home_dir`]) and the binary's
-/// `--install` path resolution both read this, so they cannot resolve to
-/// different directories. POSIX (Linux and macOS) has only `$HOME`.
+/// The home directory as the environment reports it, before normalization. Single
+/// source of truth for `~` expansion ([`home_dir`]) and `--install` path
+/// resolution, so they cannot disagree. POSIX has only `$HOME`.
 #[cfg(not(windows))]
 pub fn raw_home() -> Option<String> {
     std::env::var("HOME").ok().filter(|s| !s.is_empty())
@@ -65,22 +60,17 @@ pub fn raw_home() -> Option<String> {
 }
 
 /// Normalize an absolute base path (a CWD or home dir) into a POSIX-anchored form
-/// so the `/`-based Path globs match.
-///
-/// Path specifiers are written POSIX-style (leading `/`, `/` separators), so a
-/// POSIX base is already anchored: on non-Windows targets this is the identity
-/// function and the whole transform compiles out. The Windows implementation
-/// below is the only platform-specific behavior.
+/// so the `/`-based Path globs match. Identity on POSIX, where it compiles out;
+/// the Windows twin below is the only platform-specific behavior.
 #[cfg(not(windows))]
 #[inline]
 pub fn normalize_root(dir: &str) -> String {
     dir.to_string()
 }
 
-/// A Windows base is a drive-letter path with backslashes (e.g. `D:\proj`); we
-/// convert `\` to `/` and prepend a `/` to the drive-letter root, so `D:\proj`
-/// becomes `/D:/proj` — an absolute-rooted candidate a rule like `/**/.env*`
-/// matches. A path already starting with `/` (an MSYS-style form) is left as is.
+/// A Windows base is a drive-letter path with backslashes (`D:\proj`); fold `\` to
+/// `/` and prepend `/` to the drive root, so `D:\proj` becomes `/D:/proj`, which a
+/// rule like `/**/.env*` matches. An already-`/`-rooted MSYS form is left alone.
 #[cfg(windows)]
 pub fn normalize_root(dir: &str) -> String {
     if dir.starts_with('/') {
@@ -89,15 +79,9 @@ pub fn normalize_root(dir: &str) -> String {
     let slashed = fold_separators(dir);
     let b = slashed.as_bytes();
     if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
-        // `X:/…` is drive-*rooted* and only needs the leading `/`.
-        //
-        // `X:rest` with no separator is drive-*relative*: Windows reads it as
-        // `rest` under the current directory on drive X, not as `X:\rest`. It
-        // still has to anchor under `/X:/`, because anchoring it as `/X:rest`
-        // leaves it matching no `/X:/**` rule at all, which fails open. The
-        // drive's current directory is unknowable from the payload alone, so
-        // this anchors at the drive root and [`drive_relative_join`] supplies
-        // the exact form when the call's cwd is on the same drive.
+        // `X:/…` is drive-rooted and only needs the leading `/`. `X:rest` is
+        // drive-relative, and anchoring it as `/X:rest` matches no `/X:/**` rule at
+        // all, so anchor at the drive root; [`drive_relative_join`] refines it.
         if b.get(2) == Some(&b'/') {
             format!("/{slashed}")
         } else {
@@ -108,13 +92,9 @@ pub fn normalize_root(dir: &str) -> String {
     }
 }
 
-/// Resolve a Windows drive-relative payload (`C:notes.txt`) against `cwd`, which
-/// is the only way to learn the current directory on that drive.
-///
-/// Returns `None` unless the payload really is drive-relative and `cwd` names the
-/// same drive; a different drive says nothing about where `C:notes.txt` lands, so
-/// no candidate is invented. Purely additive on top of the drive-root form
-/// [`normalize_root`] already produces, so it can only add a match.
+/// Resolve a Windows drive-relative payload (`C:notes.txt`) against `cwd`, the only
+/// way to learn that drive's current directory. `None` unless `cwd` names the same
+/// drive. Purely additive on the drive-root form, so it can only add a match.
 #[cfg(windows)]
 pub(crate) fn drive_relative_join(payload: &str, cwd: &str) -> Option<String> {
     let p = payload.as_bytes();
@@ -137,24 +117,18 @@ pub(crate) fn drive_relative_join(payload: &str, cwd: &str) -> Option<String> {
     Some(format!("{}/{}", base.trim_end_matches('/'), rest))
 }
 
-/// Fold platform path separators onto `/`, the separator every specifier is
-/// written with.
-///
-/// POSIX has only one separator, so this is the identity function and the whole
-/// transform compiles out; the Windows twin below is the only real work. Kept
-/// beside [`normalize_root`] because the two run together: fold first, then
-/// anchor the drive root.
+/// Fold platform path separators onto `/`, the separator every specifier uses.
+/// Identity on POSIX, where it compiles out. Runs with [`normalize_root`]: fold
+/// first, then anchor the drive root.
 #[cfg(not(windows))]
 #[inline]
 pub(crate) fn fold_separators(path: &str) -> Cow<'_, str> {
     Cow::Borrowed(path)
 }
 
-/// A Windows path separates with `\` (`C:\proj\..\src`), often mixed with `/`
-/// from a tool that wrote the path POSIX-style. Fold `\` onto `/` so segment
-/// splitting sees the real segments. A UNC root (`\\server\share`) becomes
-/// `//server/share` and an extended-length prefix (`\\?\C:\…`) becomes `//?/C:/…`;
-/// both stay `/`-rooted, which [`normalize_root`] then leaves alone.
+/// Windows separates with `\`, often mixed with `/`. Fold `\` onto `/` so segment
+/// splitting sees real segments. A UNC root becomes `//server/share` and `\\?\C:\…`
+/// becomes `//?/C:/…`; both stay `/`-rooted for [`normalize_root`].
 #[cfg(windows)]
 pub(crate) fn fold_separators(path: &str) -> Cow<'_, str> {
     if path.contains('\\') {
@@ -172,12 +146,9 @@ pub(crate) fn is_absolute(path: &str) -> bool {
     path.starts_with('/')
 }
 
-/// On Windows any drive-qualified payload answers `true`, whether it is
-/// drive-rooted (`X:\…`, `X:/…`) or drive-relative (`X:rest`). The predicate
-/// means "do not join this onto the CWD", and joining a drive-qualified path onto
-/// a CWD that may name a different drive is wrong in both cases.
-/// [`normalize_root`] anchors them, and [`drive_relative_join`] handles the
-/// drive-relative form when the CWD does name the same drive.
+/// On Windows any drive-qualified payload answers `true`, rooted (`X:\…`) or
+/// relative (`X:rest`): the predicate means "do not join onto the CWD", and the CWD
+/// may name another drive. [`normalize_root`] anchors both.
 #[cfg(windows)]
 pub(crate) fn is_absolute(path: &str) -> bool {
     if path.starts_with('/') {
@@ -187,12 +158,9 @@ pub(crate) fn is_absolute(path: &str) -> bool {
     b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
 }
 
-/// Why a specifier could not be compiled into a matcher (§4).
-///
-/// The matchers below are **total** for any non-empty specifier, so `Empty` is
-/// the only way `compile` can fail — and callers already reject empty specifiers
-/// earlier (see [`crate::rules::parse_rule`]). This enum exists so that a future
-/// fallible matcher has a typed failure that surfaces as a load error.
+/// Why a specifier could not be compiled into a matcher (§4). The matchers are
+/// total for any non-empty specifier and callers reject empty ones earlier, so this
+/// exists to give a future fallible matcher a typed load failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompileError {
     /// Empty specifier (`Tool()`), caught before reaching a matcher.
@@ -326,12 +294,9 @@ pub struct BashGlob {
     toks: Vec<PToken>,
 }
 
-/// Compile a Bash glob specifier into tokens. A `*` (or a run of them) becomes a
-/// single-token `Star` only when a space fences it on both sides — the
-/// `aws * describe-*` "argument slot" idiom — so it cannot swallow whitespace and
-/// let a mutating call ride in on a later `describe-` substring. A trailing `*`
-/// (space before, end after) and a word-attached `*` (`describe-*`) stay spanning
-/// `DStar`, preserving the established prefix and suffix idioms.
+/// Compile a Bash glob specifier into tokens. A `*` fenced by spaces on both sides
+/// becomes a single-token `Star` (the `aws * describe-*` slot idiom) so it cannot
+/// swallow whitespace; trailing and word-attached `*` stay spanning `DStar`.
 fn bash_glob_tokens(spec: &str) -> Vec<PToken> {
     let b = spec.as_bytes();
     let mut t = Vec::with_capacity(b.len());
@@ -359,10 +324,9 @@ fn bash_glob_tokens(spec: &str) -> Vec<PToken> {
     t
 }
 
-/// Anchored full-command match over Bash glob tokens with `sep` as the token
-/// separator. Mirrors [`glob_star_match`] for spanning `DStar`, and adds the
-/// single-token `Star` that stops at `sep`. Plain backtracking over trusted,
-/// short rule patterns (§9.2).
+/// Anchored full-command match over Bash glob tokens with `sep` as separator.
+/// Mirrors [`glob_star_match`] for spanning `DStar`, adding the single-token `Star`
+/// that stops at `sep`. Plain backtracking over short trusted patterns (§9.2).
 fn tokens_match(text: &[u8], toks: &[PToken], sep: u8) -> bool {
     nfa_match(text, toks, sep)
 }
@@ -489,11 +453,9 @@ impl PathMatcher {
             spec
         };
 
-        // Windows paths are case-insensitive, so fold the pattern to
-        // ASCII-lowercase; candidates are folded the same way in `matches`, and
-        // the byte-exact `path_match` then compares like cases. POSIX is
-        // case-sensitive and left untouched. (ASCII folding only — it covers
-        // drive letters and the common file names this tool matches on.)
+        // Windows paths are case-insensitive, so fold the pattern to ASCII
+        // lowercase; `matches` folds candidates the same way. POSIX is left
+        // untouched. ASCII only, which covers drive letters and common names.
         #[cfg(windows)]
         let normalized = normalized.to_ascii_lowercase();
 
@@ -543,10 +505,8 @@ fn has_glob_meta(s: &str) -> bool {
 }
 
 /// True if any path segment of `s` begins with a glob metacharacter. A shell
-/// leaves such a wildcard from matching a leading `.` (hidden files), so a
-/// segment-leading wildcard cannot resolve to a dotfile like `.env`; we defer
-/// those to the literal check and never escalate them (avoids over-denying
-/// ordinary globs such as `cat *.rs`).
+/// wildcard does not match a leading `.`, so such a segment cannot resolve to a
+/// dotfile; deferring these avoids over-denying ordinary globs like `cat *.rs`.
 fn has_segment_leading_wildcard(s: &str) -> bool {
     let mut seg_start = true;
     for &c in s.as_bytes() {
@@ -602,10 +562,7 @@ fn compile_operand_glob(s: &str) -> Vec<PToken> {
 
 /// A path candidate prepared once for matching against several deny rules, so a
 /// shell-glob operand is tokenized once rather than per rule (§8.3).
-///
-/// [`PathProbe::hits`] is monotone: it only adds hits over a plain matcher test,
-/// and only for operands whose every segment begins with a literal (see
-/// [`has_segment_leading_wildcard`]).
+/// [`PathProbe::hits`] is monotone: it only ever adds hits.
 pub(crate) struct PathProbe<'a> {
     raw: &'a str,
     operand_glob: Option<Vec<PToken>>,
@@ -636,10 +593,9 @@ impl<'a> PathProbe<'a> {
     }
 }
 
-/// Can two path globs share a concrete string? Product-automaton reachability
-/// over token positions `(i, j)`, where a wildcard either matches one shared
-/// character (staying put) or matches empty (advancing). Both inputs are short
-/// operator/operand globs, so the `(len+1)²` state space is tiny.
+/// Can two path globs share a concrete string? Product-automaton reachability over
+/// token positions, where a wildcard matches one shared character or empty. Both
+/// inputs are short operator globs, so the `(len+1)²` state space is tiny.
 fn globs_can_intersect(a: &[PToken], b: &[PToken]) -> bool {
     let (la, lb) = (a.len(), b.len());
     let width = lb + 1;
@@ -700,16 +656,9 @@ fn tokens_share_char(a: PToken, b: PToken) -> bool {
 
 // --- Containment / carve-out subset test (§6.3) ------------------------------
 
-/// True when every payload `a` matches is also matched by `d`, i.e.
-/// `L(a) ⊆ L(d)`. Used by the engine to decide whether an allow/ask rule is a
-/// genuine *carve-out* of a deny (a strict refinement) and so overrides it; on
-/// any other overlap the deny wins (§6.3).
-///
-/// The test is **sound but deliberately incomplete**: it returns `true` only when
-/// containment is proven, and falls back to `false` otherwise. A false negative
-/// keeps the deny, biasing toward `deny`, which matches the fail-closed posture
-/// (§9.2). A false positive would neutralize a deny that should hold, so the
-/// procedure never guesses.
+/// True when every payload `a` matches is also matched by `d` (`L(a) ⊆ L(d)`), so
+/// an allow/ask rule is a genuine carve-out of a deny and overrides it (§6.3).
+/// Sound but incomplete: it proves `true` or answers `false`, never guessing.
 pub(crate) fn matcher_subset(a: &Matcher, d: &Matcher) -> bool {
     match (a, d) {
         // A bare deny matches everything, so any allow is a subset of it.
@@ -760,10 +709,9 @@ fn glob_to_tokens(bytes: &[u8]) -> Vec<PToken> {
     t
 }
 
-/// True if command `cmd` is accepted by the trailing-`:*` prefix specifier `pre`
-/// (matches `pre` exactly, or `pre` followed by whitespace then anything). The
-/// single definition of prefix matching, used both by [`BashMatcher::matches`] and
-/// by the prefix-containment subset test.
+/// True if `cmd` is accepted by the trailing-`:*` prefix specifier `pre`: equal to
+/// `pre`, or `pre` then whitespace then anything. The single definition, used by
+/// [`BashMatcher::matches`] and by the prefix-containment subset test.
 fn prefix_covers(pre: &str, cmd: &str) -> bool {
     cmd == pre
         || (cmd.len() > pre.len()
@@ -790,11 +738,9 @@ fn bash_subset(a: &BashMatcher, d: &BashMatcher) -> bool {
         }
         // Space is the token separator for both Bash globs.
         (BashMatcher::Glob(ga), BashMatcher::Glob(gd)) => tokens_subset(&ga.toks, &gd.toks, b' '),
-        // A prefix's language is `pre` or `pre` + whitespace + anything. Over-
-        // approximate it as `pre` + `**` (more strings, so proving subset stays
-        // sound) and test against the glob. The prefix side keeps every `*`
-        // spanning (`glob_to_tokens`), since a `cmd:*` prefix treats `*` as a
-        // literal asterisk, so the spanning reading is the safe over-approximation.
+        // A prefix's language is `pre`, or `pre` + whitespace + anything.
+        // Over-approximate as `pre` + `**` (more strings, so subset stays sound).
+        // The prefix side keeps every `*` spanning, the safe reading for `cmd:*`.
         (BashMatcher::Prefix(pa), BashMatcher::Glob(gd)) => {
             let mut toks = glob_to_tokens(pa.as_bytes());
             toks.push(PToken::DStar);
@@ -803,15 +749,9 @@ fn bash_subset(a: &BashMatcher, d: &BashMatcher) -> bool {
     }
 }
 
-/// Sound, incomplete decision of `L(a) ⊆ L(d)` over path-glob tokens.
-///
-/// `d` is treated as a DFA via on-the-fly subset construction (`dstate` is the set
-/// of live `d` positions), so the deny side is deterministic and `dstate`'s
-/// accepting test is exact. `a` is then walked with its wildcards universally
-/// quantified over representative characters; containment holds only when every
-/// branch keeps `d` alive and accepting. Revisiting a `(position, dstate)` pair is
-/// treated as success (greatest-fixpoint over the safety property). Returns `false`
-/// for oversized or budget-exceeding inputs — always the safe direction.
+/// Sound, incomplete decision of `L(a) ⊆ L(d)` over path-glob tokens. `d` becomes a
+/// DFA by on-the-fly subset construction; `a` is walked with its wildcards
+/// universally quantified. Oversized or over-budget input answers `false`.
 fn tokens_subset(a: &[PToken], d: &[PToken], sep: u8) -> bool {
     // `dstate` is a bitset over positions `0..=d.len()`, so `d.len()` must index
     // into a u128. Oversized patterns (never real rules) fail closed.
@@ -845,29 +785,16 @@ fn tokens_subset(a: &[PToken], d: &[PToken], sep: u8) -> bool {
     incl(a, 0, start, &mut ctx)
 }
 
-/// Reject a pair before [`incl`] builds its representative sets and visit table,
-/// which is the whole per-call allocation cost.
-///
-/// Takes the one string obtained by letting every `a` wildcard match empty, and
-/// asks whether `d` accepts it. Sound because that string is exactly what [`incl`]
-/// tries first at each `Star` and `DStar` (the "ends now" branch it conjoins with
-/// the others), stepped through the same [`step_d`] model, so a pair rejected here
-/// is one `incl` would reject after far more work.
-///
-/// Runs only when `a` has no `?`. A `Ques` has to consume a character, and picking
-/// one outside the representative set [`incl`] quantifies over would not be a
-/// string `incl` checks.
-///
-/// Worth its own pass because containment is tested for every ask-and-deny and
-/// allow-and-ask rule pair, and in a real policy almost none of them are related.
+/// Reject a pair before [`incl`] allocates its representative sets and visit table.
+/// Sound because it tries exactly `incl`'s first branch, every `a` wildcard matching
+/// empty, through the same model. Skipped when `a` has a `?`, which must consume.
 fn shortest_witness_rejected(a: &[PToken], d: &[PToken], sep: u8) -> bool {
     if a.iter().any(|token| matches!(token, PToken::Ques)) {
         return false;
     }
-    // Cheap gate first. Every `d` literal has to be consumed by that exact
-    // character, so any string `d` accepts carries `d`'s literals in order. This
-    // is two pointers over the token slices, where the walk below is a `u128`
-    // transition per `d` position per character.
+    // Cheap gate first: every `d` literal must be consumed by that exact character,
+    // so any string `d` accepts carries `d`'s literals in order. Two pointers, where
+    // the walk below is a `u128` transition per `d` position per character.
     if !d_literals_are_subsequence(a, d) {
         return true;
     }
@@ -985,21 +912,9 @@ fn d_literals(d: &[PToken]) -> Vec<u8> {
     v
 }
 
-/// A byte that is neither the separator nor any of `d`'s literals — one
-/// representative for "every other character", which all of `d`'s tokens treat
-/// identically.
-///
-/// `None` when `d`'s literals leave no such byte. [`tokens_subset`] fails closed
-/// on that instead of substituting a byte `d` already names, which would quantify
-/// the `a`-wildcard adversary over a strictly smaller alphabet and could prove a
-/// containment that does not hold. A false positive there neutralizes a deny, the
-/// one direction this procedure never guesses at, so it joins the length and
-/// budget bounds either side of it in answering `false`.
-///
-/// Unreachable through a rule file today, and kept as a bound rather than an
-/// assertion for that reason: a specifier arrives as `&str`, so its literals are
-/// valid UTF-8 and `0xC0`, `0xC1`, and `0xF5..=0xFF` can never appear among them.
-/// A matcher compiled from raw bytes would not carry that guarantee.
+/// A byte that is neither the separator nor any of `d`'s literals: one
+/// representative for "every other character". `None` when none is left, and
+/// [`tokens_subset`] then fails closed rather than shrink the adversary's alphabet.
 fn fresh_byte(lits: &[u8], sep: u8) -> Option<u8> {
     (0u8..=255).find(|b| *b != sep && !lits.contains(b))
 }
@@ -1055,13 +970,9 @@ fn step_d(d: &[PToken], bits: u128, ch: u8, sep_byte: u8) -> u128 {
     closure_d(d, nb)
 }
 
-/// Anchored, full-string glob match with `/`-aware wildcards (§6.5).
-///
-/// Stackless state propagation visits each pattern position at most once per
-/// input byte, avoiding recursive backtracking and stack growth. Semantics:
-/// `*` spans a run of non-`/` bytes, `?` one non-`/` byte, `**` any run including
-/// `/`, and `**/` collapses to zero directories (so `/**/.env` matches `/.env`
-/// and `**/x` matches a bare `x`).
+/// Anchored, full-string glob match with `/`-aware wildcards (§6.5). Stackless
+/// state propagation, so no recursive backtracking. `*` spans non-`/` bytes, `?`
+/// one, `**` any run, and `**/` collapses to zero directories.
 fn path_match(pat: &[PToken], text: &[u8]) -> bool {
     if let Some(matches) = literal_tokens_match(pat, text) {
         return matches;
@@ -1114,9 +1025,8 @@ fn literal_tokens_match(toks: &[PToken], text: &[u8]) -> Option<bool> {
 }
 
 /// Path `**/` has one extra epsilon transition, but only before that `**` has
-/// consumed a character. Keeping consumed `**` states separate preserves the
-/// established rule that the slash may collapse for zero directories without
-/// letting a pattern match midway through a filename segment.
+/// consumed a character. Keeping consumed `**` states separate lets the slash
+/// collapse for zero directories without matching midway through a segment.
 fn path_epsilon_closure(states: &mut [bool], looped: &[bool], toks: &[PToken]) {
     for i in 0..toks.len() {
         if looped[i] && toks[i] == PToken::DStar {
@@ -1199,9 +1109,8 @@ mod subset_tests {
         assert!(fresh_byte(&ascii, b'/').is_some());
 
         // Absent only when every byte but the separator is already a literal. A
-        // rule file cannot reach this, because a specifier arrives as `&str` and
-        // its literals are therefore valid UTF-8, so the bound is asserted on the
-        // helper directly.
+        // rule file cannot reach this, since a specifier arrives as `&str` and its
+        // literals are valid UTF-8, so the bound is asserted on the helper.
         let all_but_sep: Vec<u8> = (0u8..=255).filter(|&b| b != b'/').collect();
         assert_eq!(fresh_byte(&all_but_sep, b'/'), None);
         // The separator itself is never offered as the fresh byte.

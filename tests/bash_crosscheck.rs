@@ -1,7 +1,6 @@
-//! Bash file-access cross-check unit tests (§8.3).
-//!
-//! The cross-check only ever raises a unit to `deny`; these assert it catches
-//! reads/writes to denied paths even when the base command is allowed.
+//! Bash file-access cross-check unit tests (§8.3). The cross-check only raises a
+//! unit to `deny`; these assert it catches reads and writes to denied paths even
+//! when the base command is allowed.
 
 use permcheck::bash::decide_bash;
 use permcheck::rules::RuleSet;
@@ -194,10 +193,9 @@ fn attached_short_option_does_not_eat_the_file() {
 
 #[test]
 fn an_options_separate_value_does_not_become_an_operand() {
-    // A value-taking option whose value is its own token used to leave that
-    // value in the operand stream, shifting everything after it by one: `5` was
-    // read as the pattern and `.env` as a file, so a command that only ever
-    // searched `notes.txt` was denied. The value is now consumed (§8.3).
+    // A value-taking option left its value in the operand stream, shifting
+    // everything after it: `5` read as the pattern and `.env` as a file, denying a
+    // command that only searched `notes.txt`. The value is now consumed (§8.3).
     let t = |c: &str| decide_bash(c, &grep_rs(), Some("/home/user")).tier;
     for cmd in [
         "grep -m 5 .env notes.txt",

@@ -1,9 +1,8 @@
 //! Best-effort compound-command splitting (§8.1).
 
-/// Nesting depth cap for substitutions (§9.1). `scan` recurses once per level,
-/// and a stack overflow aborts instead of unwinding, so `catch_unwind` could not
-/// turn it into `deny`. Well above any real command, well below the 1 MiB
-/// main-thread stack on Windows.
+/// Nesting depth cap for substitutions (§9.1). `scan` recurses per level, and a
+/// stack overflow aborts rather than unwinding, so `catch_unwind` could not turn
+/// it into `deny`. Well above any real command, well below a 1 MiB stack.
 const MAX_SUBST_DEPTH: u32 = 64;
 
 /// Unit ranges collected so far, current substitution depth, and whether the cap
@@ -59,26 +58,9 @@ fn scan(s: &str, start: usize, end: usize, ctx: &mut ScanCtx) {
             b'<' | b'>' if i + 1 < end && b[i + 1] == b'(' => {
                 i = handle_paren(s, i + 2, end, ctx);
             }
-            // A `(` in command position opens a subshell and `)` closes one. Both
-            // delimit a command the shell runs, so they bound a unit exactly as
-            // `;` does. Without this the whole subshell stays one unit whose first
-            // word is `(sudo`, and the `Bash(sudo:*)` deny that names the command
-            // never matches — while `$(sudo …)` and `` `sudo …` ``, the same
-            // command in the two spellings handled above, are caught. The three
-            // arms above claim their own parens first, so a substitution's
-            // delimiters never reach here.
-            //
-            // Command position is what makes `(` an operator: bash rejects an
-            // unquoted one anywhere else, so the test mirrors the `#` arm below.
-            // Elsewhere the byte is word content, which keeps an array assignment
-            // (`arr=(a b)`) and a format specifier (`--format=%(refname)`) intact
-            // rather than splitting them into units that match no rule.
-            //
-            // A bare `((…))` arithmetic command therefore yields its interior as a
-            // unit. That reaches no rule and falls to `defaultMode`, the same
-            // verdict the undivided spelling already got, and an unterminated
-            // `((sudo …` still exposes the command instead of hiding it behind a
-            // wholesale skip.
+            // A `(` in command position bounds a unit as `;` does; without it the
+            // subshell stays one unit starting `(sudo` and the deny never matches.
+            // Elsewhere it is word content, keeping `arr=(a b)` intact.
             b'(' if i == start
                 || matches!(b[i - 1], b' ' | b'\t' | b'\n' | b';' | b'&' | b'|' | b'(') =>
             {
@@ -133,13 +115,9 @@ fn scan(s: &str, start: usize, end: usize, ctx: &mut ScanCtx) {
                 i += 1;
                 unit_start = i;
             }
-            // An unquoted `#` opening a word starts a comment that bash discards
-            // through end-of-line, so the matched text must exclude it too:
-            // otherwise `aws … # describe-instances` smuggles the substring a glob allow
-            // needs into a command whose executed part stays destructive. A `#`
-            // right after a redirection operator (`>#file`) is a target word, not a
-            // comment, so `<`/`>` are excluded to keep that target visible to the
-            // file-access cross-check.
+            // An unquoted `#` opens a comment bash discards, so matched text must
+            // exclude it: `aws … # describe-instances` otherwise smuggles in the
+            // substring a glob allow needs. `>#file` is a target word, not a comment.
             b'#' if i == start
                 || matches!(b[i - 1], b' ' | b'\t' | b'\n' | b';' | b'&' | b'|' | b'(') =>
             {

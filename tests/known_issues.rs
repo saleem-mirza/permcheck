@@ -1,8 +1,6 @@
-//! §11 known issues in the reference rule set, locked as regressions.
-//!
-//! These assert the engine faithfully applies the *authored* rules — even where
-//! the rules do not express the operator's likely intent. If the reference file
-//! is later corrected (§11 backlog), these expectations change with it.
+//! §11 known issues in the reference rule set, locked as regressions. These assert
+//! the engine applies the authored rules faithfully even where they do not express
+//! the operator's likely intent; correcting the file changes them with it.
 
 use permcheck::{RuleSet, Tier, evaluate};
 use serde_json::json;

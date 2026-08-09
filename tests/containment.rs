@@ -1,9 +1,6 @@
-//! Carve-out / containment precedence (§6.3).
-//!
-//! A matching deny holds unless a matching allow/ask is a *strict* subset
-//! carve-out of it. These cases pin the cross-tier outcomes that a character-count
-//! specificity score got wrong: a longer allow that merely overlaps a deny must
-//! not override it, while a genuine refinement still does.
+//! Carve-out / containment precedence (§6.3). A deny holds unless an allow/ask is
+//! a strict subset carve-out of it. These pin the outcomes a character-count
+//! specificity score got wrong: overlap must not override, refinement must.
 
 use permcheck::bash::decide_bash;
 use permcheck::engine::decide_payload;
@@ -150,12 +147,9 @@ fn every_matching_deny_must_be_carved() {
     );
 }
 
-// A carve-out is a claim about which *paths* the exception covers, so it has to
-// survive a respelling of the path. `Bash(rm -rf /w/.scratch/*)` is a strict
-// subset of `Bash(rm -rf /*)` and legitimately carves it, but the carve-out must
-// not extend to a command whose operand only looks like it is inside the scratch
-// directory. The path-operand form (§8 step 2) is decided on its own precisely so
-// that a raw-text match cannot carve it away.
+// A carve-out claims which paths the exception covers, so it must survive a
+// respelling. It must not extend to an operand that only looks like it is inside
+// the scratch directory, which is why the path-operand form is decided on its own.
 #[test]
 fn a_carve_out_does_not_cover_a_traversal_out_of_its_directory() {
     let rs = RuleSet::load_str(
@@ -192,11 +186,9 @@ fn windows_carve_out_survives_backslash_traversal() {
     );
 }
 
-// The containment test rejects most rule pairs with a cheap pre-pass before its
-// automaton runs (`shortest_witness_rejected`): it takes the string `a` produces
-// when every wildcard matches empty and asks whether `d` accepts it. That pass is
-// an optimization and must never cost a carve-out, so these pin the shapes where
-// it comes closest to rejecting a real one.
+// The containment test rejects most pairs with a cheap pre-pass before its
+// automaton runs. That pass is an optimization and must never cost a carve-out,
+// so these pin the shapes where it comes closest to rejecting a real one.
 #[test]
 fn containment_prepass_keeps_every_genuine_carve_out() {
     // Each pair is `(allow, deny, payload)` where the allow is a true subset of
@@ -248,13 +240,9 @@ fn containment_prepass_does_not_invent_carve_outs() {
         ),
         ("Read(/a/**)", "Read(/a/*)", "/a/b"),
         ("Bash(git *)", "Bash(git push *)", "git push origin"),
-        // Pre-existing incompleteness, unchanged by the pre-pass and asserted here
-        // so it stays visible: the containment check models the deny without the
-        // `**/`-collapses-to-zero-directories rule that the matcher itself applies,
-        // so `/b` is not *proven* to be inside `/**/b` even though the matcher
-        // agrees it is. An unproven containment keeps the deny, which is the safe
-        // direction §6.3 commits to. Both spellings were verified to give the same
-        // verdict before and after the pre-pass.
+        // Pre-existing incompleteness, asserted so it stays visible: the check
+        // models the deny without the `**/`-collapses rule, so `/b` is not proven
+        // inside `/**/b`. Unproven containment keeps the deny, the safe direction.
         ("Read(/b)", "Read(/**/b)", "/b"),
         ("Read(x)", "Read(**/x)", "x"),
     ];

@@ -189,9 +189,8 @@ fn read_word(s: &str, start: usize) -> ShellWord {
             b' ' | b'\t' | b'<' | b'>' => break,
             b'\\' => {
                 // An unquoted backslash escapes the next character (`.\env` ->
-                // `.env`), so the cross-check tests the real path rather than the
-                // escaped spelling. Append the escaped char verbatim and advance a
-                // full UTF-8 char; a trailing backslash is dropped.
+                // `.env`), so the cross-check tests the real path. Advance a full
+                // UTF-8 char; a trailing backslash is dropped.
                 i += 1;
                 if let Some(ch) = s[i..].chars().next() {
                     out.push(ch);

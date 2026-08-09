@@ -1,8 +1,6 @@
-//! Rule grammar, loading, and the compiled rule set (§3, §4).
-//!
-//! Bad rules fail at **load**, never at decision time: every specifier is
-//! compiled up front, so [`load`] either returns a fully valid [`RuleSet`] or a
-//! [`LoadError`] the caller turns into `deny` (hook) / exit 3 (CLI).
+//! Rule grammar, loading, and the compiled rule set (§3, §4). Bad rules fail at
+//! **load**, never at decision time: [`load`] returns a fully valid [`RuleSet`] or
+//! a [`LoadError`] the caller turns into `deny` (hook) or exit 3 (CLI).
 
 use crate::matcher::{self, Matcher};
 use crate::types::{Family, Tier};
@@ -37,13 +35,9 @@ pub enum LoadError {
     MalformedRule(String),
     /// `Tool()` with an empty specifier.
     EmptySpecifier(String),
-    /// A specifier that could not be compiled into a matcher.
-    ///
-    /// Currently **unreachable**: the matchers in [`crate::matcher`] are total
-    /// for any non-empty specifier, and [`parse_rule`] already rejects the empty
-    /// specifier as [`LoadError::EmptySpecifier`] before calling `compile`. This
-    /// variant is a deliberate, forward-compatible placeholder so that adding a
-    /// fallible matcher later fails at **load**, never at decision time (§4).
+    /// A specifier that could not be compiled into a matcher. Unreachable today,
+    /// since the matchers are total for any non-empty specifier and empty ones are
+    /// rejected earlier; kept so a future fallible matcher fails at load (§4).
     BadSpecifier(String),
     /// A policy exceeded a documented resource bound.
     LimitExceeded(String),
@@ -162,21 +156,9 @@ impl RuleSet {
         rule_subset(narrow, broad) && !rule_subset(broad, narrow)
     }
 
-    /// Author-time lint warnings that do **not** block loading. The binary prints
-    /// these to stderr in the CLI-check and `--install` paths, never in hook mode.
-    ///
-    /// **Weakening carve-out.** A narrower rule that punches through a broader one
-    /// in the direction that *loosens* the decision, which is easy to write by
-    /// accident: an `ask` contained in a `deny` (a block silently becomes a
-    /// prompt), or an `allow` contained in a broader `ask` that outranks it on
-    /// specificity (a prompt silently becomes auto-allow). A narrower `allow`
-    /// inside a `deny` is **not** flagged: that is the intended read-only carve-out.
-    ///
-    /// **Unrecognized `defaultMode`.** Any value other than `"ask"` or `"deny"`.
-    /// §6.4 resolves it to `deny`, so the policy is fail-closed, but the key name
-    /// and the enclosing `permissions` object match Claude Code's `settings.json`,
-    /// where `defaultMode` names a session mode (`"dontAsk"`, `"acceptEdits"`, …).
-    /// A value pasted across changes the fall-back without saying so (§11.2).
+    /// Author-time lint warnings that do not block loading, printed to stderr in
+    /// the CLI-check and `--install` paths only. Two kinds: a narrower rule that
+    /// loosens a broader one, and an unrecognized `defaultMode` (§11.2).
     pub fn lint_warnings(&self) -> Vec<String> {
         let mut out = Vec::new();
 
@@ -217,10 +199,9 @@ impl RuleSet {
             }
         }
 
-        // Weakening carve-outs: a narrower rule that loosens a broader restriction.
-        // Wildcard selectors can interact with exact names, so compare all pairs;
-        // the cheap selector-containment gate rejects unrelated tools before the
-        // matcher containment work. File order keeps warnings deterministic.
+        // Wildcard selectors can interact with exact names, so compare all pairs.
+        // The cheap selector-containment gate rejects unrelated tools before the
+        // matcher work, and file order keeps warnings deterministic.
         for narrow in &self.rules {
             for broad in &self.rules {
                 // An `ask` inside a `deny` downgrades a hard block to a prompt.
@@ -352,23 +333,15 @@ impl RuleSet {
     }
 }
 
-/// The canonical reference rule set (`rules/permcheck.json`), embedded only in
-/// test builds so the suite can assert it loads and lints clean. It is **not** a
-/// decision-time default (the hook and CLI always require an explicit `--rules`),
-/// and it is **not** the `--init-rules` seed: that is [`starter_rules`], a
-/// minimal list. The full set stays the reference fixture for the spec and tests.
+/// The canonical reference rule set, embedded only in test builds so the suite can
+/// assert it loads and lints clean. Not a decision-time default (`--rules` is
+/// always required) and not the `--init-rules` seed, which is [`starter_rules`].
 #[cfg(test)]
 const DEFAULT_RULES: &str = include_str!("../rules/permcheck.json");
 
-/// The minimal but functional `deny` list `permcheck --init-rules` seeds. It is a
-/// safe default the user grows, not the full reference set: privilege escalation,
-/// destructive removes, secret reads (which also gate shell readers through the
-/// file-access cross-check), history-rewriting push, and edits to permcheck's own
-/// policy and its wiring.
-///
-/// The policy denies cover every location a decision can be read from: the
-/// `.local` scope variants and the plugin's `.permcheck/` override. Miss one and
-/// an allowed `Write` swaps the policy out from under the next call.
+/// The minimal `deny` list `--init-rules` seeds, a safe default the user grows.
+/// The policy denies cover every location a decision is read from: miss one and a
+/// `Write` swaps the policy out from under the next call.
 const STARTER_DENY: &[&str] = &[
     "Bash(sudo:*)",
     "Bash(rm -f:*)",
