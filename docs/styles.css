@@ -154,7 +154,8 @@ h1 {
 .brief {
   display: grid;
   grid-template-columns: 10rem minmax(0, 1fr);
-  gap: 1.5rem;
+  column-gap: 1.5rem;
+  row-gap: 0;
   margin: 0 0 1.25rem;
   padding: 1.5rem 1.65rem;
   background: var(--accent-soft);
@@ -169,7 +170,8 @@ h1 {
   letter-spacing: 0.09em;
   text-transform: uppercase;
 }
-.brief p:last-child { margin: 0; color: var(--ink-soft); }
+.brief > :not(.label) { grid-column: 2; color: var(--ink-soft); }
+.brief p:last-child { margin: 0; }
 
 .toc {
   margin: 1.25rem 0 3.75rem;
@@ -301,6 +303,7 @@ figcaption {
   background: #fffaf0;
   border-left-color: var(--ask);
 }
+.callout > :last-child,
 .callout p:last-child,
 .callout ul:last-child { margin-bottom: 0; }
 
@@ -504,6 +507,7 @@ table.compact td { padding: 0.6rem 0.75rem; }
   }
   .hero { padding-bottom: 2.2rem; }
   .brief { grid-template-columns: 1fr; gap: 0.35rem; }
+  .brief > :not(.label) { grid-column: 1; }
   .toc ol { columns: 1; }
   .three-up { grid-template-columns: 1fr; }
   .three-up .card:last-child { grid-column: auto; }
