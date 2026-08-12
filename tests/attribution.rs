@@ -91,6 +91,39 @@ fn the_cross_check_names_the_path_it_stopped() {
 }
 
 #[test]
+fn an_exhausted_cross_check_names_the_limit_and_no_rule() {
+    // Twenty 1000-token globs against an 1100-byte operand: each match is legal
+    // on its own (1.1M states, under the 2M per-match bound) and together they
+    // pass the 20M decision bound, so the scan runs out mid-way. It must deny,
+    // and it must not pin that deny on whichever rule it happened to reach.
+    let glob = "a".repeat(1000);
+    let deny: Vec<String> = (0..20).map(|_| format!("Read(/{glob}*)")).collect();
+    let policy = json!({
+        "defaultMode": "allow",
+        "allow": ["Bash(cat:*)"],
+        "deny": deny,
+    });
+    let rs = load_rules_str(&policy.to_string()).expect("crafted rules load");
+    let operand = "b".repeat(1100);
+    let decision = evaluate(
+        &rs,
+        "Bash",
+        &json!({ "command": format!("cat /{operand}") }),
+        Some("/work"),
+    );
+
+    assert_eq!(decision.tier, Tier::Deny, "{}", decision.reason);
+    assert!(
+        decision.reason.contains("blocked by a safety limit"),
+        "{}",
+        decision.reason
+    );
+    // The giveaway for the bug this locks: no `Read(...)` rule is named, since
+    // none of them matched.
+    assert!(!decision.reason.contains("Read("), "{}", decision.reason);
+}
+
+#[test]
 fn a_single_statement_drops_the_statement_prefix() {
     // The payload is already the statement, so repeating it would be noise.
     assert_eq!(

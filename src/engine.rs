@@ -311,8 +311,9 @@ fn url_host_ref(s: &str) -> Option<&str> {
 }
 
 /// Whether a deny-tier rule for one of `tools` matches `path`, and which rule did
-/// (§8.3). The inner `None` means the oversized-path guard denied without a rule.
-/// Candidates are prepared once into [`PathProbe`]s and reused across rules.
+/// (§8.3). The inner `None` means a §9.1 limit denied before any rule matched, so
+/// there is no rule to name: an oversized path, or matcher work exhausted
+/// mid-scan. Candidates are prepared once into [`PathProbe`]s and reused.
 pub(crate) fn path_deny_hit(
     rs: &RuleSet,
     tools: &[&str],
@@ -320,6 +321,15 @@ pub(crate) fn path_deny_hit(
     cwd: Option<&str>,
     budget: &mut WorkBudget,
 ) -> Option<Option<usize>> {
+    // Unreachable from the one caller today: a cross-check operand is bounded by
+    // its command, which `decide_bash` already caps. The invariant lives in
+    // another function, so the assert fails the tests the day a caller stops
+    // honouring it, and the fail-closed return still covers a release build.
+    debug_assert!(
+        path.len() <= MAX_PAYLOAD_BYTES,
+        "path_deny_hit got a {}-byte path; every caller is bounded by the command cap",
+        path.len()
+    );
     if path.len() > MAX_PAYLOAD_BYTES {
         return Some(None);
     }
@@ -328,19 +338,26 @@ pub(crate) fn path_deny_hit(
         .iter()
         .map(|candidate| crate::matcher::PathProbe::new(candidate.as_ref()))
         .collect();
-    tools.iter().find_map(|&tool| {
-        rs.matching_rule_indices(tool)
-            .iter()
-            .copied()
-            .find(|&idx| {
-                let rule = &rs.rules[idx];
-                rule.tier == Tier::Deny
-                    && probes
-                        .iter()
-                        .any(|probe| probe.hits(&rule.matcher, budget).unwrap_or(true))
-            })
-            .map(Some)
-    })
+    for &tool in tools {
+        for &idx in rs.matching_rule_indices(tool).iter() {
+            let rule = &rs.rules[idx];
+            if rule.tier != Tier::Deny {
+                continue;
+            }
+            for probe in &probes {
+                match probe.hits(&rule.matcher, budget) {
+                    Ok(true) => return Some(Some(idx)),
+                    Ok(false) => {}
+                    // Out of matcher work: fail closed, naming no rule. This one
+                    // did not match, and the scan never reached the rest, so
+                    // attributing the deny to it would send the operator to a
+                    // rule that has nothing to do with the block.
+                    Err(()) => return Some(None),
+                }
+            }
+        }
+    }
+    None
 }
 
 fn push_unique<'a>(v: &mut Vec<Cow<'a, str>>, s: Cow<'a, str>) {

@@ -63,9 +63,14 @@ impl fmt::Display for WhyClause<'_> {
                 "reaches denied path \"{}\" via {rule}",
                 Clipped(&hit.operand)
             ),
-            (Some(hit), _, None) => {
-                write!(f, "reaches denied path \"{}\"", Clipped(&hit.operand))
-            }
+            // No rule to name means a §9.1 limit stopped the scan, not that a
+            // rule denied the path. Claiming the latter sends the operator
+            // looking for a rule that does not exist.
+            (Some(hit), _, None) => write!(
+                f,
+                "could not check path \"{}\": blocked by a safety limit",
+                Clipped(&hit.operand)
+            ),
             (None, Some(stage), Some(rule)) => {
                 write!(f, "wrapper stage \"{}\" matched {rule}", Clipped(stage))
             }
