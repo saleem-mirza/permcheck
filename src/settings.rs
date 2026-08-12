@@ -29,7 +29,13 @@ pub fn installed_rules_path(settings: &Value) -> Option<String> {
             is_permcheck_hook(c).then_some(c)
         })
     })?;
-    let rest = command.split_once("--rules ")?.1.trim_start();
+    // Both spellings the binary itself accepts. Reading only `--rules <path>`
+    // left a hook wired with `--rules=<path>` looking pathless, so the refusal
+    // below never fired and the install re-pointed it.
+    let rest = match command.split_once("--rules=") {
+        Some((_, rest)) => rest,
+        None => command.split_once("--rules ")?.1.trim_start(),
+    };
     let path = match rest.strip_prefix('"') {
         // Quoted: runs to the closing quote, so it may contain spaces.
         Some(quoted) => quoted.split_once('"')?.0,

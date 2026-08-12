@@ -19,6 +19,12 @@ pub(crate) const MAX_RULES: usize = 4_096;
 pub(crate) const MAX_RULE_BYTES: usize = 1_024;
 pub(crate) const MAX_PAYLOAD_BYTES: usize = 32_768;
 
+/// Carve-out warnings reported before [`RuleSet::lint_warnings`] stops scanning
+/// pairs. An author fixes these a few at a time, and the pair scan is quadratic,
+/// so the cap is what keeps a repeated mistake from costing seconds of search and
+/// millions of lines of stderr.
+const MAX_CARVE_OUT_WARNINGS: usize = 50;
+
 /// Everything that can go wrong loading a rule file (§3, §4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadError {
@@ -170,7 +176,8 @@ impl RuleSet {
 
     /// Author-time lint warnings that do not block loading, printed to stderr in
     /// the CLI-check and `--install` paths only. Two kinds: a narrower rule that
-    /// loosens a broader one, and an unrecognized `defaultMode` (§11.2).
+    /// loosens a broader one, and an unrecognized `defaultMode` (§11.2). The
+    /// carve-out scan stops at [`MAX_CARVE_OUT_WARNINGS`].
     pub fn lint_warnings(&self) -> Vec<String> {
         let mut out = Vec::new();
 
@@ -214,8 +221,21 @@ impl RuleSet {
         // Wildcard selectors can interact with exact names, so compare all pairs.
         // The cheap selector-containment gate rejects unrelated tools before the
         // matcher work, and file order keeps warnings deterministic.
-        for narrow in &self.rules {
+        //
+        // The cap bounds the search as well as the output, since reaching it ends
+        // the scan: a policy repeating one mistake across N rules has N² carving
+        // pairs, and every one of them clears the cheap gate and runs the full
+        // containment test. 1000 asks inside 1000 denies took 7.7s and a million
+        // identical lines before the cap.
+        let carve_outs = out.len();
+        'pairs: for narrow in &self.rules {
             for broad in &self.rules {
+                if out.len() - carve_outs >= MAX_CARVE_OUT_WARNINGS {
+                    out.push(format!(
+                        "stopped after {MAX_CARVE_OUT_WARNINGS} carve-out warnings; fix these and re-run to see the rest."
+                    ));
+                    break 'pairs;
+                }
                 // An `ask` inside a `deny` downgrades a hard block to a prompt.
                 if narrow.tier == Tier::Ask
                     && broad.tier == Tier::Deny
@@ -621,6 +641,26 @@ mod lint_tests {
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("mcp__serena__read_file"));
         assert!(warnings[0].contains("mcp__serena__*"));
+    }
+
+    #[test]
+    fn the_carve_out_scan_stops_at_the_cap() {
+        // One mistake repeated across N rules has N² carving pairs, each running
+        // the full containment test. Unbounded, 1000 asks inside 1000 denies took
+        // 7.7s and a million identical lines.
+        let rules = |tier: &str, spec: &str| {
+            let one = format!(r#""Read({spec})""#);
+            format!(r#""{tier}":[{}]"#, vec![one; 200].join(","))
+        };
+        let rs = RuleSet::load_str(&format!(
+            "{{{},{}}}",
+            rules("ask", "/srv/app/**/*.conf"),
+            rules("deny", "/srv/app/**")
+        ))
+        .unwrap();
+        let w = rs.lint_warnings();
+        assert_eq!(w.len(), MAX_CARVE_OUT_WARNINGS + 1);
+        assert!(w.last().unwrap().contains("stopped after"));
     }
 
     #[test]

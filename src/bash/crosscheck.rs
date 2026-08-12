@@ -4,9 +4,10 @@ use crate::engine;
 use crate::rules::RuleSet;
 
 use super::prefix::{
-    ValueOpts, basename, command_name, consumes_next_value, name_eq, name_in, peel_wrappers,
+    ValueOpts, basename, cluster_ends_with, command_name, consumes_next_value, name_eq, name_in,
+    peel_wrappers,
 };
-use super::tokenize::{RedirectKind, Token, tokenize};
+use super::tokenize::{RedirectKind, shell_words};
 
 const READERS: &[&str] = &[
     "cat",
@@ -60,7 +61,10 @@ const PATTERN_FIRST: &[&str] = &[
     "grep", "egrep", "fgrep", "zgrep", "rgrep", "sed", "awk", "gawk",
 ];
 
-const WRITERS: &[&str] = &["tee", "truncate"];
+/// Commands whose every positional operand is a file they overwrite or destroy,
+/// so each is checked against the `Write`/`Edit` deny. Deleting a protected path
+/// ends it as thoroughly as writing over it, so `rm` and `shred` belong here.
+const WRITERS: &[&str] = &["tee", "truncate", "rm", "shred"];
 
 enum ReaderOpt<'a> {
     /// Supplies the pattern inline (`-e`, `--regexp`), so the first positional
@@ -146,16 +150,24 @@ fn reader_option(op: &str) -> Option<ReaderOpt<'_>> {
     if let Some(value) = op.strip_prefix("--regexp=") {
         return Some(ReaderOpt::Pattern(Some(value)));
     }
-    let b = op.as_bytes();
-    if b.len() >= 2 && b[0] == b'-' && b[1] != b'-' {
-        let attached = (op.len() > 2).then(|| &op[2..]);
-        return match b[1] {
-            b'f' => Some(ReaderOpt::PatternFile(attached)),
-            b'e' => Some(ReaderOpt::Pattern(attached)),
-            _ => None,
-        };
+    // The first pattern flag in a short-option bundle, so `-if FILE` reaches the
+    // same reading as `-f FILE`. Everything before it must be an ordinary flag
+    // letter; a non-alphanumeric byte means the run is some other option's
+    // attached value (`sort -t,o`), not a bundle.
+    let cluster = op.strip_prefix('-')?;
+    let at = cluster.bytes().position(|c| matches!(c, b'e' | b'f'))?;
+    if !cluster.as_bytes()[..at]
+        .iter()
+        .all(u8::is_ascii_alphanumeric)
+    {
+        return None;
     }
-    None
+    let rest = &cluster[at + 1..];
+    let attached = (!rest.is_empty()).then_some(rest);
+    Some(match cluster.as_bytes()[at] {
+        b'f' => ReaderOpt::PatternFile(attached),
+        _ => ReaderOpt::Pattern(attached),
+    })
 }
 
 /// Which file operand tripped the cross-check and the deny rule that stopped it,
@@ -176,13 +188,16 @@ fn hits(rs: &RuleSet, tools: &[&str], path: &str, cwd: Option<&str>) -> Option<C
 
 /// Return the file operand by which a simple command reads or writes a denied path.
 pub(super) fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> Option<CrossHit> {
-    let tokens = tokenize(cmd);
+    // The shared lexical layer, not the owned `tokenize` wrapper: every word is
+    // borrowed straight back out below, so building a `Token` per word only to
+    // discard the ownership cost one `String` per word per unit.
+    let parsed = shell_words(cmd);
 
-    for token in &tokens {
-        if let Token::Redirect(kind, target) = token {
+    for word in &parsed {
+        if let Some(kind) = word.redirect {
             let hit = match kind {
-                RedirectKind::In => hits(rs, &["Read"], target, cwd),
-                _ => hits(rs, &["Write", "Edit"], target, cwd),
+                RedirectKind::In => hits(rs, &["Read"], &word.value, cwd),
+                _ => hits(rs, &["Write", "Edit"], &word.value, cwd),
             };
             if hit.is_some() {
                 return hit;
@@ -190,12 +205,10 @@ pub(super) fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> Option<
         }
     }
 
-    let words: Vec<&str> = tokens
+    let words: Vec<&str> = parsed
         .iter()
-        .filter_map(|token| match token {
-            Token::Word(word) => Some(word.as_str()),
-            Token::Redirect(..) => None,
-        })
+        .filter(|word| word.redirect.is_none())
+        .map(|word| word.value.as_str())
         .collect();
     // A wrapper option of unknown arity leaves more than one candidate command
     // word (§8.2); the most-peeled reading comes first, so the hit it names is
@@ -324,14 +337,16 @@ fn cp_mv_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> Option<Cr
             positionals.push(operand);
         } else if operand == "--" {
             end_options = true;
-        } else if operand == "-t" || operand == "--target-directory" {
+        } else if operand == "--target-directory" {
             if let Some(value) = operands.get(i) {
                 target_dir = Some(*value);
                 i += 1;
             }
         } else if let Some(value) = operand.strip_prefix("--target-directory=") {
             target_dir = Some(value);
-        } else if let Some(value) = operand.strip_prefix("-t").filter(|value| !value.is_empty()) {
+        } else if let Some(value) = short_value(operand, b't', operands, &mut i) {
+            // `-t DIR`, `-tDIR`, and the bundled `-rt DIR`, which is how a copy
+            // into a denied directory otherwise reached no check at all.
             target_dir = Some(value);
         } else if !(operand.starts_with('-') && operand.len() > 1) {
             positionals.push(operand);
@@ -411,19 +426,23 @@ fn short_value<'a>(
     operands: &[&'a str],
     i: &mut usize,
 ) -> Option<&'a str> {
-    let b = operand.as_bytes();
-    if b.len() < 2 || b[0] != b'-' || b[1] == b'-' || b[1] != flag {
+    // `-TFILE`: the value is attached to its own flag.
+    if let Some(attached) = operand
+        .strip_prefix('-')
+        .and_then(|cluster| cluster.strip_prefix(flag as char))
+        && !attached.is_empty()
+    {
+        return Some(attached);
+    }
+    // `-T FILE`, and the bundled `-sT FILE`: the value is the next token.
+    if !cluster_ends_with(operand, flag) {
         return None;
     }
-    if operand.len() == 2 {
-        let value = operands.get(*i).copied();
-        if value.is_some() {
-            *i += 1;
-        }
-        value
-    } else {
-        Some(&operand[2..])
+    let value = operands.get(*i).copied();
+    if value.is_some() {
+        *i += 1;
     }
+    value
 }
 
 fn curl_file_ref(value: &str) -> Option<&str> {

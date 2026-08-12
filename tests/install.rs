@@ -384,34 +384,40 @@ fn install_refuses_to_repoint_noncanonical_hook() {
 }
 
 #[test]
-fn install_refuses_to_repoint_hand_wired_hook_with_unquoted_path() {
-    // A hand-wired hook may write the rules path unquoted. The guard must see
-    // that spelling too, or `--install` silently abandons that policy.
-    let tmp = tempfile::tempdir().unwrap();
-    let home = tmp.path();
-    let settings_dir = home.join(".claude");
-    fs::create_dir_all(&settings_dir).unwrap();
-    let settings = settings_dir.join("settings.json");
+fn install_refuses_to_repoint_hand_wired_hook_in_every_spelling() {
+    // A hand-wired hook may write the rules path unquoted, or pass it with `=`
+    // as the binary itself accepts. The guard must see every spelling, or
+    // `--install` silently abandons that policy.
+    for command in [
+        "/opt/bin/permcheck --hook --rules /etc/team-policy.json",
+        "/opt/bin/permcheck --hook --rules=/etc/team-policy.json",
+        r#"/opt/bin/permcheck --hook --rules="/etc/team-policy.json""#,
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let settings_dir = home.join(".claude");
+        fs::create_dir_all(&settings_dir).unwrap();
+        let settings = settings_dir.join("settings.json");
 
-    let hand_wired = serde_json::json!({
-        "hooks": { "PreToolUse": [
-            { "matcher": "*", "hooks": [
-                { "type": "command",
-                  "command": "/opt/bin/permcheck --hook --rules /etc/team-policy.json" }
+        let hand_wired = serde_json::json!({
+            "hooks": { "PreToolUse": [
+                { "matcher": "*", "hooks": [
+                    { "type": "command", "command": command }
+                ] }
             ] }
-        ] }
-    });
-    let before = serde_json::to_string_pretty(&hand_wired).unwrap();
-    fs::write(&settings, &before).unwrap();
+        });
+        let before = serde_json::to_string_pretty(&hand_wired).unwrap();
+        fs::write(&settings, &before).unwrap();
 
-    cmd(home, home)
-        .arg("--install")
-        .assert()
-        .code(3)
-        .stderr(predicates::str::contains("/etc/team-policy.json"))
-        .stderr(predicates::str::contains("re-point"));
+        cmd(home, home)
+            .arg("--install")
+            .assert()
+            .code(3)
+            .stderr(predicates::str::contains("/etc/team-policy.json"))
+            .stderr(predicates::str::contains("re-point"));
 
-    assert_eq!(before, fs::read_to_string(&settings).unwrap());
+        assert_eq!(before, fs::read_to_string(&settings).unwrap(), "{command}");
+    }
 }
 
 #[test]

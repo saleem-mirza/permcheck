@@ -18,14 +18,25 @@ pub(super) fn consumes_next_value(opts: &ValueOpts, option: &str) -> bool {
     if option.starts_with("--") {
         return opts.long.contains(&option);
     }
-    let Some(cluster) = option.strip_prefix('-') else {
-        return false;
-    };
-    cluster.bytes().all(|c| c.is_ascii_alphanumeric())
-        && cluster
-            .bytes()
-            .next_back()
-            .is_some_and(|last| opts.short.contains(&last))
+    last_cluster_flag(option).is_some_and(|last| opts.short.contains(&last))
+}
+
+/// The flag a bundle of short options ends with, whose value is therefore the
+/// next token. `None` when `option` is not such a bundle. The one definition of
+/// cluster arity, shared by wrapper peeling (§8.2) and the reader option parsers
+/// (§8.3); one pass over the token however many flags the caller tests.
+fn last_cluster_flag(option: &str) -> Option<u8> {
+    let cluster = option.strip_prefix('-')?;
+    cluster
+        .bytes()
+        .all(|c| c.is_ascii_alphanumeric())
+        .then(|| cluster.bytes().next_back())?
+}
+
+/// Does `option` bundle short flags and end with `flag`? `-o` and `-uo` do; `-ou`
+/// does not, since there the value would be attached.
+pub(super) fn cluster_ends_with(option: &str, flag: u8) -> bool {
+    last_cluster_flag(option) == Some(flag)
 }
 
 /// A wrapper command whose leading options are peeled to reach the real command,
