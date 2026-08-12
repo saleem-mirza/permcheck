@@ -2,9 +2,9 @@
 //! carve-out-aware selection every family uses; [`decide_payload`] is the whole
 //! decision for Path and Generic tools, and Bash adds its compound step.
 
-use crate::matcher::is_absolute;
 #[cfg(windows)]
 use crate::matcher::normalize_root;
+use crate::matcher::{WorkBudget, is_absolute};
 use crate::rules::{CompiledRule, MAX_PAYLOAD_BYTES, RuleSet};
 use crate::types::{Decision, Family, Tier};
 use std::borrow::Cow;
@@ -16,6 +16,7 @@ pub(crate) fn decide_hit<S: AsRef<str>>(
     rs: &RuleSet,
     tool: &str,
     candidates: &[S],
+    budget: &mut WorkBudget,
 ) -> Option<(Tier, Option<usize>)> {
     if candidates
         .iter()
@@ -41,7 +42,10 @@ pub(crate) fn decide_hit<S: AsRef<str>>(
         last_tier = rule.tier;
         let mut matched = false;
         for candidate in candidates {
-            match rule.matcher.matches_checked(candidate.as_ref()) {
+            match rule
+                .matcher
+                .matches_checked_with_budget(candidate.as_ref(), budget)
+            {
                 Ok(true) => {
                     matched = true;
                     break;
@@ -96,9 +100,10 @@ pub fn decide_payload(rs: &RuleSet, tool: &str, payload: &str, cwd: Option<&str>
         Family::Path => path_candidates(payload, cwd),
         _ => generic_candidates(payload),
     };
+    let mut budget = WorkBudget::new();
     // Fall-back §6.4. A single call is a one-statement list, attributed like a
     // Bash unit (§2.1).
-    let hit = decide_hit(rs, tool, &candidates);
+    let hit = decide_hit(rs, tool, &candidates, &mut budget);
     let tier = hit.map_or(rs.default_tier, |(tier, _)| tier);
     Decision::for_call_because(tier, tool, payload, || match hit {
         Some((_, Some(idx))) => Some(Clause::Rule(&rs.rules[idx].source)),
@@ -313,6 +318,7 @@ pub(crate) fn path_deny_hit(
     tools: &[&str],
     path: &str,
     cwd: Option<&str>,
+    budget: &mut WorkBudget,
 ) -> Option<Option<usize>> {
     if path.len() > MAX_PAYLOAD_BYTES {
         return Some(None);
@@ -331,7 +337,7 @@ pub(crate) fn path_deny_hit(
                 rule.tier == Tier::Deny
                     && probes
                         .iter()
-                        .any(|probe| probe.hits(&rule.matcher).unwrap_or(true))
+                        .any(|probe| probe.hits(&rule.matcher, budget).unwrap_or(true))
             })
             .map(Some)
     })

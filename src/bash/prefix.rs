@@ -18,25 +18,35 @@ pub(super) fn consumes_next_value(opts: &ValueOpts, option: &str) -> bool {
     if option.starts_with("--") {
         return opts.long.contains(&option);
     }
-    last_cluster_flag(option).is_some_and(|last| opts.short.contains(&last))
+    short_value_option(option, opts.short).is_some_and(|(_, attached)| attached.is_none())
 }
 
-/// The flag a bundle of short options ends with, whose value is therefore the
-/// next token. `None` when `option` is not such a bundle. The one definition of
-/// cluster arity, shared by wrapper peeling (§8.2) and the reader option parsers
-/// (§8.3); one pass over the token however many flags the caller tests.
-fn last_cluster_flag(option: &str) -> Option<u8> {
+/// The first value-taking flag in a short-option cluster and any value attached
+/// after it. A value-taking flag ends option parsing for that token: in `-to`,
+/// `t` owns the attached value `o`; the `o` is not another flag. `None` when the
+/// token is not an alphanumeric short-option cluster or has no value-taking flag.
+/// Shared by wrapper peeling (§8.2) and the reader option parsers (§8.3).
+pub(super) fn short_value_option<'a>(
+    option: &'a str,
+    value_flags: &[u8],
+) -> Option<(u8, Option<&'a str>)> {
     let cluster = option.strip_prefix('-')?;
-    cluster
-        .bytes()
-        .all(|c| c.is_ascii_alphanumeric())
-        .then(|| cluster.bytes().next_back())?
-}
-
-/// Does `option` bundle short flags and end with `flag`? `-o` and `-uo` do; `-ou`
-/// does not, since there the value would be attached.
-pub(super) fn cluster_ends_with(option: &str, flag: u8) -> bool {
-    last_cluster_flag(option) == Some(flag)
+    if cluster.is_empty() {
+        return None;
+    }
+    for (index, flag) in cluster.bytes().enumerate() {
+        if value_flags.contains(&flag) {
+            let rest = &cluster[index + 1..];
+            return Some((flag, (!rest.is_empty()).then_some(rest)));
+        }
+        // Bytes before the first value-taking option must be ordinary bundled
+        // flags. Its attached value may contain any byte, including `/`, `@`,
+        // `,`, or `=`; it is returned without further interpretation.
+        if !flag.is_ascii_alphanumeric() {
+            return None;
+        }
+    }
+    None
 }
 
 /// A wrapper command whose leading options are peeled to reach the real command,

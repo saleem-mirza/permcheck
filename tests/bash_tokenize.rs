@@ -2,66 +2,70 @@
 
 use permcheck::bash::{RedirectKind, Token, strip_env_assignments, tokenize};
 
+/// The word values of a command, redirections excluded.
+fn words(s: &str) -> Vec<String> {
+    tokenize(s)
+        .into_iter()
+        .filter_map(|token| match token {
+            Token::Word(word) => Some(word),
+            Token::Redirect(..) => None,
+        })
+        .collect()
+}
+
+/// A command's redirections as kind and target.
+fn redirects(s: &str) -> Vec<(RedirectKind, String)> {
+    tokenize(s)
+        .into_iter()
+        .filter_map(|token| match token {
+            Token::Redirect(kind, target) => Some((kind, target)),
+            Token::Word(_) => None,
+        })
+        .collect()
+}
+
 #[test]
 fn words_and_quotes() {
-    let toks = tokenize(r#"grep -i "some pattern" file.txt"#);
     assert_eq!(
-        toks,
-        vec![
-            Token::Word("grep".into()),
-            Token::Word("-i".into()),
-            Token::Word("some pattern".into()),
-            Token::Word("file.txt".into()),
-        ]
+        words(r#"grep -i "some pattern" file.txt"#),
+        ["grep", "-i", "some pattern", "file.txt"]
     );
 }
 
 #[test]
 fn ansi_c_and_locale_quotes_keep_spaced_words_together() {
+    let expected = ["/tmp/my tool/bin/rm", "-rf", "x"];
+    assert_eq!(words(r#"$'/tmp/my tool/bin/rm' -rf x"#), expected);
+    assert_eq!(words(r#"$"/tmp/my tool/bin/rm" -rf x"#), expected);
     assert_eq!(
-        tokenize(r#"$'/tmp/my tool/bin/rm' -rf x"#),
-        vec![
-            Token::Word("/tmp/my tool/bin/rm".into()),
-            Token::Word("-rf".into()),
-            Token::Word("x".into()),
-        ]
-    );
-    assert_eq!(
-        tokenize(r#"$"/tmp/my tool/bin/rm" -rf x"#),
-        vec![
-            Token::Word("/tmp/my tool/bin/rm".into()),
-            Token::Word("-rf".into()),
-            Token::Word("x".into()),
-        ]
-    );
-    assert_eq!(
-        tokenize(r#""/tmp/a\" b/bin/rm" -rf x"#),
-        vec![
-            Token::Word("/tmp/a\" b/bin/rm".into()),
-            Token::Word("-rf".into()),
-            Token::Word("x".into()),
-        ]
+        words(r#""/tmp/a\" b/bin/rm" -rf x"#),
+        ["/tmp/a\" b/bin/rm", "-rf", "x"]
     );
 }
 
 #[test]
 fn redirection_targets() {
-    let toks = tokenize("cat < in.txt > out.txt >> log");
-    assert!(toks.contains(&Token::Redirect(RedirectKind::In, "in.txt".into())));
-    assert!(toks.contains(&Token::Redirect(RedirectKind::Out, "out.txt".into())));
-    assert!(toks.contains(&Token::Redirect(RedirectKind::Append, "log".into())));
+    assert_eq!(
+        redirects("cat < in.txt > out.txt >> log"),
+        [
+            (RedirectKind::In, "in.txt".to_string()),
+            (RedirectKind::Out, "out.txt".to_string()),
+            (RedirectKind::Append, "log".to_string()),
+        ]
+    );
 }
 
 #[test]
 fn fd_dup_is_not_a_file_redirect() {
-    let toks = tokenize("cmd 2>&1");
-    assert!(!toks.iter().any(|t| matches!(t, Token::Redirect(_, _))));
+    assert!(redirects("cmd 2>&1").is_empty());
 }
 
 #[test]
 fn amp_redirect_to_filename_counts() {
-    let toks = tokenize("cmd >&out.log");
-    assert!(toks.contains(&Token::Redirect(RedirectKind::AmpOut, "out.log".into())));
+    assert_eq!(
+        redirects("cmd >&out.log"),
+        [(RedirectKind::AmpOut, "out.log".to_string())]
+    );
 }
 
 #[test]
@@ -87,22 +91,19 @@ fn env_stripping_stops_at_the_command() {
 #[test]
 fn amp_append_and_fd_close_are_classified() {
     // `&>>` to a filename is an appending write.
-    assert!(
-        tokenize("cmd &>> out.log")
-            .contains(&Token::Redirect(RedirectKind::AmpAppend, "out.log".into()))
+    assert_eq!(
+        redirects("cmd &>> out.log"),
+        [(RedirectKind::AmpAppend, "out.log".to_string())]
     );
-    // `>&-` closes an fd — not a file write.
-    assert!(
-        !tokenize("cmd >&-")
-            .iter()
-            .any(|t| matches!(t, Token::Redirect(_, _)))
-    );
+    // `>&-` closes an fd, not a file write.
+    assert!(redirects("cmd >&-").is_empty());
 }
 
 #[test]
 fn spaced_redirection_target_is_read() {
     // The operator and its target may be separated by whitespace.
-    assert!(
-        tokenize("cat >   out.txt").contains(&Token::Redirect(RedirectKind::Out, "out.txt".into()))
+    assert_eq!(
+        redirects("cat >   out.txt"),
+        [(RedirectKind::Out, "out.txt".to_string())]
     );
 }

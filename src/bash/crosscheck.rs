@@ -1,11 +1,12 @@
 //! File-access cross-checking for simple Bash commands (§8.3).
 
 use crate::engine;
+use crate::matcher::WorkBudget;
 use crate::rules::RuleSet;
 
 use super::prefix::{
-    ValueOpts, basename, cluster_ends_with, command_name, consumes_next_value, name_eq, name_in,
-    peel_wrappers,
+    ValueOpts, basename, command_name, consumes_next_value, name_eq, name_in, peel_wrappers,
+    short_value_option,
 };
 use super::tokenize::{RedirectKind, shell_words};
 
@@ -82,7 +83,7 @@ enum ReaderOpt<'a> {
 /// file. Deliberately short: skipping a real file operand under-denies, so
 /// varying-arity options are left out.
 const GREP_VALUE_OPTS: ValueOpts = ValueOpts {
-    short: b"mABCdD",
+    short: b"mABCdDef",
     long: &[
         "--max-count",
         "--after-context",
@@ -99,7 +100,12 @@ const GREP_VALUE_OPTS: ValueOpts = ValueOpts {
 };
 
 const AWK_VALUE_OPTS: ValueOpts = ValueOpts {
-    short: b"vF",
+    short: b"vFef",
+    long: &[],
+};
+
+const SED_VALUE_OPTS: ValueOpts = ValueOpts {
+    short: b"ef",
     long: &[],
 };
 
@@ -107,7 +113,7 @@ const AWK_VALUE_OPTS: ValueOpts = ValueOpts {
 /// the value here keeps [`reader_reads_denied`] from treating the output path as
 /// an input operand and checking it against `Read` instead of `Write`.
 const SORT_VALUE_OPTS: ValueOpts = ValueOpts {
-    short: b"o",
+    short: b"koStT",
     long: &["--output"],
 };
 
@@ -116,11 +122,19 @@ const NO_VALUE_OPTS: ValueOpts = ValueOpts {
     long: &[],
 };
 
+/// Curl short options with mandatory values. The first one in a cluster owns
+/// every byte after it, so an apparent `d`, `F`, or `T` later in that value is
+/// not a file-reading flag. Kept beside the curl parser rather than in the
+/// wrapper table because these options describe curl itself.
+const CURL_VALUE_OPTS: &[u8] = b"AbcCdDEeFhHKmoPQrTtUuwxXyYz";
+
 fn value_opts(name: &str) -> &'static ValueOpts {
     if name_in(name, &["grep", "egrep", "fgrep", "zgrep", "rgrep"]) {
         &GREP_VALUE_OPTS
     } else if name_in(name, &["awk", "gawk"]) {
         &AWK_VALUE_OPTS
+    } else if name_eq(name, "sed") {
+        &SED_VALUE_OPTS
     } else if name_eq(name, "sort") {
         &SORT_VALUE_OPTS
     } else {
@@ -128,7 +142,7 @@ fn value_opts(name: &str) -> &'static ValueOpts {
     }
 }
 
-fn reader_option(op: &str) -> Option<ReaderOpt<'_>> {
+fn reader_option<'a>(name: &str, op: &'a str) -> Option<ReaderOpt<'a>> {
     if op == "--file" {
         return Some(ReaderOpt::PatternFile(None));
     }
@@ -150,23 +164,14 @@ fn reader_option(op: &str) -> Option<ReaderOpt<'_>> {
     if let Some(value) = op.strip_prefix("--regexp=") {
         return Some(ReaderOpt::Pattern(Some(value)));
     }
-    // The first pattern flag in a short-option bundle, so `-if FILE` reaches the
-    // same reading as `-f FILE`. Everything before it must be an ordinary flag
-    // letter; a non-alphanumeric byte means the run is some other option's
-    // attached value (`sort -t,o`), not a bundle.
-    let cluster = op.strip_prefix('-')?;
-    let at = cluster.bytes().position(|c| matches!(c, b'e' | b'f'))?;
-    if !cluster.as_bytes()[..at]
-        .iter()
-        .all(u8::is_ascii_alphanumeric)
-    {
-        return None;
-    }
-    let rest = &cluster[at + 1..];
-    let attached = (!rest.is_empty()).then_some(rest);
-    Some(match cluster.as_bytes()[at] {
+    // The first value-taking flag decides the rest of a short-option bundle. In
+    // `grep -if FILE`, `f` is first and consumes FILE; in `grep -mf`, `m` owns
+    // the attached value `f`, so that byte must not be re-read as a file flag.
+    let (flag, attached) = short_value_option(op, value_opts(name).short)?;
+    Some(match flag {
         b'f' => ReaderOpt::PatternFile(attached),
-        _ => ReaderOpt::Pattern(attached),
+        b'e' => ReaderOpt::Pattern(attached),
+        _ => return None,
     })
 }
 
@@ -179,15 +184,26 @@ pub(super) struct CrossHit {
 
 /// Check one operand against the deny rules for `tools`. The only place a
 /// [`CrossHit`] is built, so every call site reports the operand it tested.
-fn hits(rs: &RuleSet, tools: &[&str], path: &str, cwd: Option<&str>) -> Option<CrossHit> {
-    engine::path_deny_hit(rs, tools, path, cwd).map(|rule| CrossHit {
+fn hits(
+    rs: &RuleSet,
+    tools: &[&str],
+    path: &str,
+    cwd: Option<&str>,
+    budget: &mut WorkBudget,
+) -> Option<CrossHit> {
+    engine::path_deny_hit(rs, tools, path, cwd, budget).map(|rule| CrossHit {
         operand: path.to_string(),
         rule,
     })
 }
 
 /// Return the file operand by which a simple command reads or writes a denied path.
-pub(super) fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> Option<CrossHit> {
+pub(super) fn cross_check(
+    rs: &RuleSet,
+    cmd: &str,
+    cwd: Option<&str>,
+    budget: &mut WorkBudget,
+) -> Option<CrossHit> {
     // The shared lexical layer, not the owned `tokenize` wrapper: every word is
     // borrowed straight back out below, so building a `Token` per word only to
     // discard the ownership cost one `String` per word per unit.
@@ -196,8 +212,8 @@ pub(super) fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> Option<
     for word in &parsed {
         if let Some(kind) = word.redirect {
             let hit = match kind {
-                RedirectKind::In => hits(rs, &["Read"], &word.value, cwd),
-                _ => hits(rs, &["Write", "Edit"], &word.value, cwd),
+                RedirectKind::In => hits(rs, &["Read"], &word.value, cwd, budget),
+                _ => hits(rs, &["Write", "Edit"], &word.value, cwd, budget),
             };
             if hit.is_some() {
                 return hit;
@@ -215,12 +231,17 @@ pub(super) fn cross_check(rs: &RuleSet, cmd: &str, cwd: Option<&str>) -> Option<
     // the accurate one whenever it fires.
     peel_wrappers(&words)
         .into_iter()
-        .find_map(|reading| simple_command_hit(rs, reading, cwd))
+        .find_map(|reading| simple_command_hit(rs, reading, cwd, budget))
 }
 
 /// Return the file operand by which one reading of a simple command reads or
 /// writes a denied path.
-fn simple_command_hit(rs: &RuleSet, words: &[&str], cwd: Option<&str>) -> Option<CrossHit> {
+fn simple_command_hit(
+    rs: &RuleSet,
+    words: &[&str],
+    cwd: Option<&str>,
+    budget: &mut WorkBudget,
+) -> Option<CrossHit> {
     let &command = words.first()?;
     let name = command_name(command);
     let operands = &words[1..];
@@ -229,13 +250,13 @@ fn simple_command_hit(rs: &RuleSet, words: &[&str], cwd: Option<&str>) -> Option
         for operand in operands {
             if let Some(path) = operand.strip_prefix("if=")
                 && !path.is_empty()
-                && let Some(hit) = hits(rs, &["Read"], path, cwd)
+                && let Some(hit) = hits(rs, &["Read"], path, cwd, budget)
             {
                 return Some(hit);
             }
             if let Some(path) = operand.strip_prefix("of=")
                 && !path.is_empty()
-                && let Some(hit) = hits(rs, &["Write", "Edit"], path, cwd)
+                && let Some(hit) = hits(rs, &["Write", "Edit"], path, cwd, budget)
             {
                 return Some(hit);
             }
@@ -244,11 +265,11 @@ fn simple_command_hit(rs: &RuleSet, words: &[&str], cwd: Option<&str>) -> Option
         // `sort -o FILE` writes FILE, unlike every other reader; check it against
         // the write deny before the read-operand scan.
         if name_eq(name, "sort")
-            && let Some(hit) = sort_writes_denied(rs, operands, cwd)
+            && let Some(hit) = sort_writes_denied(rs, operands, cwd, budget)
         {
             return Some(hit);
         }
-        if let Some(hit) = reader_reads_denied(rs, name, operands, cwd) {
+        if let Some(hit) = reader_reads_denied(rs, name, operands, cwd, budget) {
             return Some(hit);
         }
     } else if name_in(name, WRITERS) {
@@ -256,16 +277,16 @@ fn simple_command_hit(rs: &RuleSet, words: &[&str], cwd: Option<&str>) -> Option
             if operand.starts_with('-') || operand.contains('=') {
                 continue;
             }
-            if let Some(hit) = hits(rs, &["Write", "Edit"], operand, cwd) {
+            if let Some(hit) = hits(rs, &["Write", "Edit"], operand, cwd, budget) {
                 return Some(hit);
             }
         }
     } else if name_in(name, &["cp", "mv"]) {
-        return cp_mv_denied(rs, operands, cwd);
+        return cp_mv_denied(rs, operands, cwd, budget);
     } else if name_eq(name, "curl") {
-        return curl_reads_denied(rs, operands, cwd);
+        return curl_reads_denied(rs, operands, cwd, budget);
     } else if name_eq(name, "wget") {
-        return wget_reads_denied(rs, operands, cwd);
+        return wget_reads_denied(rs, operands, cwd, budget);
     }
     None
 }
@@ -275,6 +296,7 @@ fn reader_reads_denied(
     name: &str,
     operands: &[&str],
     cwd: Option<&str>,
+    budget: &mut WorkBudget,
 ) -> Option<CrossHit> {
     let pattern_first = name_in(name, PATTERN_FIRST);
     let mut pattern_consumed = false;
@@ -288,7 +310,7 @@ fn reader_reads_denied(
             continue;
         }
         if !end_of_options && operand.len() > 1 && operand.starts_with('-') {
-            if pattern_first && let Some(kind) = reader_option(operand) {
+            if pattern_first && let Some(kind) = reader_option(name, operand) {
                 let (checks_file, supplies_pattern, attached) = match kind {
                     ReaderOpt::Pattern(value) => (false, true, value),
                     ReaderOpt::PatternFile(value) => (true, true, value),
@@ -299,7 +321,7 @@ fn reader_reads_denied(
                 if checks_file
                     && let Some(value) = value
                     && !value.is_empty()
-                    && let Some(hit) = hits(rs, &["Read"], value, cwd)
+                    && let Some(hit) = hits(rs, &["Read"], value, cwd, budget)
                 {
                     return Some(hit);
                 }
@@ -315,7 +337,7 @@ fn reader_reads_denied(
             pattern_consumed = true;
             continue;
         }
-        if let Some(hit) = hits(rs, &["Read"], operand, cwd) {
+        if let Some(hit) = hits(rs, &["Read"], operand, cwd, budget) {
             return Some(hit);
         }
     }
@@ -325,7 +347,12 @@ fn reader_reads_denied(
 /// `cp` and `mv` touch two sides and both are checked. Sources go against `Read`
 /// deny, since `cp .env /tmp/leak` exposes a secret exactly as `cat` does; the
 /// destination goes against `Write`/`Edit`, since that is how a policy is swapped.
-fn cp_mv_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> Option<CrossHit> {
+fn cp_mv_denied(
+    rs: &RuleSet,
+    operands: &[&str],
+    cwd: Option<&str>,
+    budget: &mut WorkBudget,
+) -> Option<CrossHit> {
     let mut target_dir = None;
     let mut positionals = Vec::new();
     let mut end_options = false;
@@ -344,7 +371,7 @@ fn cp_mv_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> Option<Cr
             }
         } else if let Some(value) = operand.strip_prefix("--target-directory=") {
             target_dir = Some(value);
-        } else if let Some(value) = short_value(operand, b't', operands, &mut i) {
+        } else if let Some(value) = short_value(operand, b't', b"St", operands, &mut i) {
             // `-t DIR`, `-tDIR`, and the bundled `-rt DIR`, which is how a copy
             // into a denied directory otherwise reached no check at all.
             target_dir = Some(value);
@@ -353,14 +380,14 @@ fn cp_mv_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> Option<Cr
         }
     }
 
-    let reads = |path: &str| {
+    let reads = |path: &str, budget: &mut WorkBudget| {
         (!path.is_empty())
-            .then(|| hits(rs, &["Read"], path, cwd))
+            .then(|| hits(rs, &["Read"], path, cwd, budget))
             .flatten()
     };
-    let writes = |path: &str| {
+    let writes = |path: &str, budget: &mut WorkBudget| {
         (!path.is_empty())
-            .then(|| hits(rs, &["Write", "Edit"], path, cwd))
+            .then(|| hits(rs, &["Write", "Edit"], path, cwd, budget))
             .flatten()
     };
 
@@ -382,22 +409,22 @@ fn cp_mv_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> Option<Cr
             ),
         },
     };
-    if let Some(hit) = sources.iter().find_map(|source| reads(source)) {
+    if let Some(hit) = sources.iter().find_map(|source| reads(source, budget)) {
         return Some(hit);
     }
 
     if let Some(directory) = directory {
-        if let Some(hit) = writes(directory) {
+        if let Some(hit) = writes(directory, budget) {
             return Some(hit);
         }
         let base = directory.trim_end_matches('/');
         return sources
             .iter()
-            .find_map(|source| writes(&format!("{base}/{}", basename(source))));
+            .find_map(|source| writes(&format!("{base}/{}", basename(source)), budget));
     }
     positionals
         .split_last()
-        .and_then(|(destination, _)| writes(destination))
+        .and_then(|(destination, _)| writes(destination, budget))
 }
 
 fn long_value<'a>(
@@ -423,21 +450,18 @@ fn long_value<'a>(
 fn short_value<'a>(
     operand: &'a str,
     flag: u8,
+    value_flags: &[u8],
     operands: &[&'a str],
     i: &mut usize,
 ) -> Option<&'a str> {
-    // `-TFILE`: the value is attached to its own flag.
-    if let Some(attached) = operand
-        .strip_prefix('-')
-        .and_then(|cluster| cluster.strip_prefix(flag as char))
-        && !attached.is_empty()
-    {
+    let (found, attached) = short_value_option(operand, value_flags)?;
+    if found != flag {
+        return None;
+    }
+    if let Some(attached) = attached {
         return Some(attached);
     }
     // `-T FILE`, and the bundled `-sT FILE`: the value is the next token.
-    if !cluster_ends_with(operand, flag) {
-        return None;
-    }
     let value = operands.get(*i).copied();
     if value.is_some() {
         *i += 1;
@@ -455,16 +479,21 @@ fn curl_file_ref(value: &str) -> Option<&str> {
     value.find('<').map(|position| &value[position + 1..])
 }
 
-fn curl_reads_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> Option<CrossHit> {
+fn curl_reads_denied(
+    rs: &RuleSet,
+    operands: &[&str],
+    cwd: Option<&str>,
+    budget: &mut WorkBudget,
+) -> Option<CrossHit> {
     let mut i = 0;
     while i < operands.len() {
         let operand = operands[i];
         i += 1;
         if let Some(path) = long_value(operand, "--upload-file", operands, &mut i)
-            .or_else(|| short_value(operand, b'T', operands, &mut i))
+            .or_else(|| short_value(operand, b'T', CURL_VALUE_OPTS, operands, &mut i))
         {
             if !path.is_empty()
-                && let Some(hit) = hits(rs, &["Read"], path, cwd)
+                && let Some(hit) = hits(rs, &["Read"], path, cwd, budget)
             {
                 return Some(hit);
             }
@@ -476,12 +505,12 @@ fn curl_reads_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> Opti
             .or_else(|| long_value(operand, "--data-urlencode", operands, &mut i))
             .or_else(|| long_value(operand, "--data", operands, &mut i))
             .or_else(|| long_value(operand, "--form", operands, &mut i))
-            .or_else(|| short_value(operand, b'd', operands, &mut i))
-            .or_else(|| short_value(operand, b'F', operands, &mut i));
+            .or_else(|| short_value(operand, b'd', CURL_VALUE_OPTS, operands, &mut i))
+            .or_else(|| short_value(operand, b'F', CURL_VALUE_OPTS, operands, &mut i));
         if let Some(value) = data
             && let Some(path) = curl_file_ref(value)
             && !path.is_empty()
-            && let Some(hit) = hits(rs, &["Read"], path, cwd)
+            && let Some(hit) = hits(rs, &["Read"], path, cwd, budget)
         {
             return Some(hit);
         }
@@ -492,15 +521,20 @@ fn curl_reads_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> Opti
 /// Return the file operand by which `sort -o FILE` / `sort --output=FILE` writes a
 /// denied path. `sort` reads its inputs like any reader; this covers the one flag
 /// that turns it into a writer.
-fn sort_writes_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> Option<CrossHit> {
+fn sort_writes_denied(
+    rs: &RuleSet,
+    operands: &[&str],
+    cwd: Option<&str>,
+    budget: &mut WorkBudget,
+) -> Option<CrossHit> {
     let mut i = 0;
     while i < operands.len() {
         let operand = operands[i];
         i += 1;
         if let Some(path) = long_value(operand, "--output", operands, &mut i)
-            .or_else(|| short_value(operand, b'o', operands, &mut i))
+            .or_else(|| short_value(operand, b'o', SORT_VALUE_OPTS.short, operands, &mut i))
             && !path.is_empty()
-            && let Some(hit) = hits(rs, &["Write", "Edit"], path, cwd)
+            && let Some(hit) = hits(rs, &["Write", "Edit"], path, cwd, budget)
         {
             return Some(hit);
         }
@@ -508,7 +542,12 @@ fn sort_writes_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> Opt
     None
 }
 
-fn wget_reads_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> Option<CrossHit> {
+fn wget_reads_denied(
+    rs: &RuleSet,
+    operands: &[&str],
+    cwd: Option<&str>,
+    budget: &mut WorkBudget,
+) -> Option<CrossHit> {
     let mut i = 0;
     while i < operands.len() {
         let operand = operands[i];
@@ -516,7 +555,7 @@ fn wget_reads_denied(rs: &RuleSet, operands: &[&str], cwd: Option<&str>) -> Opti
         if let Some(path) = long_value(operand, "--post-file", operands, &mut i)
             .or_else(|| long_value(operand, "--body-file", operands, &mut i))
             && !path.is_empty()
-            && let Some(hit) = hits(rs, &["Read"], path, cwd)
+            && let Some(hit) = hits(rs, &["Read"], path, cwd, budget)
         {
             return Some(hit);
         }

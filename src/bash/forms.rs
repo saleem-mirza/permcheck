@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 
 use crate::engine;
+use crate::matcher::WorkBudget;
 use crate::rules::RuleSet;
 use crate::types::Tier;
 
@@ -115,25 +116,32 @@ pub(super) type Verdict = (Tier, Option<usize>);
 
 /// The verdict for a single unit against the Bash matchers, taking the rule set's
 /// `defaultMode` fall-back when nothing matches.
-pub(super) fn unit_tier(rs: &RuleSet, forms: &Forms<'_>, cwd: Option<&str>) -> Verdict {
-    let mut verdict: Verdict =
-        engine::decide_hit(rs, "Bash", forms.candidates()).unwrap_or((rs.default_tier, None));
+pub(super) fn unit_tier(
+    rs: &RuleSet,
+    forms: &Forms<'_>,
+    cwd: Option<&str>,
+    budget: &mut WorkBudget,
+) -> Verdict {
+    let mut verdict: Verdict = engine::decide_hit(rs, "Bash", forms.candidates(), budget)
+        .unwrap_or((rs.default_tier, None));
 
     // Escalation forms (§8 step 2) are each decided on their own and only ever
     // raise the verdict. They read the canonical spelling, so a quoted or padded
     // command reaches its flag and interpreter rules the same as a bare one.
     let canonical = forms.canonical();
     if verdict.0 != Tier::Deny {
-        for_each_flag_candidate(canonical, |candidate| raise(rs, &mut verdict, candidate));
+        for_each_flag_candidate(canonical, |candidate| {
+            raise(rs, &mut verdict, candidate, budget)
+        });
     }
     if verdict.0 != Tier::Deny
         && let Some(candidate) = inline_exec_candidate(canonical)
     {
-        raise(rs, &mut verdict, &candidate);
+        raise(rs, &mut verdict, &candidate, budget);
     }
     if verdict.0 != Tier::Deny {
         for_each_path_candidate(forms.raw(), cwd, |candidate| {
-            raise(rs, &mut verdict, candidate)
+            raise(rs, &mut verdict, candidate, budget)
         });
     }
     verdict
@@ -142,9 +150,9 @@ pub(super) fn unit_tier(rs: &RuleSet, forms: &Forms<'_>, cwd: Option<&str>) -> V
 /// Decide one escalation candidate and fold it in, never lowering the verdict
 /// (§8 step 2). Returns false once `deny` is reached, so the caller stops. The
 /// rule is replaced only on a strict raise, keeping the cause that set the tier.
-fn raise(rs: &RuleSet, verdict: &mut Verdict, candidate: &str) -> bool {
+fn raise(rs: &RuleSet, verdict: &mut Verdict, candidate: &str, budget: &mut WorkBudget) -> bool {
     if verdict.0 != Tier::Deny
-        && let Some((tier, rule)) = engine::decide_hit(rs, "Bash", &[candidate])
+        && let Some((tier, rule)) = engine::decide_hit(rs, "Bash", &[candidate], budget)
         && tier > verdict.0
     {
         *verdict = (tier, rule);

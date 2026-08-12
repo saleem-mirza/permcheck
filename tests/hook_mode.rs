@@ -44,6 +44,18 @@ fn unparseable_stdin_fails_closed() {
 }
 
 #[test]
+fn oversized_stdin_fails_closed_before_json_parsing() {
+    let f = rules_file(RULES);
+    let padding = "x".repeat(1_048_576);
+    let event =
+        format!(r#"{{"tool_name":"Bash","tool_input":{{"command":"ls"}},"padding":"{padding}"}}"#);
+    hook(f.path(), &event)
+        .success()
+        .stdout(predicates::str::contains(r#""permissionDecision":"deny""#))
+        .stdout(predicates::str::contains("hook event exceeds"));
+}
+
+#[test]
 fn missing_tool_name_fails_closed() {
     let f = rules_file(RULES);
     hook(f.path(), r#"{"tool_input":{"command":"ls"}}"#)

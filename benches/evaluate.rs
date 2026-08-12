@@ -3,6 +3,7 @@
 //! load. Every case pins inputs and result with `black_box`.
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use permcheck::types::Tier;
 use permcheck::{RuleSet, evaluate};
 use serde_json::{Value, json};
 use std::hint::black_box;
@@ -172,5 +173,48 @@ fn bench_generic(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, bench_load, bench_bash, bench_path, bench_generic);
+/// A policy whose individually legal worst-case misses approach or exhaust the
+/// complete decision's matcher-work budget. At 32,000 payload bytes, each
+/// 61-token pattern costs 1,952,000 states: ten fit under 20 million and eleven
+/// fail closed on the aggregate limit.
+fn matcher_budget_rules(rule_count: usize) -> RuleSet {
+    let pattern = format!("*{}b", "a".repeat(59));
+    let rules = json!({
+        "allow": vec![format!("WebSearch({pattern})"); rule_count],
+        "defaultMode": "ask",
+    });
+    RuleSet::load_str(&rules.to_string()).expect("matcher budget rules load")
+}
+
+fn bench_matcher_budget(c: &mut Criterion) {
+    let input = json!({ "query": "a".repeat(32_000) });
+    let cases = [
+        ("near_limit_ask", matcher_budget_rules(10), Tier::Ask),
+        ("exhausted_deny", matcher_budget_rules(11), Tier::Deny),
+    ];
+    let mut group = c.benchmark_group("matcher_budget");
+    for (name, rules, expected) in &cases {
+        assert_eq!(evaluate(rules, "WebSearch", &input, None).tier, *expected);
+        group.bench_function(*name, |b| {
+            b.iter(|| {
+                black_box(evaluate(
+                    black_box(rules),
+                    "WebSearch",
+                    black_box(&input),
+                    None,
+                ))
+            });
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_load,
+    bench_bash,
+    bench_path,
+    bench_generic,
+    bench_matcher_budget
+);
 criterion_main!(benches);

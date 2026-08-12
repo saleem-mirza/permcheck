@@ -29,7 +29,7 @@ pub(super) struct ShellWord {
     pub(super) redirect: Option<RedirectKind>,
 }
 
-/// Tokenize a simple command into words and redirections (§8.3).
+/// Tokenize a simple command into public word/redirection values (§8.3).
 pub fn tokenize(s: &str) -> Vec<Token> {
     shell_words(s)
         .into_iter()
@@ -41,7 +41,7 @@ pub fn tokenize(s: &str) -> Vec<Token> {
 }
 
 /// Tokenize a simple command while retaining each word's source range. This is
-/// the shared lexical layer for the public tokenizer and Bash normalization.
+/// the internal shared lexical layer for every Bash check.
 pub(super) fn shell_words(s: &str) -> Vec<ShellWord> {
     let b = s.as_bytes();
     let n = b.len();

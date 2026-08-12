@@ -12,6 +12,7 @@ fn tier(rules: &str, tool: &str, payload: &str) -> Tier {
     let input = match tool {
         "Bash" => json!({ "command": payload }),
         "Read" | "Write" | "Edit" => json!({ "file_path": payload }),
+        "WebSearch" => json!({ "query": payload }),
         _ => json!({ "input": payload }),
     };
     evaluate(&rs, tool, &input, Some("/work")).tier
@@ -155,4 +156,17 @@ fn matcher_work_budget_fails_closed() {
     let pattern = format!("{}*", "x".repeat(1_000));
     let rules = serde_json::json!({"allow": [format!("WebSearch({pattern})")]}).to_string();
     assert_eq!(tier(&rules, "WebSearch", &"x".repeat(3_000)), Tier::Deny);
+}
+
+#[test]
+fn aggregate_matcher_work_budget_fails_closed() {
+    // Every match is individually below the two-million-state limit, but the
+    // repeated worst-case misses exceed the complete decision's budget.
+    let pattern = format!("*{}b", "a".repeat(59));
+    let rules = serde_json::json!({
+        "allow": vec![format!("WebSearch({pattern})"); 12],
+        "defaultMode": "ask",
+    })
+    .to_string();
+    assert_eq!(tier(&rules, "WebSearch", &"a".repeat(32_000)), Tier::Deny);
 }

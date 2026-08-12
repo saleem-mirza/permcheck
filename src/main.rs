@@ -6,6 +6,11 @@ use std::process;
 use permcheck::types::{Decision, Tier};
 use permcheck::{evaluate, evaluate_payload, load_rules, settings};
 
+/// Maximum complete PreToolUse event accepted on stdin. This is intentionally
+/// larger than the 32 KiB matched payload limit so ordinary hook metadata fits,
+/// while still bounding allocation before JSON parsing begins.
+const MAX_HOOK_EVENT_BYTES: u64 = 1_048_576;
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     // Mode selection reads only the leading flags, never the payload (§2.2).
@@ -506,9 +511,13 @@ fn run_hook(args: &[String]) {
         };
 
         let mut input = String::new();
-        std::io::stdin()
-            .read_to_string(&mut input)
-            .unwrap_or_default();
+        let mut reader = std::io::stdin().take(MAX_HOOK_EVENT_BYTES + 1);
+        if let Err(e) = reader.read_to_string(&mut input) {
+            return Decision::deny_msg(&format!("stdin read error: {e}"));
+        }
+        if input.len() as u64 > MAX_HOOK_EVENT_BYTES {
+            return Decision::deny_msg("hook event exceeds the 1048576-byte safety limit");
+        }
 
         let val: serde_json::Value = match serde_json::from_str(&input) {
             Ok(v) => v,

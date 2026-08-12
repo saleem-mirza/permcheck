@@ -15,6 +15,36 @@ pub const EXACT_MATCH_BONUS: u32 = 1000;
 /// method returns `false`, which never grants a match on its own.
 const MAX_MATCH_STATES: usize = 2_000_000;
 
+/// Maximum aggregate matcher work for one tool-call decision. Individual
+/// matches retain the tighter bound above; this second limit prevents thousands
+/// of individually valid misses from accumulating into seconds of hook latency.
+const MAX_DECISION_MATCH_STATES: usize = 20_000_000;
+
+/// Remaining matcher work for one complete decision. Created at the family
+/// boundary and threaded through every normalized form and cross-check.
+pub(crate) struct WorkBudget {
+    remaining: usize,
+}
+
+impl WorkBudget {
+    pub(crate) fn new() -> Self {
+        Self {
+            remaining: MAX_DECISION_MATCH_STATES,
+        }
+    }
+
+    fn single_match() -> Self {
+        Self {
+            remaining: MAX_MATCH_STATES,
+        }
+    }
+
+    fn consume(&mut self, work: usize) -> Result<(), ()> {
+        self.remaining = self.remaining.checked_sub(work).ok_or(())?;
+        Ok(())
+    }
+}
+
 /// The home directory, read once and cached for the process lifetime, in a
 /// POSIX-anchored form (see [`normalize_root`]).
 pub(crate) fn home_dir() -> &'static str {
@@ -185,29 +215,44 @@ impl Matcher {
 
     /// Matcher test with explicit resource exhaustion for the decision engine.
     pub(crate) fn matches_checked(&self, candidate: &str) -> Result<bool, ()> {
+        self.matches_checked_with_budget(candidate, &mut WorkBudget::single_match())
+    }
+
+    /// Matcher test charged against the complete decision's remaining work.
+    pub(crate) fn matches_checked_with_budget(
+        &self,
+        candidate: &str,
+        budget: &mut WorkBudget,
+    ) -> Result<bool, ()> {
+        let work = match self {
+            Matcher::Bare => 1,
+            // A prefix test is one `starts_with`, so it costs the prefix length
+            // and has no state space to bound. Charging the payload length as
+            // well denied ordinary large commands: 162 prefix rules over a
+            // 15 KB command reached the decision limit on nominal work alone.
+            Matcher::Bash(BashMatcher::Prefix(prefix)) => prefix.len().max(1),
+            Matcher::Bash(BashMatcher::Glob(glob)) => {
+                bounded_work(candidate.len(), glob.toks.len())?
+            }
+            Matcher::Path(path) => bounded_work(candidate.len(), path.0.len())?,
+            Matcher::Generic(generic) => bounded_work(candidate.len(), generic.0.len())?,
+        };
+        budget.consume(work)?;
         match self {
             Matcher::Bare => Ok(true),
             Matcher::Bash(BashMatcher::Prefix(prefix)) => Ok(prefix_covers(prefix, candidate)),
             Matcher::Bash(BashMatcher::Glob(glob)) => {
-                bounded_work(candidate.len(), glob.toks.len())?;
                 Ok(tokens_match(candidate.as_bytes(), &glob.toks, b' '))
             }
-            Matcher::Path(path) => {
-                bounded_work(candidate.len(), path.0.len())?;
-                Ok(path.matches(candidate))
-            }
-            Matcher::Generic(generic) => {
-                bounded_work(candidate.len(), generic.0.len())?;
-                Ok(generic.matches(candidate))
-            }
+            Matcher::Path(path) => Ok(path.matches(candidate)),
+            Matcher::Generic(generic) => Ok(generic.matches(candidate)),
         }
     }
 }
 
-fn bounded_work(text_len: usize, pattern_len: usize) -> Result<(), ()> {
-    (text_len.saturating_mul(pattern_len) <= MAX_MATCH_STATES)
-        .then_some(())
-        .ok_or(())
+fn bounded_work(text_len: usize, pattern_len: usize) -> Result<usize, ()> {
+    let work = text_len.saturating_mul(pattern_len).max(1);
+    (work <= MAX_MATCH_STATES).then_some(work).ok_or(())
 }
 
 /// Compile a specifier for the given family into a `(matcher, specificity)`
@@ -383,18 +428,21 @@ fn nfa_match_vec(text: &[u8], toks: &[PToken], sep: u8) -> bool {
 const MAX_BITSET_TOKENS: usize = 125;
 
 /// [`nfa_match`] with the state sets held in registers rather than two heap
-/// allocations per call. Same transitions, same answer.
+/// allocations per call, visiting only the live states. Same transitions, same
+/// answer.
 fn nfa_match_bits(text: &[u8], toks: &[PToken], sep: u8) -> bool {
     let mut current: u128 = 1;
     epsilon_closure_bits(&mut current, toks);
 
     for &ch in text {
         let mut next: u128 = 0;
-        for (i, tok) in toks.iter().copied().enumerate() {
-            if current & (1u128 << i) == 0 {
-                continue;
-            }
-            match tok {
+        let mut live = current;
+        while live != 0 {
+            let i = live.trailing_zeros() as usize;
+            live &= live - 1;
+            // The accepting position past the last token carries no transition.
+            let Some(tok) = toks.get(i) else { continue };
+            match *tok {
                 PToken::Lit(expected) if expected == ch => next |= 1u128 << (i + 1),
                 PToken::Ques if ch != sep => next |= 1u128 << (i + 1),
                 PToken::Star if ch != sep => next |= 1u128 << i,
@@ -411,13 +459,22 @@ fn nfa_match_bits(text: &[u8], toks: &[PToken], sep: u8) -> bool {
     current & (1u128 << toks.len()) != 0
 }
 
-/// [`epsilon_closure`] over a bitset. The single forward pass is enough: it only
-/// ever sets a later position, which the same pass then visits.
+/// [`epsilon_closure`] over a bitset, walking set positions rather than every
+/// token. The single forward pass is enough: it only ever sets a later position,
+/// which the same scan then reaches.
 fn epsilon_closure_bits(states: &mut u128, toks: &[PToken]) {
-    for (i, tok) in toks.iter().enumerate() {
-        if *states & (1u128 << i) != 0 && matches!(tok, PToken::Star | PToken::DStar) {
+    let mut i = 0usize;
+    loop {
+        let live = *states >> i;
+        if live == 0 {
+            return;
+        }
+        i += live.trailing_zeros() as usize;
+        let Some(tok) = toks.get(i) else { return };
+        if matches!(tok, PToken::Star | PToken::DStar) {
             *states |= 1u128 << (i + 1);
         }
+        i += 1;
     }
 }
 
@@ -633,13 +690,14 @@ impl<'a> PathProbe<'a> {
         Self { raw, operand_glob }
     }
 
-    pub(crate) fn hits(&self, matcher: &Matcher) -> Result<bool, ()> {
-        if matcher.matches_checked(self.raw)? {
+    pub(crate) fn hits(&self, matcher: &Matcher, budget: &mut WorkBudget) -> Result<bool, ()> {
+        if matcher.matches_checked_with_budget(self.raw, budget)? {
             return Ok(true);
         }
         match (matcher, self.operand_glob.as_deref()) {
             (Matcher::Path(path), Some(operand)) => {
-                bounded_work(path.0.len(), operand.len())?;
+                let work = bounded_work(path.0.len(), operand.len())?;
+                budget.consume(work)?;
                 Ok(globs_can_intersect(&path.0, operand))
             }
             (Matcher::Bare, Some(_)) => Ok(true),
@@ -1091,7 +1149,8 @@ fn literal_tokens_match(toks: &[PToken], text: &[u8]) -> Option<bool> {
 }
 
 /// [`path_match`] with the four state sets held in registers rather than four
-/// heap allocations per call. Same transitions, same answer.
+/// heap allocations per call, visiting only the live states. Same transitions,
+/// same answer.
 fn path_match_bits(pat: &[PToken], text: &[u8]) -> bool {
     let mut current: u128 = 1;
     let mut looped: u128 = 0;
@@ -1100,17 +1159,26 @@ fn path_match_bits(pat: &[PToken], text: &[u8]) -> bool {
     for &ch in text {
         let mut next: u128 = 0;
         let mut next_looped: u128 = 0;
-        for (i, tok) in pat.iter().copied().enumerate() {
-            if current & (1u128 << i) != 0 {
-                match tok {
-                    PToken::Lit(expected) if expected == ch => next |= 1u128 << (i + 1),
-                    PToken::Ques if ch != b'/' => next |= 1u128 << (i + 1),
-                    PToken::Star if ch != b'/' => next |= 1u128 << i,
-                    PToken::DStar => next_looped |= 1u128 << i,
-                    PToken::Lit(_) | PToken::Ques | PToken::Star => {}
-                }
+        let mut live = current;
+        while live != 0 {
+            let i = live.trailing_zeros() as usize;
+            live &= live - 1;
+            // The accepting position past the last token carries no transition.
+            let Some(tok) = pat.get(i) else { continue };
+            match *tok {
+                PToken::Lit(expected) if expected == ch => next |= 1u128 << (i + 1),
+                PToken::Ques if ch != b'/' => next |= 1u128 << (i + 1),
+                PToken::Star if ch != b'/' => next |= 1u128 << i,
+                PToken::DStar => next_looped |= 1u128 << i,
+                PToken::Lit(_) | PToken::Ques | PToken::Star => {}
             }
-            if looped & (1u128 << i) != 0 && tok == PToken::DStar {
+        }
+        // A `**` that has already consumed a character stays consumed.
+        let mut live = looped;
+        while live != 0 {
+            let i = live.trailing_zeros() as usize;
+            live &= live - 1;
+            if pat.get(i) == Some(&PToken::DStar) {
                 next_looped |= 1u128 << i;
             }
         }
@@ -1125,21 +1193,29 @@ fn path_match_bits(pat: &[PToken], text: &[u8]) -> bool {
     current & (1u128 << pat.len()) != 0
 }
 
-/// [`path_epsilon_closure`] over bitsets.
+/// [`path_epsilon_closure`] over bitsets, walking set positions rather than
+/// every token. Both sets are scanned together, since either can open a move.
 fn path_epsilon_closure_bits(states: &mut u128, looped: u128, toks: &[PToken]) {
-    for (i, tok) in toks.iter().enumerate() {
+    let mut i = 0usize;
+    loop {
+        let live = (*states | looped) >> i;
+        if live == 0 {
+            return;
+        }
+        i += live.trailing_zeros() as usize;
+        let Some(tok) = toks.get(i) else { return };
         if looped & (1u128 << i) != 0 && *tok == PToken::DStar {
             *states |= 1u128 << (i + 1);
         }
-        if *states & (1u128 << i) == 0 {
-            continue;
+        if *states & (1u128 << i) != 0 {
+            if matches!(tok, PToken::Star | PToken::DStar) {
+                *states |= 1u128 << (i + 1);
+            }
+            if *tok == PToken::DStar && toks.get(i + 1) == Some(&PToken::Lit(b'/')) {
+                *states |= 1u128 << (i + 2);
+            }
         }
-        if matches!(tok, PToken::Star | PToken::DStar) {
-            *states |= 1u128 << (i + 1);
-        }
-        if *tok == PToken::DStar && toks.get(i + 1) == Some(&PToken::Lit(b'/')) {
-            *states |= 1u128 << (i + 2);
-        }
+        i += 1;
     }
 }
 

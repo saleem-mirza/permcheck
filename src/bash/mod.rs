@@ -5,6 +5,7 @@
 use std::fmt::{self, Write as _};
 
 use crate::engine::Clause;
+use crate::matcher::WorkBudget;
 use crate::rules::MAX_PAYLOAD_BYTES;
 use crate::rules::RuleSet;
 use crate::types::{Decision, Tier};
@@ -117,6 +118,7 @@ pub fn decide_bash(command: &str, rs: &RuleSet, cwd: Option<&str>) -> Decision {
     }
 
     let total = units.len();
+    let mut budget = WorkBudget::new();
     let mut worst: Option<Why<'_>> = None;
     for (index, unit) in units.into_iter().enumerate() {
         // Structure runs nothing, so it carries no verdict (§8 step 4).
@@ -125,7 +127,7 @@ pub fn decide_bash(command: &str, rs: &RuleSet, cwd: Option<&str>) -> Decision {
         }
         let cmd = strip_env_assignments(unit);
         let forms = identity_forms(cmd);
-        let (mut tier, mut rule) = unit_tier(rs, &forms, cwd);
+        let (mut tier, mut rule) = unit_tier(rs, &forms, cwd, &mut budget);
         let mut stage_used = None;
         // Each peel stage is decided too, since a rule naming a wrapper only
         // matches in head position. Raises only, so `deny` ends the walk; `ask`
@@ -137,7 +139,8 @@ pub fn decide_bash(command: &str, rs: &RuleSet, cwd: Option<&str>) -> Decision {
                 return Decision::deny_msg("bash: unit has more than 32 leading wrappers");
             }
             for stage in stages {
-                let (stage_tier, stage_rule) = unit_tier(rs, &identity_forms(stage), cwd);
+                let (stage_tier, stage_rule) =
+                    unit_tier(rs, &identity_forms(stage), cwd, &mut budget);
                 if stage_tier > tier {
                     tier = stage_tier;
                     rule = stage_rule;
@@ -151,7 +154,7 @@ pub fn decide_bash(command: &str, rs: &RuleSet, cwd: Option<&str>) -> Decision {
         // The cross-check raises to deny only, so skip it once already there.
         let mut cross = None;
         if tier != Tier::Deny
-            && let Some(hit) = cross_check(rs, cmd, cwd)
+            && let Some(hit) = cross_check(rs, cmd, cwd, &mut budget)
         {
             tier = Tier::Deny;
             rule = hit.rule;
