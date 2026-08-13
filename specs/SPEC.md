@@ -149,7 +149,11 @@ unrelated settings or other hooks.
   for `--local`), and bakes that absolute path into the injected command
   `permcheck --hook --rules "<abs>"`. With `--rules <path>` the given file is
   absolutized and validated (it must load), then **copied** into the canonical
-  location. With no `--rules` a minimal safe starter (a small `deny` list, not the
+  location. Before any write, the canonical destination must be safe to embed in
+  the platform's double-quoted hook command: quote, substitution, escape, and
+  line-break characters are refused, as are Windows environment-expansion
+  characters. An unsafe path exits `3` without creating the rules or settings
+  file. With no `--rules` a minimal safe starter (a small `deny` list, not the
   full reference set, plus `defaultMode: "ask"` and empty `allow`/`ask`) is written there. `--rules` **requires
   a value**: a bare `--rules` (no path, or one followed by a flag) is a usage
   error (exit `3`), never a silent auto-seed. An

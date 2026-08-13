@@ -273,8 +273,13 @@ fn simple_command_hit(
             return Some(hit);
         }
     } else if name_in(name, WRITERS) {
+        let mut end_of_options = false;
         for operand in operands {
-            if operand.starts_with('-') || operand.contains('=') {
+            if !end_of_options && *operand == "--" {
+                end_of_options = true;
+                continue;
+            }
+            if !end_of_options && operand.len() > 1 && operand.starts_with('-') {
                 continue;
             }
             if let Some(hit) = hits(rs, &["Write", "Edit"], operand, cwd, budget) {

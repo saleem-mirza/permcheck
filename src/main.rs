@@ -34,7 +34,9 @@ fn main() {
 
     let install = modes.iter().any(|a| a == "--install");
     let uninstall = modes.iter().any(|a| a == "--uninstall");
-    let init_rules = modes.iter().any(|a| a == "--init-rules");
+    let init_rules = modes
+        .iter()
+        .any(|a| a == "--init-rules" || a.starts_with("--init-rules="));
     if [install, uninstall, init_rules]
         .iter()
         .filter(|b| **b)
@@ -142,6 +144,19 @@ fn temp_path(path: &Path) -> PathBuf {
     path.with_extension(format!("json.permcheck-tmp.{}", process::id()))
 }
 
+/// A character that cannot be represented literally inside the double-quoted
+/// hook command on this platform. POSIX shells interpret substitutions, quotes,
+/// and backslashes inside double quotes; Windows hook shells additionally expand
+/// `%…%` / `!…!`, while backslash is the native path separator there.
+fn unsupported_hook_path_char(path: &str) -> Option<char> {
+    path.chars().find(|&ch| match ch {
+        '"' | '$' | '`' | '\r' | '\n' => true,
+        '\\' => cfg!(not(windows)),
+        '%' | '!' => cfg!(windows),
+        _ => false,
+    })
+}
+
 /// Write `bytes` to `path` atomically: temp file, `sync_all`, then `rename`
 /// (atomic-replace on Unix and Windows). The flush matters because `rename`
 /// orders the directory entry, not the contents. Cleans up the temp on failure.
@@ -232,6 +247,13 @@ fn run_install(args: &[String]) {
         eprintln!("error: rules path is not valid UTF-8");
         process::exit(3);
     };
+    if let Some(ch) = unsupported_hook_path_char(dest_str) {
+        eprintln!(
+            "error: rules destination contains `{}`, which cannot be safely embedded in a hook command",
+            ch.escape_default()
+        );
+        process::exit(3);
+    }
 
     // Resolve the rules source. A bare `--rules` with no value (or one followed
     // by a flag) is a usage error, not a request to auto-seed a starter.
@@ -742,5 +764,51 @@ fn flag_value(args: &[String], flag: &str) -> Option<PathBuf> {
 fn print_lint_warnings(rs: &permcheck::RuleSet) {
     for w in rs.lint_warnings() {
         eprintln!("warning: {w}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unsupported_hook_path_char;
+
+    #[test]
+    fn hook_path_rejects_shell_active_characters() {
+        for path in [
+            "/tmp/a\"b/policy.json",
+            "/tmp/$HOME/policy.json",
+            "/tmp/`id`/policy.json",
+            "/tmp/line\nbreak/policy.json",
+            "/tmp/carriage\rreturn/policy.json",
+        ] {
+            assert!(
+                unsupported_hook_path_char(path).is_some(),
+                "accepted {path:?}"
+            );
+        }
+        assert_eq!(unsupported_hook_path_char("/tmp/a b/政策.json"), None);
+    }
+
+    #[test]
+    fn hook_path_rejects_platform_specific_expansion_characters() {
+        if cfg!(windows) {
+            assert_eq!(
+                unsupported_hook_path_char(r"C:\Users\Jane\policy.json"),
+                None
+            );
+            assert_eq!(
+                unsupported_hook_path_char(r"C:\%TEMP%\policy.json"),
+                Some('%')
+            );
+            assert_eq!(
+                unsupported_hook_path_char(r"C:\!TEMP!\policy.json"),
+                Some('!')
+            );
+        } else {
+            assert_eq!(
+                unsupported_hook_path_char("/tmp/a\\b/policy.json"),
+                Some('\\')
+            );
+            assert_eq!(unsupported_hook_path_char("/tmp/100%!/policy.json"), None);
+        }
     }
 }

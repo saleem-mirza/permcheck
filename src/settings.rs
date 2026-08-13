@@ -6,7 +6,9 @@ use serde_json::{Map, Value, json};
 
 /// Build the hook command string baked into `settings.json`. The binary is bare
 /// (PATH-resolved) and the rules path absolute and double-quoted, so a path with
-/// spaces works under `sh`, `cmd.exe`, and PowerShell alike.
+/// spaces works under `sh`, `cmd.exe`, and PowerShell alike. The installer checks
+/// that the absolute path contains no character active inside those quotes before
+/// it calls this formatter.
 pub fn hook_command(abs_rules: &str) -> String {
     format!("permcheck --hook --rules \"{abs_rules}\"")
 }

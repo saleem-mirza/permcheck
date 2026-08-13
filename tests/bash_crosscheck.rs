@@ -186,7 +186,8 @@ fn deleting_commands_are_checked_against_the_write_deny() {
     // `rm` and `shred` operands go against the Write/Edit deny like `tee`'s.
     let rs = RuleSet::load_str(
         r#"{"allow":["Bash(rm:*)","Bash(shred:*)","Bash(sudo:*)"],
-            "deny":["Read(/**/.env*)","Write(//**/.ssh/**)","Edit(//**/.ssh/**)"],
+            "deny":["Read(/**/.env*)","Write(//**/.ssh/**)","Edit(//**/.ssh/**)",
+                    "Write(/home/user/-protected)","Write(/home/user/victim=secret)"],
             "defaultMode":"ask"}"#,
     )
     .unwrap();
@@ -196,6 +197,10 @@ fn deleting_commands_are_checked_against_the_write_deny() {
     assert_eq!(t("rm -rf /home/user/.ssh/authorized_keys"), Tier::Deny);
     assert_eq!(t("rm -- /home/user/.ssh/authorized_keys"), Tier::Deny);
     assert_eq!(t("shred /home/user/.ssh/id_ed25519"), Tier::Deny);
+    // `--` makes a dash-prefixed word positional, and `=` is ordinary filename
+    // content after the command word. Neither spelling may skip the write check.
+    assert_eq!(t("rm -- -protected"), Tier::Deny);
+    assert_eq!(t("rm victim=secret"), Tier::Deny);
     // Every operand is checked, and the wrapper peel still applies.
     assert_eq!(t("rm notes.txt /home/user/.ssh/config"), Tier::Deny);
     assert_eq!(t("sudo rm -rf /home/user/.ssh/config"), Tier::Deny);

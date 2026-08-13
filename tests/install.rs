@@ -312,6 +312,14 @@ fn install_and_uninstall_are_mutually_exclusive() {
         .args(["--install", "--uninstall"])
         .assert()
         .code(3);
+
+    let target = tmp.path().join("seeded.json");
+    let init = format!("--init-rules={}", target.display());
+    cmd(tmp.path(), tmp.path())
+        .args(["--install", init.as_str()])
+        .assert()
+        .code(3);
+    assert!(!target.exists());
 }
 
 #[test]
@@ -449,6 +457,48 @@ fn install_rules_does_not_swallow_flag() {
         .assert()
         .code(3)
         .stderr(predicates::str::contains("requires a path"));
+}
+
+#[test]
+fn init_rules_accepts_equals_form() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("seeded.json");
+
+    cmd(dir.path(), dir.path())
+        .arg(format!("--init-rules={}", target.display()))
+        .assert()
+        .code(0)
+        .stdout(predicates::str::contains("Wrote starter rules"));
+
+    let text = fs::read_to_string(&target).unwrap();
+    permcheck::RuleSet::load_str(&text).unwrap();
+}
+
+#[test]
+fn init_rules_rejects_empty_equals_value() {
+    let dir = tempfile::tempdir().unwrap();
+
+    cmd(dir.path(), dir.path())
+        .arg("--init-rules=")
+        .assert()
+        .code(3);
+
+    assert!(!dir.path().join("permcheck.json").exists());
+}
+
+#[test]
+fn install_rejects_shell_active_project_path_before_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project$(printf injected)");
+    fs::create_dir(&project).unwrap();
+
+    cmd(dir.path(), &project)
+        .args(["--install", "--project"])
+        .assert()
+        .code(3)
+        .stderr(predicates::str::contains("cannot be safely embedded"));
+
+    assert!(!project.join(".claude").exists());
 }
 
 // The policy writers create and never replace, which an `exists()` check cannot

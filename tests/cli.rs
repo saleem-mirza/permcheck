@@ -152,7 +152,13 @@ fn a_payload_that_looks_like_a_mode_flag_never_changes_mode() {
     let f = rules_file(RULES);
     let home = tempfile::tempdir().unwrap();
 
-    for payload in ["--install", "--uninstall", "--init-rules", "--hook"] {
+    for payload in [
+        "--install",
+        "--uninstall",
+        "--init-rules",
+        "--init-rules=/tmp/seeded.json",
+        "--hook",
+    ] {
         let assertion = Command::cargo_bin("permcheck")
             .unwrap()
             .args(["Bash", payload, "--rules"])
