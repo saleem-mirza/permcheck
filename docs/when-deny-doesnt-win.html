@@ -92,6 +92,7 @@
       <div class="callout">
         <p class="label">Decision for security and platform leaders</p>
         <p>Claude Code already provides deterministic permissions, contextual auto-mode review, and sandbox containment. The remaining gap is a broad restriction with a narrow, machine-testable exception: permit cloud inspection, for example, while prohibiting mutation. permcheck fills that policy gap, and its engine source is public at <a href="https://github.com/saleem-mirza/permcheck" rel="noopener noreferrer" target="_blank">saleem-mirza/permcheck</a>, so the matcher a policy review depends on is itself reviewable. Evaluate it where agent permissions must be reviewed like code, asserted in CI, and reproduced during an audit, not as a replacement for managed denies or an execution sandbox.</p>
+        <p><strong>What it costs:</strong> you maintain one JSON policy file. The engine is a short-lived binary with no service, no network calls, and no tokens. Backing out is disabling the plugin, which returns every decision to the native model.</p>
       </div>
 
       <div class="callout">
