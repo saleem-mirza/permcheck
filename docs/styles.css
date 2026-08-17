@@ -37,9 +37,13 @@ body {
     radial-gradient(circle at 50% -12rem, #dbe7fa 0, rgba(219, 231, 250, 0) 34rem),
     var(--bg);
   color: var(--ink);
-  font-family: var(--serif);
+  /* Sans for running text: 65% of body paragraphs carry inline <code>, and a
+     sans skeleton sits closer to the mono than Georgia's calligraphic stroke.
+     Display type stays serif, set explicitly below since it used to inherit. */
+  font-family: var(--sans);
   font-size: 19px;
-  line-height: 1.68;
+  line-height: 1.8;
+  letter-spacing: -0.004em;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -121,6 +125,7 @@ h1 {
   max-width: none;
   margin: 1.7rem 0 1.5rem;
   color: var(--ink-soft);
+  font-family: var(--serif);
   font-size: clamp(1.18rem, 2.5vw, 1.45rem);
   line-height: 1.48;
   text-wrap: pretty;
@@ -229,7 +234,7 @@ h3 {
   line-height: 1.25;
 }
 p {
-  margin: 0 0 1.3rem;
+  margin: 0 0 1.45rem;
   text-wrap: pretty;
 }
 ul, ol { margin: 0 0 1.35rem; padding-left: 1.35rem; }
@@ -344,48 +349,62 @@ figcaption {
 caption {
   margin-bottom: 0.6rem;
   color: var(--muted);
+  font-family: var(--serif);
   font-size: 0.82rem;
   line-height: 1.45;
   text-align: left;
 }
+/* Tables are set the way print sets them: three horizontal rules carry the
+   structure, no vertical borders, no fills. The column gap already separates
+   the data, so a grid of rules only adds noise. */
 table {
   width: 100%;
   min-width: 42rem;
   border-collapse: collapse;
-  background: var(--surface);
-  border: 1px solid var(--line);
+  background: transparent;
+  border: none;
+  border-top: 1.5px solid var(--ink);
+  border-bottom: 1.5px solid var(--ink);
   font-size: 0.91rem;
   line-height: 1.45;
 }
 th,
 td {
-  padding: 0.8rem 0.9rem;
-  border-bottom: 1px solid var(--line);
+  padding: 0.75rem 0.9rem;
   text-align: left;
   vertical-align: top;
 }
 th {
-  color: var(--muted);
-  background: var(--panel);
-  font-size: 0.75rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  color: var(--ink);
+  background: transparent;
+  border-bottom: 1px solid var(--ink-soft);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  vertical-align: bottom;
 }
+td { border-bottom: 1px solid #eef1f6; color: var(--ink-soft); }
+/* The row's subject stays full-strength; the data beside it recedes one step,
+   so the eye has an anchor scanning down a nine-row table. */
+td:first-child { color: var(--ink); font-weight: 500; }
 tr:last-child td { border-bottom: 0; }
+/* Outlined rather than filled: against an untinted table a soft fill dissolves,
+   while a hairline in the verdict's own colour holds its edge. */
 .verdict {
   display: inline-block;
   min-width: 3.5rem;
-  padding: 0.16rem 0.5rem;
-  border-radius: 999px;
+  padding: 0.14rem 0.5rem;
+  border: 1px solid currentColor;
+  border-radius: 3px;
   font-family: var(--sans);
   font-size: 0.74rem;
-  font-weight: 800;
+  font-weight: 700;
   text-align: center;
   text-transform: uppercase;
 }
-.allow { color: var(--allow); background: var(--allow-bg); }
-.ask { color: var(--ask); background: var(--ask-bg); }
-.deny { color: var(--deny); background: var(--deny-bg); }
+.allow { color: var(--allow); }
+.ask { color: var(--ask); }
+.deny { color: var(--deny); }
 
 .three-up,
 .recipes {
@@ -605,21 +624,28 @@ table.control-matrix td { padding: 0.7rem 0.8rem; }
   /* Nothing scrolls on paper, so wide tables and diagrams have to fit
      the text column rather than run off the edge. */
   .table-wrap { overflow: visible; border-radius: 0; }
+  /* The screen rules are ink-navy; on paper they resolve to black so the
+     three structural rules read as rules rather than a faded tint. */
   table {
     min-width: 0;
-    background: none;
     font-size: 8.5pt;
+    border-top-color: #000;
+    border-bottom-color: #000;
   }
-  th { background: none; }
+  th { color: #000; border-bottom-color: #000; }
+  td { color: #000; border-bottom-color: #ccc; }
+  td:first-child { color: #000; }
+  caption { color: #000; }
   figure img,
   figure figcaption { min-width: 0; }
 
-  /* The pill tint carries the verdict on screen; on paper the word does. */
+  /* The pill outline carries the verdict on screen; on paper the word does. */
   .verdict {
     min-width: 0;
     padding: 0;
     color: #000;
     background: none;
+    border: none;
     border-radius: 0;
     text-align: left;
   }
