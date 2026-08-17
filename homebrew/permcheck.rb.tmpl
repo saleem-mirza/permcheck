@@ -4,8 +4,9 @@ class Permcheck < Formula
   version "__VERSION__"
   license "Apache-2.0"
 
-  # Binaries are published as release assets on this public tap repo
-  # (the permcheck source repo is private). See release.yml -> publish-homebrew.
+  # Binaries are published as release assets on this public tap repo,
+  # for a stable install URL independent of permcheck's own release layout.
+  # See release.yml -> publish-homebrew.
   on_macos do
     on_arm do
       url "https://github.com/saleem-mirza/homebrew-tap/releases/download/v#{version}/permcheck-darwin-arm64"

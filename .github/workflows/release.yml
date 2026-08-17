@@ -215,8 +215,9 @@ jobs:
           git push -f origin main
 
   # Publish the Homebrew install path into the public, self-contained tap repo
-  # saleem-mirza/homebrew-tap (the permcheck source repo is PRIVATE, so its own
-  # release assets 404 for anonymous `brew` downloads). This job:
+  # saleem-mirza/homebrew-tap, keeping the install URL stable and independent of
+  # this repo's release layout. permcheck is public, so the formula could pull
+  # from its releases directly; that consolidation is untested and not done. This job:
   #   1. publishes the prebuilt macOS binaries as RELEASE ASSETS on homebrew-tap
   #      (tag `v<version>`), which serve anonymous downloads;
   #   2. renders Formula/permcheck.rb (pinning those assets' sha256) and commits

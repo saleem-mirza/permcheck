@@ -51,7 +51,7 @@
     "url": "https://blogs.zethian.com/"
   },
   "datePublished": "2026-07-30",
-  "dateModified": "2026-08-15",
+  "dateModified": "2026-08-17",
   "mainEntityOfPage": {
     "@type": "WebPage",
     "@id": "https://blogs.zethian.com/when-deny-doesnt-win.html"
@@ -76,7 +76,7 @@
       <div class="meta">
         <span>By <a href="https://www.linkedin.com/in/saleem-mirza/" rel="me author noopener noreferrer" target="_blank">Saleem Mirza</a></span>
         <span>12 min read</span>
-        <span>Updated August 15, 2026</span>
+        <span>Updated August 17, 2026</span>
       </div>
       <p class="author-note">Saleem Mirza, creator of permcheck, is a cloud and platform architect with 20+ years designing AWS, Kubernetes, and DevSecOps systems in regulated enterprise and federal environments.</p>
     </header>
@@ -91,7 +91,7 @@
 
       <div class="callout">
         <p class="label">Decision for security and platform leaders</p>
-        <p>Claude Code already provides deterministic permissions, contextual auto-mode review, and sandbox containment. The remaining gap is a broad restriction with a narrow, machine-testable exception: permit cloud inspection, for example, while prohibiting mutation. permcheck fills that policy gap. Evaluate it where agent permissions must be reviewed like code, asserted in CI, and reproduced during an audit, not as a replacement for managed denies or an execution sandbox.</p>
+        <p>Claude Code already provides deterministic permissions, contextual auto-mode review, and sandbox containment. The remaining gap is a broad restriction with a narrow, machine-testable exception: permit cloud inspection, for example, while prohibiting mutation. permcheck fills that policy gap, and its engine source is public at <a href="https://github.com/saleem-mirza/permcheck" rel="noopener noreferrer" target="_blank">saleem-mirza/permcheck</a>, so the matcher a policy review depends on is itself reviewable. Evaluate it where agent permissions must be reviewed like code, asserted in CI, and reproduced during an audit, not as a replacement for managed denies or an execution sandbox.</p>
       </div>
 
       <div class="callout">
@@ -496,9 +496,9 @@ cat *.rs           <span class="comment"># allow in the sample policy</span></co
       <h2>Install and verify</h2>
       <p>Prebuilt executables ship through the Claude Code plugin and Homebrew. The plugin covers macOS, Linux, and Windows, and registers its hook without hand-editing <code>settings.json</code>:</p>
 
-      <div class="callout warn">
+      <div class="callout">
         <p class="label">Trust before install</p>
-        <p>The matcher source is private today, so the implementation is not auditable and the build is not reproducible. What stays checkable is behavior: inspect the plugin hook and policy in the <a href="https://github.com/saleem-mirza/marketplace" rel="noopener noreferrer" target="_blank">distribution repository</a>, then run the published decision cases against the installed artifact.</p>
+        <p>The matcher source is public under Apache-2.0 in the <a href="https://github.com/saleem-mirza/permcheck" rel="noopener noreferrer" target="_blank">permcheck repository</a>, so the rules above are auditable against the code that enforces them, and <code>cargo build --release</code> produces a binary you control end to end. The build is not bit-for-bit reproducible: each release publishes <code>SHA256SUMS</code> covering the binaries and the plugin bundle, which pins the artifact you installed but does not tie it to a source tree. To check behavior rather than provenance, run the decision cases below against the installed artifact.</p>
       </div>
 
       <pre><code><span class="comment"># Claude Code plugin</span>
