@@ -3,8 +3,8 @@
 
 The article "When Deny Doesn't Win" shows a series of allow / ask / deny
 outcomes. Every one of them is reproduced by a downloadable policy:
-`docs/blog-assets/sample-policy.json` for the walkthrough and the teaching
-examples, `docs/blog-assets/enterprise-policy.json` for the seven-command
+`blog/blog-assets/sample-policy.json` for the walkthrough and the teaching
+examples, `blog/blog-assets/enterprise-policy.json` for the seven-command
 incident table. This script drives both files through the real permcheck hook
 interface (a PreToolUse event as JSON on stdin, decision parsed from stdout)
 and asserts each verdict, so the prose, the diagrams, the tables, and the
@@ -31,8 +31,8 @@ import subprocess
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SAMPLE_POLICY = os.path.join(REPO, "docs", "blog-assets", "sample-policy.json")
-ENTERPRISE_POLICY = os.path.join(REPO, "docs", "blog-assets", "enterprise-policy.json")
+SAMPLE_POLICY = os.path.join(REPO, "blog", "blog-assets", "sample-policy.json")
+ENTERPRISE_POLICY = os.path.join(REPO, "blog", "blog-assets", "enterprise-policy.json")
 
 # (tool, tool_input, expected, why) for every verdict the post states. The
 # tool_input mirrors what Claude Code sends; the engine ignores the extra fields.

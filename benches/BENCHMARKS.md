@@ -3,7 +3,7 @@
 Measured on 2026-08-12 (re-run after the live-state NFA change) with `cargo bench` (Criterion) against
 `rules/permcheck.json`, the canonical reference rule set, on a **MacBook Pro
 (Apple M3 Max)**, macOS 26.5.2, release profile (`opt-level=z`, LTO, `strip`).
-Numbers are rounded medians and are indicative. Re-run locally for your hardware.
+Numbers are rounded medians. Re-run locally for your hardware.
 
 The machine carried background load during this run (load average ~1.5), and
 repeat runs of untouched code moved by up to 7%. Treat anything inside ±7% as
@@ -13,9 +13,9 @@ noise, not signal.
 every pattern token on every input byte, and each epsilon closure repeated that
 full scan. The state sets are `u128` and typically hold 1 to 4 live bits, so 20
 to 30 iterations per byte read a zero bit and did nothing. Both engines now
-iterate set bits with `trailing_zeros`, costing live states per byte instead of
-pattern length. Same transitions, same answers; the differential test holds the
-bitset engines against the `Vec` ones on every case.
+iterate set bits with `trailing_zeros`, which costs live states per byte instead
+of pattern length. Transitions and answers are unchanged; the differential test
+holds the bitset engines against the `Vec` ones on every case.
 
 The same commit stopped charging a Bash `cmd:*` prefix rule
 `payload_len × prefix_len` against the decision work budget. `prefix_covers` is
@@ -42,8 +42,8 @@ The gain tracks how much glob matching a case does. Cases that scan every rule
 to prove no deny survives (`read_allow_tmp`, `glob_allow_skills`) and the
 cross-check cases that run path globs per operand (`compound_pipe`,
 `crosscheck_redirect`) move the most. Prefix-dominated Bash cases moved 4-10%,
-partly at the edge of the noise band: prefix rules never ran an NFA, and their
-saving is the dropped work-budget multiply. The three `generic` cases moved +4%
+partly at the edge of the noise band: prefix rules never ran an NFA, so their
+gain is the dropped work-budget multiply. The three `generic` cases moved +4%
 to +6%, inside the noise band.
 
 **2026-08-12 update: decision-wide matcher-work budget.** The
@@ -61,7 +61,7 @@ closed to `deny`. The benchmark asserts both decisions before measuring.
 The nearly identical times are intentional: the exhausted case rejects the
 eleventh match before running its NFA, after doing the same ten full misses as
 the near-limit case. These are synthetic safety-boundary cases, not normal hook
-latency; the reference-policy cases below remain in the microsecond range.
+latency; the reference-policy cases below stay in the microsecond range.
 
 **2026-08-09 update — `matching_rule_indices` borrows instead of allocating.**
 When a policy has no `Tool*`/`*` tool selectors (the reference set has none), the
@@ -126,36 +126,36 @@ Benchmarks are grouped by matcher family, plus the one-time rule-set load. Run
 | `websearch_deny` | `WebSearch(rust async)` | deny | ~0.26 µs |
 | `mcp_default_ask` | `mcp__db__query(SELECT 1)` | ask (`defaultMode` fall-back) | ~0.26 µs |
 
-**Reading the numbers.** Simple single-command Bash calls are ~2.5-4.6 µs over
+**Reading the numbers.** Simple single-command Bash calls take ~2.5-4.6 µs over
 the 174 Bash rules. Cost rises with *work*, not tier: `compound_pipe` splits into
-two units and runs the file-access cross-check on each, which is why it is the
+two units and runs the file-access cross-check on each, which makes it the
 most expensive case here. A literal file operand takes the direct matcher path;
 an operand such as `.en?` prepares its shell-glob representation once and reuses
 it across the `Read` deny rules.
 
 **Wrapper stages.** A unit that starts with a wrapper or a shell reserved word is
 decided once per peel stage (§8 step 2), so the two wrapper cases bracket that
-cost. `wrapper_displaced_sudo` denies on its second stage and stops there, which
-also skips the cross-check, so it lands at ~5.7 µs. `wrapper_stack_no_deny` stacks
-four peelable words with nothing denying, so every stage is decided and none is
-skipped: ~19 µs, the worst realistic shape. Stages are capped at 32 per unit and
-a unit past the cap is denied outright, which bounds a pathological chain that
-would otherwise cost work quadratic in the unit's length (§9.1).
+cost. `wrapper_displaced_sudo` denies on its second stage and stops there,
+skipping the cross-check too, so it lands at ~5.7 µs. `wrapper_stack_no_deny`
+stacks four peelable words with nothing denying, so every stage is decided and
+none is skipped: ~19 µs, the worst realistic shape. Stages are capped at 32 per
+unit, and a unit past the cap is denied outright, which bounds a pathological
+chain that would otherwise cost work quadratic in the unit's length (§9.1).
 
 Path costs depend strongly on where a decisive deny appears in the tier-ordered
 index. An uncarved deny returns immediately (`read_deny_env`, ~0.75 µs), while an
 allow with no matching deny (`read_allow_tmp`, ~6.4 µs) must establish that no
 later deny survives. Raw payload and URL-host candidates are borrowed; allocation
 is limited to derived forms such as cwd absolutization, lexical normalization,
-`~` expansion, or a lowercased host. Generic cases finish in ~260-420 ns.
+`~` expansion, and lowercased hosts. Generic cases finish in ~260-420 ns.
 
 **What the reason clause costs.** An `ask` or `deny` reason names what decided the
-call (§2.1), which makes the reason string longer and so its one allocation bigger.
+call (§2.1), which makes the reason string longer and its one allocation bigger.
 Measured against the same suite before the change, with `load/reference_set` as a
 drift control at −1.5%, the cost is a near-constant **70-100 ns per non-allow
 decision**: `bash` and `path` cases moved +1.5% to +8.5%, mostly inside the ±7%
 noise band, while the three `generic` cases moved +18% to +48% because they are
-the smallest and a fixed cost dominates them. `allow` pays nothing, since the
+the smallest, so a fixed cost dominates them. `allow` pays nothing, since the
 clause closure is never called.
 
 Two earlier shapes of this code cost considerably more and were rejected on these
@@ -166,13 +166,14 @@ reason, so a decision still costs one allocation whether or not it carries one.
 
 **What the matcher state costs.** Both glob engines propagate NFA states rather
 than backtracking, so an adversarial many-wildcard pattern cannot blow up. The
-state sets were two `Vec<bool>` per call for Bash and four for Path, allocated
-and dropped on every rule tested against every candidate: answering "no rule
-matched" for one `Read` call cost a few hundred small allocations. They are now
-two `u128` registers, with the `Vec` form kept for a pattern longer than 125
-tokens, which `MAX_RULE_BYTES` permits and no real rule reaches. Those registers
-are now walked by set bit rather than by token, so a match costs live states per
-input byte instead of pattern length (see the live-state update at the top).
+state sets used to be two `Vec<bool>` per call for Bash and four for Path,
+allocated and dropped on every rule tested against every candidate: answering
+"no rule matched" for one `Read` call cost a few hundred small allocations. They
+are now two `u128` registers, with the `Vec` form kept for a pattern longer than
+125 tokens, which `MAX_RULE_BYTES` permits and no real rule reaches. Those
+registers are now walked by set bit rather than by token, so a match costs live
+states per input byte instead of pattern length (see the live-state update at
+the top).
 
 Measured against the same suite before the change, every difference far outside
 the ±7% noise band and p = 0.00 on each: `path/read_allow_tmp` −52%,
@@ -188,22 +189,22 @@ immaterial end-to-end.
 **Against the 2026-08-01 table.** The `load` family reproduces its earlier figure.
 The `path` gap is now accounted for and mostly closed: `read_allow_tmp` was
 ~3.3 µs then, ~40 µs after the NFA rewrite, ~19 µs after the register change, and
-~6.4 µs after live-state iteration. The residue is rule growth, since that table
-predates 51 added deny rules (142 to 193) and `read_allow_tmp` scans all of them
-to prove no deny survives. The cause was the NFA rewrite itself: it removed a
-real wildcard blow-up, and it also made every match pay the worst case, because
-the backtracking matcher it replaced aborted on the first literal mismatch.
-Reverting the wrapper-stage change made no difference, which is what ruled it out.
-The `generic` family reproduced its earlier figures until the reason clause above,
-which accounts for its current numbers.
+~6.4 µs after live-state iteration. The residue is rule growth: that table
+predates 51 added deny rules (142 to 193), and `read_allow_tmp` scans all of them
+to prove no deny survives. The NFA rewrite itself caused the regression: it
+removed a real wildcard blow-up, but it also made every match pay the worst case,
+because the backtracking matcher it replaced aborted on the first literal
+mismatch. Reverting the wrapper-stage change made no difference, which ruled it
+out. The `generic` family reproduced its earlier figures until the reason clause
+above, which accounts for its current numbers.
 
 **What is left on the table.** A candidate that lacks a pattern's longest
 contiguous literal run cannot match it, so one substring test would reject most
 deny rules before their NFA runs. Measured in isolation over the 33 `Read` deny
-globs, that prefilter is a further 4x to 5x on top of live-state iteration
+globs, that prefilter gives a further 4x to 5x on top of live-state iteration
 (`/tmp/notes.txt` 4,616 ns to 542 ns). It costs one byte string per compiled rule
-and load-time work. Not implemented, since the engine's cost is already
-immaterial against the ~2.3 ms fresh-process figure below.
+and load-time work. Not implemented: the engine's cost is already immaterial
+against the ~2.3 ms fresh-process figure below.
 
 ## Why this is fast (and why the manifest looks the way it does)
 
@@ -212,9 +213,9 @@ The production cost model is **one fresh, short-lived process per tool call**, s
 manifest choices in `Cargo.toml` follow directly:
 
 - **No `regex`, no `clap`.** Every matcher (§6.5) and the argument parser (§2)
-  are hand-written. Hand-written globs cost microseconds cold, and compiling a regex
-  set would cost milliseconds each launch with nothing to amortize. Loading and
-  compiling the entire reference rule set is ~83 µs, cheaper than a single
+  are hand-written. Hand-written globs cost microseconds cold, while compiling a
+  regex set would cost milliseconds each launch with nothing to amortize. Loading
+  and compiling the entire reference rule set takes ~83 µs, cheaper than a single
   regex compilation would be.
 - **`opt-level = "z"` + LTO + `strip`.** Size, not steady-state throughput, is
   the lever for a cold-start binary, and a smaller image pages in faster. The

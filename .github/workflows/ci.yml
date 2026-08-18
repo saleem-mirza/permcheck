@@ -61,7 +61,7 @@ jobs:
       - name: Policies load and lint clean
         run: |
           set -euo pipefail
-          for policy in rules/permcheck.json docs/blog-assets/sample-policy.json; do
+          for policy in rules/permcheck.json blog/blog-assets/sample-policy.json; do
             warnings=$(./target/release/permcheck Bash "true" --rules "$policy" --json 2>&1 >/dev/null)
             if [ -n "$warnings" ]; then
               echo "::error::$policy has lint warnings:"
