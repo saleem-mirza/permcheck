@@ -42,7 +42,7 @@ body {
      Display type stays serif, set explicitly below since it used to inherit. */
   font-family: var(--sans);
   font-size: 19px;
-  line-height: 1.8;
+  line-height: 1.68;
   letter-spacing: -0.004em;
   -webkit-font-smoothing: antialiased;
 }
@@ -105,7 +105,7 @@ th,
 .eyebrow {
   margin: 0 0 1rem;
   color: var(--accent);
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   font-weight: 750;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -119,6 +119,10 @@ h1 {
   line-height: 0.96;
   letter-spacing: -0.045em;
   text-wrap: balance;
+}
+.headline-compact {
+  font-size: clamp(2.6rem, 5vw, 4.1rem);
+  white-space: nowrap;
 }
 .dek {
   width: 100%;
@@ -170,7 +174,7 @@ h1 {
 .label {
   margin: 0;
   color: var(--accent-dark);
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   font-weight: 800;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -210,7 +214,7 @@ section.wide-section {
 .section-kicker {
   margin: 0 0 0.45rem;
   color: var(--accent);
-  font-size: 0.76rem;
+  font-size: 0.8rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -260,7 +264,7 @@ pre {
   border: 1px solid #26334a;
   border-radius: 10px;
   font-family: var(--mono);
-  font-size: 0.83rem;
+  font-size: 0.87rem;
   line-height: 1.65;
   tab-size: 2;
 }
@@ -349,7 +353,7 @@ figcaption {
 caption {
   margin-bottom: 0.6rem;
   color: var(--muted);
-  font-family: var(--serif);
+  font-family: var(--sans);
   font-size: 0.82rem;
   line-height: 1.45;
   text-align: left;
@@ -397,7 +401,7 @@ tr:last-child td { border-bottom: 0; }
   border: 1px solid currentColor;
   border-radius: 3px;
   font-family: var(--sans);
-  font-size: 0.74rem;
+  font-size: 0.8rem;
   font-weight: 700;
   text-align: center;
   text-transform: uppercase;
@@ -434,7 +438,7 @@ table.control-matrix td { padding: 0.7rem 0.8rem; }
 .card h3 { margin: 0 0 0.55rem; font-size: 1.05rem; }
 .card p { margin-bottom: 0; color: var(--ink-soft); font-size: 0.93rem; }
 .recipe { margin: 0; }
-.recipe pre { margin: 1rem 0; font-size: 0.82rem; }
+.recipe pre { margin: 1rem 0; font-size: 0.87rem; }
 .coverage {
   margin-top: 0.85rem;
   padding-top: 0.85rem;
@@ -527,6 +531,7 @@ table.control-matrix td { padding: 0.7rem 0.8rem; }
     line-height: 1.05;
     letter-spacing: -0.035em;
   }
+  .headline-compact { white-space: normal; }
   .hero { padding-bottom: 2.2rem; }
   .brief { grid-template-columns: 1fr; gap: 0.35rem; }
   .brief > :not(.label) { grid-column: 1; }
