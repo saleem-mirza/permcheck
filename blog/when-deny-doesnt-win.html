@@ -72,7 +72,7 @@
       <p class="eyebrow">Permission engineering · Claude Code</p>
       <h1 class="headline-compact">The Case for Narrow Exceptions</h1>
       <div class="rule-mark" aria-hidden="true"><span></span><span></span><span></span></div>
-      <p class="dek">You want the agent to run a tool’s read-only commands and none of its destructive ones. In Claude Code you can’t write that policy, because deny always wins. permcheck is a permission hook that lets you write it.</p>
+      <p class="dek">You want the agent to run a tool’s read-only commands and none of its destructive ones. In Claude Code you can’t write that policy, because rules resolve in a fixed order and a narrower allow never overrides a matching deny. permcheck is a permission hook that lets you write it.</p>
       <div class="meta">
         <span>By <a href="https://www.linkedin.com/in/saleem-mirza/" rel="me author noopener noreferrer" target="_blank">Saleem Mirza</a></span>
         <span>9 min read</span>
