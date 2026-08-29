@@ -78,7 +78,6 @@
         <span>9 min read</span>
         <span>Updated August 28, 2026</span>
       </div>
-      <p class="author-note">Saleem Mirza created permcheck and has spent more than 20 years designing AWS, Kubernetes, and DevSecOps systems for regulated enterprise and federal environments.</p>
     </header>
 
     <div class="measure">
@@ -108,18 +107,18 @@ permcheck Bash "aws ec2 describe-instances"  --rules sample-policy.json <span cl
     <section id="problem" class="measure">
       <p class="section-kicker">The permission gap</p>
       <h2>The policy Claude Code cannot express</h2>
-      <p>One engineer spent two days approving tool calls by hand: <a href="https://github.com/anthropics/claude-code/issues/76718" rel="noopener noreferrer" target="_blank">more than 700 of them</a>, every one already on their allow-list. Their rules were fine. The way Claude Code resolves them was the problem.</p>
+      <p>An engineer spent two days approving tool calls by hand: <a href="https://github.com/anthropics/claude-code/issues/76718" rel="noopener noreferrer" target="_blank">more than 700 of them</a>, each one already on their allow-list. Their rules were fine. The way Claude Code resolves them was the problem.</p>
 
       <p>To inspect AWS resources without changing them, an agent needs a broad deny with a narrow exception:</p>
 
       <pre><code>deny:  Bash(aws:*)
 allow: Bash(aws * describe-*)</code></pre>
 
-      <p><code>aws ec2 describe-instances</code> matches both rules. Claude Code evaluates native permission rules in a fixed order: <code>deny</code>, then <code>ask</code>, then <code>allow</code>. The deny blocks the command even though the allow rule is narrower. Removing the deny permits destructive AWS operations, but keeping it blocks inspection.</p>
+      <p><code>aws ec2 describe-instances</code> matches both rules. Claude Code evaluates native permission rules in a fixed order: <code>deny</code>, then <code>ask</code>, then <code>allow</code>. The deny blocks the command even though the allow rule is narrower than it is. Removing the deny permits destructive AWS operations, but keeping it blocks inspection.</p>
 
       <p>The language model does not make this decision: <a href="https://code.claude.com/docs/en/permissions" rel="noopener noreferrer" target="_blank">Claude Code enforces the permission rules</a> before a tool call runs.</p>
 
-      <p>Without a working exception, teams choose between two costs: loosen the deny, or approve calls by hand. The approvals pile up because Claude Code matches each segment of a compound command independently.</p>
+      <p>Without a working exception, teams choose between two costs: loosen the deny, or approve calls by hand.</p>
 
       <p>I built permcheck to close this gap: a narrower <code>allow</code> or <code>ask</code> can override a matching <code>deny</code> only when the deny already covers every call the exception matches.</p>
     </section>
@@ -414,7 +413,7 @@ permcheck Bash "cat .env" --rules sample-policy.json
     <section id="takeaway" class="closing measure">
       <p class="section-kicker">Conclusion</p>
       <h2>Use narrow exceptions for decisions you can test</h2>
-      <p>Use permcheck for narrow exceptions that should produce the same result in every policy test. Keep absolute restrictions in managed native settings, and rely on OS and network isolation for controls that must hold after execution starts.</p>
+      <p>Use permcheck for narrow exceptions that should produce the identical result in every policy test. Keep absolute restrictions in managed native settings, and rely on OS and network isolation for controls that must hold after execution starts.</p>
 
       <p>Download the <a href="blog-assets/sample-policy.json" download="sample-policy.json">sample policy</a>, run the three checks above, and add a regression test for every exception your team intends to permit.</p>
 
@@ -422,6 +421,8 @@ permcheck Bash "cat .env" --rules sample-policy.json
 
       <p>If you’d rather compare notes, the <a href="https://www.linkedin.com/posts/saleem-mirza_when-deny-doesnt-win-share-7490953417008496640-pUVk/" rel="noopener noreferrer" target="_blank">discussion thread on LinkedIn</a> is open.</p>
     </section>
+
+    <p class="author-note author-bio measure">Saleem Mirza created permcheck and has spent more than 20 years designing AWS, Kubernetes, and DevSecOps systems for regulated enterprise and federal environments.</p>
   </article>
 
   <footer class="site-foot measure">

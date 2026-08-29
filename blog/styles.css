@@ -472,6 +472,14 @@ table.control-matrix td { padding: 0.7rem 0.8rem; }
   line-height: 1.55;
 }
 
+/* The bio sits after the last section, so it needs a rule above it and the
+   article's own spacing; in the header it inherited both from the meta line. */
+.author-bio {
+  margin: 3.2rem auto 0;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+}
+
 .closing {
   width: 100%;
   max-width: var(--content);

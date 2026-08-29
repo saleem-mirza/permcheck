@@ -10,11 +10,9 @@ reading_time: "9 min"
 
 # The Case for Narrow Exceptions
 
-You want the agent to run a tool’s read-only commands and none of its destructive ones. In Claude Code you can’t write that policy, because rules resolve in a fixed order and a narrower allow never overrides a matching deny. permcheck is a permission hook that lets you write it.
+You want the agent to run a tool’s read-only commands and none of its destructive ones. In Claude Code, you can’t write that policy because rules resolve in a fixed order, and a narrower allow never overrides a matching deny. permcheck is a permission hook that lets you write it.
 
 *By [Saleem Mirza](https://www.linkedin.com/in/saleem-mirza/) · Updated August 28, 2026*
-
-Saleem Mirza created permcheck and has spent more than 20 years designing AWS, Kubernetes, and DevSecOps systems for regulated enterprise and federal environments.
 
 > **Try it in 60 seconds**
 >
@@ -28,7 +26,7 @@ Saleem Mirza created permcheck and has spent more than 20 years designing AWS, K
 
 ## The policy Claude Code cannot express
 
-One engineer spent two days approving tool calls by hand: [more than 700 of them](https://github.com/anthropics/claude-code/issues/76718), every one already on their allow-list. Their rules were fine. The way Claude Code resolves them was the problem.
+An engineer spent two days approving tool calls by hand: [more than 700 of them](https://github.com/anthropics/claude-code/issues/76718), each one already on their allow-list. Their rules were fine. The way Claude Code resolves them was the problem.
 
 To inspect AWS resources without changing them, an agent needs a broad deny with a narrow exception:
 
@@ -37,11 +35,11 @@ deny:  Bash(aws:*)
 allow: Bash(aws * describe-*)
 ```
 
-`aws ec2 describe-instances` matches both rules. Claude Code evaluates native permission rules in a fixed order: `deny`, then `ask`, then `allow`. The deny blocks the command even though the allow rule is narrower. Removing the deny permits destructive AWS operations, but keeping it blocks inspection.
+`aws ec2 describe-instances` matches both rules. Claude Code evaluates native permission rules in a fixed order: `deny`, then `ask`, then `allow`. The deny blocks the command even though the allow rule is narrower than it is. Removing the deny permits destructive AWS operations, but keeping it blocks inspection.
 
 The language model does not make this decision: [Claude Code enforces the permission rules](https://code.claude.com/docs/en/permissions) before a tool call runs.
 
-Without a working exception, teams choose between two costs: loosen the deny, or approve calls by hand. The approvals pile up because Claude Code matches each segment of a compound command independently.
+Without a working exception, teams choose between two costs: loosen the deny, or approve calls by hand.
 
 I built permcheck to close this gap: a narrower `allow` or `ask` can override a matching `deny` only when the deny already covers every call the exception matches.
 
@@ -51,7 +49,7 @@ I built permcheck to close this gap: a narrower `allow` or `ask` can override a 
 
 ## How permcheck resolves the conflict
 
-permcheck reads its own rules file, separate from Claude Code’s `settings.json`. It cannot override a deny declared there, so a broad deny and its narrow exception both have to live in the permcheck file.
+permcheck uses its own rules file, separate from Claude Code’s `settings.json`. It can’t override a deny listed there, so both broad denies and their narrow exceptions must be defined in the permcheck file.
 
 Within that file, permcheck collects every rule that matches the call, then resolves them in three steps:
 
@@ -97,17 +95,9 @@ If no rule matches, permcheck’s `defaultMode` either prompts (`ask`) or denies
 
 A rule such as `Bash(aws:*)` is straightforward when a command starts with `aws`. Pipelines, wrappers, substitutions, and file operations require more analysis. Before applying its policy, permcheck runs three checks.
 
-### Split compound commands
-
-permcheck separates commands at `&&`, `||`, pipes, semicolons, background operators, and newlines, and extracts several common nested forms.
-
-### Remove known wrappers
-
-permcheck evaluates commands behind supported wrappers such as `env`, `sudo`, `timeout`, and `doas`.
-
-### Check known file operations
-
-permcheck compares operands from recognized readers, writers, transfers, and redirections against `Read`, `Write`, and `Edit` denies.
+- **Split compound commands.** permcheck separates commands at `&&`, `||`, pipes, semicolons, background operators, and newlines, and extracts several common nested forms.
+- **Remove known wrappers.** permcheck evaluates commands behind supported wrappers such as `env`, `sudo`, `timeout`, and `doas`.
+- **Check known file operations.** permcheck compares operands from recognized readers, writers, transfers, and redirections against `Read`, `Write`, and `Edit` denies.
 
 ![The compound command ls and sudo rm is split into two units. The sudo wrapper is removed, the rm unit is denied, and the complete command is blocked.](blog-assets/diagram-4-compound.png)
 
@@ -175,7 +165,7 @@ Claude Code permissions, auto mode, permcheck, and execution sandboxes answer di
 
 permcheck evaluates the tool call against a fixed policy without interpreting the request. A check takes about 1.7 ms and spends no tokens (the author’s median of 50 warm runs on an M3 Max). Teams can review decisions such as “allow a tool’s inspection commands but deny its mutations” as code and test them in CI.
 
-Restrictions that developers must never override belong in managed Claude Code settings, where no permcheck rule can reach them. Use OS and network controls for requirements that must hold after a process starts.
+Restrictions that developers must never override belong in managed Claude Code settings; permcheck rules cannot override them. Use OS and network controls for requirements that must hold after a process starts.
 
 ![A control stack showing contextual review, permcheck, native Claude Code permissions, and OS sandbox and managed settings.](blog-assets/diagram-6-stack.png)
 
@@ -226,10 +216,14 @@ The Claude Code plugin supports macOS, Linux, and Windows, and registers the `Pr
 
 ## Use narrow exceptions for decisions you can test
 
-Use permcheck for narrow exceptions that should produce the same result in every policy test. Keep absolute restrictions in managed native settings, and rely on OS and network isolation for controls that must hold after execution starts.
+Use permcheck for narrow exceptions that should produce the identical result in every policy test. Keep absolute restrictions in managed native settings, and rely on OS and network isolation for controls that must hold after execution starts.
 
 Download the [sample policy](blog-assets/sample-policy.json), run the three checks above, and add a regression test for every exception your team intends to permit.
 
 If your policy hits a case this analysis doesn’t cover (a file tool the cross-check doesn’t follow, a shell it doesn’t parse), [open an issue](https://github.com/saleem-mirza/permcheck/issues) with the command and the rule you expected to apply.
 
 If you’d rather compare notes, the [discussion thread on LinkedIn](https://www.linkedin.com/posts/saleem-mirza_when-deny-doesnt-win-share-7490953417008496640-pUVk/) is open.
+
+---
+
+*Saleem Mirza created permcheck and has spent more than 20 years designing AWS, Kubernetes, and DevSecOps systems for regulated enterprise and federal environments.*
