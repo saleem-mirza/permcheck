@@ -2,7 +2,7 @@
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
     <title>Zethian</title>
-    <link>https://blogs.zethian.com/when-deny-doesnt-win.html</link>
+    <link>https://blogs.zethian.com/the-case-for-narrow-exceptions.html</link>
     <description>Permission models, least privilege, and security boundaries for coding agents.</description>
     <language>en</language>
     <atom:link href="https://blogs.zethian.com/feed.xml" rel="self" type="application/rss+xml"/>
@@ -10,8 +10,8 @@
 
     <item>
       <title>The Case for Narrow Exceptions</title>
-      <link>https://blogs.zethian.com/when-deny-doesnt-win.html</link>
-      <guid isPermaLink="true">https://blogs.zethian.com/when-deny-doesnt-win.html</guid>
+      <link>https://blogs.zethian.com/the-case-for-narrow-exceptions.html</link>
+      <guid isPermaLink="true">https://blogs.zethian.com/the-case-for-narrow-exceptions.html</guid>
       <pubDate>Thu, 30 Jul 2026 00:00:00 +0000</pubDate>
       <description>Claude Code resolves permission rules in a fixed order, so a broad deny with a narrow exception cannot be expressed. permcheck runs as a PreToolUse hook and lets a narrower allow or ask override a matching deny, but only when the deny already covers every call the exception matches. Includes the shell analysis it performs and the limits of what a permission hook can enforce.</description>
     </item>

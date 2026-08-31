@@ -80,7 +80,7 @@ Before tagging:
 1. Bump `version` in both `Cargo.toml` and `plugin/.claude-plugin/plugin.json`, so
    already-installed users get the update.
 2. If the blog changed, bump `<lastBuildDate>` in `blog/feed.xml` and `dateModified`
-   in `blog/when-deny-doesnt-win.html`.
+   in `blog/the-case-for-narrow-exceptions.html`.
 
 **Pinned actions.** Both workflows pin every action to a commit SHA with the tag in
 a trailing comment. To move one, resolve the new SHA and update both the pin and the

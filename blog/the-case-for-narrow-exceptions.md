@@ -4,7 +4,7 @@ description: "Allow selected commands inside a broad Claude Code deny rule, test
 author: "Saleem Mirza"
 date_published: "2026-07-30"
 date_modified: "2026-08-28"
-canonical_url: "https://blogs.zethian.com/when-deny-doesnt-win.html"
+canonical_url: "https://blogs.zethian.com/the-case-for-narrow-exceptions.html"
 reading_time: "9 min"
 ---
 
